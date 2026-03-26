@@ -1,0 +1,61 @@
+{
+  "": {
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/master.swiftdeps"
+  },
+  "/Users/ola/qoder/ai-snap/Sources/AnnotationView.swift": {
+    "dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.d",
+    "object": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swift.o",
+    "swiftmodule": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView~partial.swiftmodule",
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swiftdeps",
+    "diagnostics": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.dia"
+  },
+  "/Users/ola/qoder/ai-snap/Sources/AnnotationWindow.swift": {
+    "dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.d",
+    "object": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swift.o",
+    "swiftmodule": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow~partial.swiftmodule",
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swiftdeps",
+    "diagnostics": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.dia"
+  },
+  "/Users/ola/qoder/ai-snap/Sources/AppDelegate.swift": {
+    "dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.d",
+    "object": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swift.o",
+    "swiftmodule": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate~partial.swiftmodule",
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swiftdeps",
+    "diagnostics": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.dia"
+  },
+  "/Users/ola/qoder/ai-snap/Sources/HitTestBuffer.swift": {
+    "dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.d",
+    "object": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swift.o",
+    "swiftmodule": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer~partial.swiftmodule",
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swiftdeps",
+    "diagnostics": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.dia"
+  },
+  "/Users/ola/qoder/ai-snap/Sources/Models.swift": {
+    "dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.d",
+    "object": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swift.o",
+    "swiftmodule": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models~partial.swiftmodule",
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swiftdeps",
+    "diagnostics": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.dia"
+  },
+  "/Users/ola/qoder/ai-snap/Sources/RegionSelectionWindow.swift": {
+    "dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.d",
+    "object": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swift.o",
+    "swiftmodule": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow~partial.swiftmodule",
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swiftdeps",
+    "diagnostics": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.dia"
+  },
+  "/Users/ola/qoder/ai-snap/Sources/ScreenCapture.swift": {
+    "dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.d",
+    "object": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swift.o",
+    "swiftmodule": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture~partial.swiftmodule",
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swiftdeps",
+    "diagnostics": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.dia"
+  },
+  "/Users/ola/qoder/ai-snap/Sources/main.swift": {
+    "dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.d",
+    "object": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swift.o",
+    "swiftmodule": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swiftdeps",
+    "diagnostics": "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.dia"
+  }
+}
