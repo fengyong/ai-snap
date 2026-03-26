@@ -1,0 +1,372 @@
+{
+  "builtTestProducts" : [
+
+  ],
+  "copyCommands" : {
+
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.AISnap-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "fileList" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources",
+      "importPath" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/AnnotationView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/AnnotationWindow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/AppDelegate.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/HitTestBuffer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/Models.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/RegionSelectionWindow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/ScreenCapture.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/main.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources"
+        }
+      ],
+      "isLibrary" : false,
+      "moduleName" : "AISnap",
+      "moduleOutputPath" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules/AISnap.swiftmodule",
+      "objects" : [
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swift.o",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swift.o",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swift.o",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swift.o",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swift.o",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swift.o",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swift.o",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx13.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j10",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-Xfrontend",
+        "-entry-point-function-name",
+        "-Xfrontend",
+        "AISnap_main",
+        "-swift-version",
+        "5",
+        "-I",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-L",
+        "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+        "-plugin-path",
+        "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "ai_snap"
+      ],
+      "outputFileMapPath" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules/AISnap.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/ola/qoder/ai-snap/Sources/AnnotationView.swift",
+        "/Users/ola/qoder/ai-snap/Sources/AnnotationWindow.swift",
+        "/Users/ola/qoder/ai-snap/Sources/AppDelegate.swift",
+        "/Users/ola/qoder/ai-snap/Sources/HitTestBuffer.swift",
+        "/Users/ola/qoder/ai-snap/Sources/Models.swift",
+        "/Users/ola/qoder/ai-snap/Sources/RegionSelectionWindow.swift",
+        "/Users/ola/qoder/ai-snap/Sources/ScreenCapture.swift",
+        "/Users/ola/qoder/ai-snap/Sources/main.swift"
+      ],
+      "tempsPath" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "AISnap" : [
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc",
+      "-module-name",
+      "AISnap",
+      "-package-name",
+      "ai_snap",
+      "-c",
+      "/Users/ola/qoder/ai-snap/Sources/AnnotationView.swift",
+      "/Users/ola/qoder/ai-snap/Sources/AnnotationWindow.swift",
+      "/Users/ola/qoder/ai-snap/Sources/AppDelegate.swift",
+      "/Users/ola/qoder/ai-snap/Sources/HitTestBuffer.swift",
+      "/Users/ola/qoder/ai-snap/Sources/Models.swift",
+      "/Users/ola/qoder/ai-snap/Sources/RegionSelectionWindow.swift",
+      "/Users/ola/qoder/ai-snap/Sources/ScreenCapture.swift",
+      "/Users/ola/qoder/ai-snap/Sources/main.swift",
+      "-I",
+      "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx13.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j10",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-Xfrontend",
+      "-entry-point-function-name",
+      "-Xfrontend",
+      "AISnap_main",
+      "-swift-version",
+      "5",
+      "-I",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-L",
+      "/Library/Developer/CommandLineTools/Library/Developer/Frameworks",
+      "-plugin-path",
+      "/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "ai_snap",
+      "-driver-use-frontend-path",
+      "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "AISnap" : [
+
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap-entitlement.plist" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<entitlement-plist>"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<com.apple.security.get-task-allow>"
+        }
+      ],
+      "outputFilePath" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap-entitlement.plist"
+    },
+    "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/AnnotationView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/AnnotationWindow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/AppDelegate.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/HitTestBuffer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/Models.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/RegionSelectionWindow.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/ScreenCapture.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/Sources/main.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources"
+    },
+    "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.product/Objects.LinkFileList"
+    },
+    "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Library/Developer/CommandLineTools/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+    }
+  }
+}
