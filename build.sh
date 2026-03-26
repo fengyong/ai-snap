@@ -48,11 +48,34 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << 'PLIST'
 </plist>
 PLIST
 
-echo "==> 打包完成: ${APP_BUNDLE}"
+echo "==> .app 打包完成"
+
+# 创建 DMG
+DMG_NAME="${APP_NAME}.dmg"
+DMG_TEMP="dmg_temp"
+VOLUME_NAME="${APP_NAME}"
+
+echo "==> 创建 DMG..."
+rm -rf "${DMG_TEMP}" "${DMG_NAME}"
+mkdir -p "${DMG_TEMP}"
+
+# 复制 .app 到临时目录
+cp -r "${APP_BUNDLE}" "${DMG_TEMP}/"
+
+# 创建指向 /Applications 的快捷方式
+ln -s /Applications "${DMG_TEMP}/Applications"
+
+# 生成 DMG
+hdiutil create \
+    -volname "${VOLUME_NAME}" \
+    -srcfolder "${DMG_TEMP}" \
+    -ov \
+    -format UDZO \
+    "${DMG_NAME}"
+
+rm -rf "${DMG_TEMP}"
+
 echo ""
-echo "运行方式:"
-echo "  open ${APP_BUNDLE}          # 双击打开"
-echo "  ./${APP_BUNDLE}/Contents/MacOS/${APP_NAME}  # 命令行运行"
-echo ""
-echo "安装到应用程序文件夹:"
-echo "  cp -r ${APP_BUNDLE} /Applications/"
+echo "==> 全部完成"
+echo "  ${APP_BUNDLE}  — 可直接 open 运行"
+echo "  ${DMG_NAME}    — 可分发的安装包"
