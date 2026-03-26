@@ -3,74 +3,59 @@ client:
   file-system: device-agnostic
 tools: {}
 targets:
-  "AISnap-arm64-apple-macosx26.0-debug.exe": ["<AISnap-arm64-apple-macosx26.0-debug.exe>"]
-  "AISnap-arm64-apple-macosx26.0-debug.module": ["<AISnap-arm64-apple-macosx26.0-debug.module>"]
+  "AISnap-arm64-apple-macosx26.0-release.exe": ["<AISnap-arm64-apple-macosx26.0-release.exe>"]
+  "AISnap-arm64-apple-macosx26.0-release.module": ["<AISnap-arm64-apple-macosx26.0-release.module>"]
   "PackageStructure": ["<PackageStructure>"]
-  "main": ["<AISnap-arm64-apple-macosx26.0-debug.exe>","<AISnap-arm64-apple-macosx26.0-debug.module>"]
-  "test": ["<AISnap-arm64-apple-macosx26.0-debug.exe>","<AISnap-arm64-apple-macosx26.0-debug.module>"]
+  "main": ["<AISnap-arm64-apple-macosx26.0-release.exe>","<AISnap-arm64-apple-macosx26.0-release.module>"]
+  "test": ["<AISnap-arm64-apple-macosx26.0-release.exe>","<AISnap-arm64-apple-macosx26.0-release.module>"]
 default: "main"
 nodes:
   "/Users/ola/qoder/ai-snap/Sources/":
     is-directory-structure: true
     content-exclusion-patterns: [".git",".build"]
-  "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap":
-    is-mutated: true
 commands:
-  "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap-entitlement.plist":
-    tool: write-auxiliary-file
-    inputs: ["<entitlement-plist>","<com.apple.security.get-task-allow>"]
-    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap-entitlement.plist"]
-    description: "Write auxiliary file /Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap-entitlement.plist"
-
-  "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources":
+  "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/sources":
     tool: write-auxiliary-file
     inputs: ["<sources-file-list>","/Users/ola/qoder/ai-snap/Sources/AnnotationView.swift","/Users/ola/qoder/ai-snap/Sources/AnnotationWindow.swift","/Users/ola/qoder/ai-snap/Sources/AppDelegate.swift","/Users/ola/qoder/ai-snap/Sources/HitTestBuffer.swift","/Users/ola/qoder/ai-snap/Sources/Models.swift","/Users/ola/qoder/ai-snap/Sources/RegionSelectionWindow.swift","/Users/ola/qoder/ai-snap/Sources/ScreenCapture.swift","/Users/ola/qoder/ai-snap/Sources/main.swift"]
-    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources"]
-    description: "Write auxiliary file /Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources"
+    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/sources"]
+    description: "Write auxiliary file /Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/sources"
 
-  "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.product/Objects.LinkFileList":
+  "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.product/Objects.LinkFileList":
     tool: write-auxiliary-file
-    inputs: ["<link-file-list>","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swift.o"]
-    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.product/Objects.LinkFileList"]
-    description: "Write auxiliary file /Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.product/Objects.LinkFileList"
+    inputs: ["<link-file-list>","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AnnotationView.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AnnotationWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AppDelegate.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/HitTestBuffer.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/Models.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/RegionSelectionWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/ScreenCapture.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/main.swift.o"]
+    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.product/Objects.LinkFileList"]
+    description: "Write auxiliary file /Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.product/Objects.LinkFileList"
 
-  "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt":
+  "/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/swift-version--1AB21518FC5DEDBE.txt":
     tool: write-auxiliary-file
     inputs: ["<swift-get-version>","/Library/Developer/CommandLineTools/usr/bin/swiftc"]
-    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"]
+    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/swift-version--1AB21518FC5DEDBE.txt"]
     always-out-of-date: "true"
-    description: "Write auxiliary file /Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt"
+    description: "Write auxiliary file /Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/swift-version--1AB21518FC5DEDBE.txt"
 
-  "<AISnap-arm64-apple-macosx26.0-debug.exe>":
+  "<AISnap-arm64-apple-macosx26.0-release.exe>":
     tool: phony
-    inputs: ["<AISnap-arm64-apple-macosx26.0-debug.exe-CodeSigning>"]
-    outputs: ["<AISnap-arm64-apple-macosx26.0-debug.exe>"]
+    inputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap"]
+    outputs: ["<AISnap-arm64-apple-macosx26.0-release.exe>"]
 
-  "<AISnap-arm64-apple-macosx26.0-debug.module>":
+  "<AISnap-arm64-apple-macosx26.0-release.module>":
     tool: phony
-    inputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules/AISnap.swiftmodule"]
-    outputs: ["<AISnap-arm64-apple-macosx26.0-debug.module>"]
+    inputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AnnotationView.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AnnotationWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AppDelegate.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/HitTestBuffer.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/Models.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/RegionSelectionWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/ScreenCapture.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/main.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/Modules/AISnap.swiftmodule"]
+    outputs: ["<AISnap-arm64-apple-macosx26.0-release.module>"]
 
-  "C.AISnap-arm64-apple-macosx26.0-debug.exe":
+  "C.AISnap-arm64-apple-macosx26.0-release.exe":
     tool: shell
-    inputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.product/Objects.LinkFileList"]
-    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap"]
-    description: "Linking ./.build/arm64-apple-macosx/debug/AISnap"
-    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-L","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug","-o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap","-module-name","AISnap","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-alias","-Xlinker","_AISnap_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx13.0","-Xlinker","-add_ast_path","-Xlinker","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules/AISnap.swiftmodule","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g"]
+    inputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AnnotationView.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AnnotationWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AppDelegate.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/HitTestBuffer.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/Models.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/RegionSelectionWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/ScreenCapture.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/main.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.product/Objects.LinkFileList"]
+    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap"]
+    description: "Linking ./.build/arm64-apple-macosx/release/AISnap"
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-L","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release","-o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap","-module-name","AISnap","-Xlinker","-no_warn_duplicate_libraries","-emit-executable","-Xlinker","-dead_strip","-Xlinker","-alias","-Xlinker","_AISnap_main","-Xlinker","_main","-Xlinker","-rpath","-Xlinker","@loader_path","@/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.product/Objects.LinkFileList","-Xlinker","-rpath","-Xlinker","/Library/Developer/CommandLineTools/usr/lib/swift-6.2/macosx","-target","arm64-apple-macosx13.0","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g"]
 
-  "C.AISnap-arm64-apple-macosx26.0-debug.exe-entitlements":
+  "C.AISnap-arm64-apple-macosx26.0-release.module":
     tool: shell
-    inputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap-entitlement.plist"]
-    outputs: ["<AISnap-arm64-apple-macosx26.0-debug.exe-CodeSigning>"]
-    description: "Applying debug entitlements to ./.build/arm64-apple-macosx/debug/AISnap"
-    args: ["codesign","--force","--sign","-","--entitlements","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap-entitlement.plist","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap"]
-
-  "C.AISnap-arm64-apple-macosx26.0-debug.module":
-    tool: shell
-    inputs: ["/Users/ola/qoder/ai-snap/Sources/AnnotationView.swift","/Users/ola/qoder/ai-snap/Sources/AnnotationWindow.swift","/Users/ola/qoder/ai-snap/Sources/AppDelegate.swift","/Users/ola/qoder/ai-snap/Sources/HitTestBuffer.swift","/Users/ola/qoder/ai-snap/Sources/Models.swift","/Users/ola/qoder/ai-snap/Sources/RegionSelectionWindow.swift","/Users/ola/qoder/ai-snap/Sources/ScreenCapture.swift","/Users/ola/qoder/ai-snap/Sources/main.swift","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/swift-version--1AB21518FC5DEDBE.txt","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources"]
-    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationView.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AnnotationWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/AppDelegate.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/HitTestBuffer.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/Models.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/RegionSelectionWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/ScreenCapture.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/main.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules/AISnap.swiftmodule"]
+    inputs: ["/Users/ola/qoder/ai-snap/Sources/AnnotationView.swift","/Users/ola/qoder/ai-snap/Sources/AnnotationWindow.swift","/Users/ola/qoder/ai-snap/Sources/AppDelegate.swift","/Users/ola/qoder/ai-snap/Sources/HitTestBuffer.swift","/Users/ola/qoder/ai-snap/Sources/Models.swift","/Users/ola/qoder/ai-snap/Sources/RegionSelectionWindow.swift","/Users/ola/qoder/ai-snap/Sources/ScreenCapture.swift","/Users/ola/qoder/ai-snap/Sources/main.swift","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/swift-version--1AB21518FC5DEDBE.txt","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/sources"]
+    outputs: ["/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AnnotationView.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AnnotationWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/AppDelegate.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/HitTestBuffer.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/Models.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/RegionSelectionWindow.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/ScreenCapture.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/main.swift.o","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/Modules/AISnap.swiftmodule"]
     description: "Compiling Swift Module 'AISnap' (8 sources)"
-    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","AISnap","-emit-dependencies","-emit-module","-emit-module-path","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules/AISnap.swiftmodule","-output-file-map","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/output-file-map.json","-incremental","-c","@/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/AISnap.build/sources","-I","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/Modules","-target","arm64-apple-macosx13.0","-incremental","-enable-batch-mode","-serialize-diagnostics","-index-store-path","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/index/store","-Onone","-enable-testing","-j10","-DSWIFT_PACKAGE","-DDEBUG","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/debug/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","AISnap_main","-color-diagnostics","-swift-version","5","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","ai_snap"]
+    args: ["/Library/Developer/CommandLineTools/usr/bin/swiftc","-module-name","AISnap","-emit-dependencies","-emit-module","-emit-module-path","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/Modules/AISnap.swiftmodule","-output-file-map","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/output-file-map.json","-whole-module-optimization","-num-threads","10","-c","@/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/AISnap.build/sources","-I","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/Modules","-target","arm64-apple-macosx13.0","-whole-module-optimization","-num-threads","10","-serialize-diagnostics","-O","-j10","-DSWIFT_PACKAGE","-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE","-module-cache-path","/Users/ola/qoder/ai-snap/.build/arm64-apple-macosx/release/ModuleCache","-parseable-output","-Xfrontend","-entry-point-function-name","-Xfrontend","AISnap_main","-swift-version","5","-I","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-L","/Library/Developer/CommandLineTools/Library/Developer/Frameworks","-plugin-path","/Library/Developer/CommandLineTools/usr/lib/swift/host/plugins/testing","-sdk","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-g","-Xcc","-isysroot","-Xcc","/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk","-Xcc","-fPIC","-Xcc","-g","-package-name","ai_snap"]
 
   "PackageStructure":
     tool: package-structure-tool
