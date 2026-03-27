@@ -325,6 +325,14 @@ class AnnotationWindow: NSWindow {
         rebuildColorButtons()
     }
 
+    @objc private func watermarkToggled(_ sender: NSButton) {
+        annotationView.watermarkConfig.enabled = (sender.state == .on)
+    }
+
+    @objc private func watermarkTextChanged(_ sender: NSTextField) {
+        annotationView.watermarkConfig.text = sender.stringValue
+    }
+
     @objc private func saveImage() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
