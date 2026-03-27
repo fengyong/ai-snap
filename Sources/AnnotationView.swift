@@ -84,6 +84,8 @@ class AnnotationView: NSView {
             hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
             refreshDebugView()
             needsDisplay = true
+
+        case .drawing:
             currentDrawEnd = point
             needsDisplay = true
 
@@ -130,6 +132,7 @@ class AnnotationView: NSView {
 
                 // 在 Layer B 上绘制新对象
                 hitTestBuffer.drawObject(obj)
+                refreshDebugView()
             }
             currentDrawEnd = nil
 
@@ -153,6 +156,7 @@ class AnnotationView: NSView {
                 zOrder.removeAll { $0 == key }
                 selectedKey = nil
                 hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+                refreshDebugView()
                 needsDisplay = true
             }
         }
@@ -227,6 +231,15 @@ class AnnotationView: NSView {
                                        hitTestColorKey: 0)
             preview.draw(in: ctx)
         }
+    }
+
+    // MARK: - Debug Visualization
+
+    /// 刷新右侧的 Layer B 调试面板
+    private func refreshDebugView() {
+        guard let imageView = debugImageView else { return }
+        let debugImage = hitTestBuffer.debugVisualization(objects: objects, zOrder: zOrder)
+        imageView.image = debugImage
     }
 
     // MARK: - Export
