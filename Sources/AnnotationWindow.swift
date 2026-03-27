@@ -1,16 +1,24 @@
 import Cocoa
 
-/// 标注窗口 — 包含工具栏和标注画布
+/// 标注窗口 — 包含工具栏和标注画布，右侧附带 Layer B 调试面板
 class AnnotationWindow: NSWindow {
     private var annotationView: AnnotationView!
     private var toolButtons: [NSButton] = []
 
     init(image: NSImage) {
         let imageSize = image.size
-        // 窗口大小 = 图片 + 底部工具栏
         let toolbarHeight: CGFloat = 44
-        let windowSize = NSSize(width: max(imageSize.width, 420),
-                                height: imageSize.height + toolbarHeight)
+
+        // 右侧 debug 面板 = 原图 50% 大小
+        let debugScale: CGFloat = 0.5
+        let debugWidth = imageSize.width * debugScale
+        let debugHeight = imageSize.height * debugScale
+        let debugPadding: CGFloat = 8
+
+        // 窗口宽度 = 原图 + 间距 + debug 面板
+        let totalWidth = imageSize.width + debugPadding + debugWidth
+        let windowSize = NSSize(width: max(totalWidth, 420),
+                                height: max(imageSize.height, debugHeight) + toolbarHeight)
 
         // 居中显示
         let screenFrame = NSScreen.main?.visibleFrame ?? .zero
@@ -31,11 +39,42 @@ class AnnotationWindow: NSWindow {
 
         let container = NSView(frame: NSRect(origin: .zero, size: windowSize))
 
-        // 标注画布
+        // 标注画布（左侧）
         annotationView = AnnotationView(image: image)
         annotationView.frame = NSRect(x: 0, y: toolbarHeight,
                                       width: imageSize.width, height: imageSize.height)
         container.addSubview(annotationView)
+
+        // Layer B 调试面板（右侧，50% 大小）
+        let debugImageView = NSImageView(frame: NSRect(
+            x: imageSize.width + debugPadding,
+            y: toolbarHeight + (imageSize.height - debugHeight),
+            width: debugWidth,
+            height: debugHeight
+        ))
+        debugImageView.imageScaling = .scaleProportionallyDown
+        debugImageView.wantsLayer = true
+        debugImageView.layer?.backgroundColor = NSColor(white: 0.1, alpha: 1).cgColor
+        debugImageView.layer?.borderColor = NSColor.separatorColor.cgColor
+        debugImageView.layer?.borderWidth = 1
+        debugImageView.layer?.cornerRadius = 4
+        container.addSubview(debugImageView)
+
+        // 挂载到 annotationView，让它能实时刷新
+        annotationView.debugImageView = debugImageView
+
+        // debug 面板标签
+        let debugLabel = NSTextField(labelWithString: "Layer B (Debug)")
+        debugLabel.font = NSFont.systemFont(ofSize: 10, weight: .medium)
+        debugLabel.textColor = .secondaryLabelColor
+        debugLabel.frame = NSRect(
+            x: imageSize.width + debugPadding,
+            y: toolbarHeight + imageSize.height - debugHeight - 16,
+            width: debugWidth,
+            height: 14
+        )
+        debugLabel.alignment = .center
+        container.addSubview(debugLabel)
 
         // 底部工具栏
         let toolbar = createToolbar(width: windowSize.width, height: toolbarHeight)
