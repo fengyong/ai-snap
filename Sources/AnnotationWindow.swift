@@ -8,6 +8,7 @@ class AnnotationWindow: NSWindow {
     private var colorButtons: [NSButton] = []
     private var colorButtonContainer: NSView!
     private var paletteIndex: Int = 0
+    private var watermarkField: NSTextField!
 
     init(image: NSImage) {
         let imageSize = image.size
@@ -103,7 +104,7 @@ class AnnotationWindow: NSWindow {
 
         // ── 工具选择 ──
         let tools: [(String, String)] = [
-            ("↗", "箭头"), ("▭", "矩形"), ("○", "圆形"),
+            ("\u{2197}\u{FE0F}", "箭头"), ("\u{25AD}", "矩形"), ("\u{25CB}", "圆形"), ("\u{25CE}", "聚光灯"),
         ]
         for (i, (title, tip)) in tools.enumerated() {
             let btn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 32, height: 28))
@@ -162,6 +163,42 @@ class AnnotationWindow: NSWindow {
         toolbar.addSubview(colorButtonContainer)
         rebuildColorButtons()
         xOffset += CGFloat(ColorPalette.allPalettes[paletteIndex].colors.count) * 32 + 8
+
+        // ── 分隔符 ──
+        addSeparator(to: toolbar, at: &xOffset, height: height)
+
+        // ── 表情/符号选择器 ──
+        let stampPopup = NSPopUpButton(frame: NSRect(x: xOffset, y: 8, width: 56, height: 28), pullsDown: true)
+        stampPopup.addItem(withTitle: "贴纸")
+        for (_, display) in defaultStamps {
+            stampPopup.addItem(withTitle: display)
+        }
+        stampPopup.toolTip = "表情贴纸"
+        stampPopup.target = self
+        stampPopup.action = #selector(stampSelected(_:))
+        toolbar.addSubview(stampPopup)
+        xOffset += 62
+
+        // ── 分隔符 ──
+        addSeparator(to: toolbar, at: &xOffset, height: height)
+
+        // ── 水印开关 ──
+        let wmToggle = NSButton(checkboxWithTitle: "水印", target: self, action: #selector(watermarkToggled(_:)))
+        wmToggle.frame = NSRect(x: xOffset, y: 10, width: 50, height: 24)
+        wmToggle.state = .off
+        wmToggle.font = NSFont.systemFont(ofSize: 11)
+        toolbar.addSubview(wmToggle)
+        xOffset += 54
+
+        // ── 水印文本输入 ──
+        watermarkField = NSTextField(frame: NSRect(x: xOffset, y: 10, width: 80, height: 24))
+        watermarkField.stringValue = "AISnap"
+        watermarkField.font = NSFont.systemFont(ofSize: 11)
+        watermarkField.placeholderString = "水印文本"
+        watermarkField.target = self
+        watermarkField.action = #selector(watermarkTextChanged(_:))
+        toolbar.addSubview(watermarkField)
+        xOffset += 86
 
         // ── 分隔符 ──
         addSeparator(to: toolbar, at: &xOffset, height: height)
@@ -246,10 +283,20 @@ class AnnotationWindow: NSWindow {
     // MARK: - Actions
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
-        let tools: [DrawingTool] = [.arrow, .rectangle, .circle]
+        let tools: [DrawingTool] = [.arrow, .rectangle, .circle, .spotlight]
         if sender.tag >= 0 && sender.tag < tools.count {
             annotationView.currentTool = tools[sender.tag]
             updateToolButtonStates(selectedIndex: sender.tag)
+        }
+    }
+
+    @objc private func stampSelected(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem - 1  // 第一项是标题 "贴纸"
+        if index >= 0 && index < defaultStamps.count {
+            let (stampType, _) = defaultStamps[index]
+            annotationView.currentTool = .stamp(stampType)
+            // 取消几何工具按钮的高亮
+            updateToolButtonStates(selectedIndex: -1)
         }
     }
 
