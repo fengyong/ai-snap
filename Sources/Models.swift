@@ -194,6 +194,21 @@ let defaultStamps: [(StampType, String)] = [
     (.emoji("\u{1F446}"), "\u{1F446}"), (.emoji("\u{2705}"), "\u{2705}"), (.emoji("\u{1F389}"), "\u{1F389}"),
 ]
 
+// MARK: - Undo Action
+
+enum UndoAction {
+    /// 添加了一个对象（撤销 = 删除它）
+    case add(colorKey: UInt32)
+    /// 删除了对象（撤销 = 重新添加，包含被级联删除的子箭头）
+    case delete(objects: [(UInt32, any AnnotationObject)], zOrderSnapshot: [UInt32])
+    /// 移动了对象（撤销 = 反向移动）
+    case move(colorKey: UInt32, delta: CGVector)
+    /// 旋转了对象
+    case rotate(colorKey: UInt32, angle: CGFloat)
+    /// 缩放了对象
+    case scale(colorKey: UInt32, factor: CGFloat)
+}
+
 // MARK: - Drawing Tool & Canvas State
 
 enum DrawingTool: Equatable {
