@@ -17,7 +17,7 @@ class AnnotationView: NSView {
     // 当前工具和样式
     var currentTool: DrawingTool = .arrow
     var currentColor: NSColor = .red
-    var currentLineWidth: CGFloat = 3.0
+    var currentLineWidth: CGFloat = 15.0
     var currentArrowStyle: ArrowStyle = .default
 
     // 水印配置
@@ -130,7 +130,7 @@ class AnnotationView: NSView {
         } else if case .stamp(let stampType) = currentTool {
             // Stamp 工具：单击直接放置
             let key = hitTestBuffer.generateUniqueColorKey()
-            let stamp = StampObject(center: point, size: 32, stampType: stampType,
+            let stamp = StampObject(center: point, size: 48, stampType: stampType,
                                     color: currentColor, hitTestColorKey: key)
             objects[key] = stamp
             zOrder.append(key)
