@@ -47,7 +47,6 @@ class HitTestBuffer {
     /// 读取指定位置的颜色 key，用于 hit test
     func pickColorKey(at point: CGPoint) -> UInt32 {
         let x = Int(point.x)
-        // CGContext 原点在左下角，NSView 坐标也是左下角，无需翻转
         let y = Int(point.y)
 
         guard x >= 0, x < width, y >= 0, y < height else { return 0 }
@@ -70,18 +69,19 @@ class HitTestBuffer {
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
     }
 
-    /// 在 Layer B 上绘制箭头 (使用其唯一颜色，关闭抗锯齿)
-    func drawArrow(_ arrow: Arrow) {
-        let pickColor = HitTestBuffer.colorFromKey(arrow.hitTestColorKey)
-        // 在 hit test 图层用稍粗的线宽，增大可选中区域
-        arrow.draw(in: context, withColor: pickColor, lineWidthOverride: arrow.lineWidth + 6)
+    /// 在 Layer B 上绘制任意标注对象 (使用其唯一颜色，关闭抗锯齿)
+    func drawObject(_ object: any AnnotationObject) {
+        let pickColor = HitTestBuffer.colorFromKey(object.hitTestColorKey)
+        object.drawHitTest(in: context, color: pickColor)
     }
 
-    /// 重绘所有箭头到 Layer B
-    func redrawAll(arrows: [UInt32: Arrow]) {
+    /// 按 Z 序重绘所有对象到 Layer B
+    func redrawAll(objects: [UInt32: any AnnotationObject], zOrder: [UInt32]) {
         clear()
-        for (_, arrow) in arrows {
-            drawArrow(arrow)
+        for key in zOrder {
+            if let obj = objects[key] {
+                drawObject(obj)
+            }
         }
     }
 }
