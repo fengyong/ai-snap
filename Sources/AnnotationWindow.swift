@@ -4,6 +4,10 @@ import Cocoa
 class AnnotationWindow: NSWindow {
     private var annotationView: AnnotationView!
     private var toolButtons: [NSButton] = []
+    private var arrowStyleButtons: [NSButton] = []
+    private var colorButtons: [NSButton] = []
+    private var colorButtonContainer: NSView!
+    private var paletteIndex: Int = 0
 
     init(image: NSImage) {
         let imageSize = image.size
@@ -17,7 +21,7 @@ class AnnotationWindow: NSWindow {
 
         // 窗口宽度 = 原图 + 间距 + debug 面板
         let totalWidth = imageSize.width + debugPadding + debugWidth
-        let windowSize = NSSize(width: max(totalWidth, 420),
+        let windowSize = NSSize(width: max(totalWidth, 620),
                                 height: max(imageSize.height, debugHeight) + toolbarHeight)
 
         // 居中显示
@@ -95,13 +99,11 @@ class AnnotationWindow: NSWindow {
         separator.boxType = .separator
         toolbar.addSubview(separator)
 
-        var xOffset: CGFloat = 12
+        var xOffset: CGFloat = 8
 
         // ── 工具选择 ──
         let tools: [(String, String)] = [
-            ("↗", "箭头"),
-            ("▭", "矩形"),
-            ("○", "圆形"),
+            ("↗", "箭头"), ("▭", "矩形"), ("○", "圆形"),
         ]
         for (i, (title, tip)) in tools.enumerated() {
             let btn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 32, height: 28))
@@ -114,58 +116,67 @@ class AnnotationWindow: NSWindow {
             btn.wantsLayer = true
             toolbar.addSubview(btn)
             toolButtons.append(btn)
-            xOffset += 36
+            xOffset += 34
         }
-
-        // 默认选中箭头工具
         updateToolButtonStates(selectedIndex: 0)
 
-        xOffset += 12
+        xOffset += 6
 
         // ── 分隔符 ──
-        let sep2 = NSBox(frame: NSRect(x: xOffset, y: 6, width: 1, height: height - 12))
-        sep2.boxType = .separator
-        toolbar.addSubview(sep2)
-        xOffset += 12
+        addSeparator(to: toolbar, at: &xOffset, height: height)
 
-        // ── 颜色选择 ──
-        let colors: [(NSColor, String)] = [
-            (.systemRed, "红色"), (.systemBlue, "蓝色"),
-            (.systemGreen, "绿色"), (.systemYellow, "黄色"),
-        ]
-        for (color, tip) in colors {
-            let btn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 28, height: 28))
-            btn.bezelStyle = .circular
-            btn.wantsLayer = true
-            btn.layer?.backgroundColor = color.cgColor
-            btn.layer?.cornerRadius = 14
-            btn.toolTip = tip
+        // ── 箭头样式 ──
+        for (i, name) in ArrowStyle.presetNames.enumerated() {
+            let btn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 32, height: 28))
+            btn.title = String(name.prefix(2))
+            btn.font = NSFont.systemFont(ofSize: 10)
+            btn.bezelStyle = .texturedSquare
+            btn.toolTip = "箭头样式: \(name)"
             btn.target = self
-            btn.action = #selector(colorButtonClicked(_:))
-            btn.tag = colors.firstIndex(where: { $0.1 == tip }) ?? 0
+            btn.action = #selector(arrowStyleButtonClicked(_:))
+            btn.tag = i
+            btn.wantsLayer = true
             toolbar.addSubview(btn)
-            xOffset += 36
+            arrowStyleButtons.append(btn)
+            xOffset += 34
         }
+        updateArrowStyleStates(selectedIndex: 0)
 
-        xOffset += 12
+        xOffset += 6
 
         // ── 分隔符 ──
-        let sep3 = NSBox(frame: NSRect(x: xOffset, y: 6, width: 1, height: height - 12))
-        sep3.boxType = .separator
-        toolbar.addSubview(sep3)
-        xOffset += 12
+        addSeparator(to: toolbar, at: &xOffset, height: height)
+
+        // ── 调色板切换按钮 ──
+        let paletteBtn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 28, height: 28))
+        paletteBtn.title = "◆"
+        paletteBtn.bezelStyle = .texturedSquare
+        paletteBtn.toolTip = "切换调色板"
+        paletteBtn.target = self
+        paletteBtn.action = #selector(cyclePalette)
+        toolbar.addSubview(paletteBtn)
+        xOffset += 32
+
+        // ── 颜色按钮容器 ──
+        colorButtonContainer = NSView(frame: NSRect(x: xOffset, y: 0, width: 200, height: height))
+        toolbar.addSubview(colorButtonContainer)
+        rebuildColorButtons()
+        xOffset += CGFloat(ColorPalette.allPalettes[paletteIndex].colors.count) * 32 + 8
+
+        // ── 分隔符 ──
+        addSeparator(to: toolbar, at: &xOffset, height: height)
 
         // ── 保存按钮 ──
-        let saveBtn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 60, height: 28))
+        let saveBtn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 50, height: 28))
         saveBtn.title = "保存"
         saveBtn.bezelStyle = .rounded
         saveBtn.target = self
         saveBtn.action = #selector(saveImage)
         toolbar.addSubview(saveBtn)
-        xOffset += 68
+        xOffset += 56
 
         // ── 复制按钮 ──
-        let copyBtn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 60, height: 28))
+        let copyBtn = NSButton(frame: NSRect(x: xOffset, y: 8, width: 50, height: 28))
         copyBtn.title = "复制"
         copyBtn.bezelStyle = .rounded
         copyBtn.target = self
@@ -175,6 +186,41 @@ class AnnotationWindow: NSWindow {
         return toolbar
     }
 
+    private func addSeparator(to view: NSView, at xOffset: inout CGFloat, height: CGFloat) {
+        let sep = NSBox(frame: NSRect(x: xOffset, y: 6, width: 1, height: height - 12))
+        sep.boxType = .separator
+        view.addSubview(sep)
+        xOffset += 8
+    }
+
+    private func rebuildColorButtons() {
+        colorButtons.forEach { $0.removeFromSuperview() }
+        colorButtons.removeAll()
+
+        let palette = ColorPalette.allPalettes[paletteIndex]
+        for (i, color) in palette.colors.enumerated() {
+            let btn = NSButton(frame: NSRect(x: CGFloat(i) * 32, y: 8, width: 26, height: 26))
+            btn.bezelStyle = .circular
+            btn.title = ""
+            btn.wantsLayer = true
+            btn.layer?.backgroundColor = color.cgColor
+            btn.layer?.cornerRadius = 13
+            btn.layer?.borderWidth = 2
+            btn.layer?.borderColor = NSColor.clear.cgColor
+            btn.target = self
+            btn.action = #selector(colorButtonClicked(_:))
+            btn.tag = i
+            colorButtonContainer.addSubview(btn)
+            colorButtons.append(btn)
+        }
+
+        // 默认选中第一个颜色
+        if let first = palette.colors.first {
+            annotationView.currentColor = first
+            colorButtons.first?.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        }
+    }
+
     private func updateToolButtonStates(selectedIndex: Int) {
         for (i, btn) in toolButtons.enumerated() {
             if i == selectedIndex {
@@ -182,6 +228,16 @@ class AnnotationWindow: NSWindow {
                 btn.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.2).cgColor
             } else {
                 btn.state = .off
+                btn.layer?.backgroundColor = nil
+            }
+        }
+    }
+
+    private func updateArrowStyleStates(selectedIndex: Int) {
+        for (i, btn) in arrowStyleButtons.enumerated() {
+            if i == selectedIndex {
+                btn.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.2).cgColor
+            } else {
                 btn.layer?.backgroundColor = nil
             }
         }
@@ -197,11 +253,29 @@ class AnnotationWindow: NSWindow {
         }
     }
 
-    @objc private func colorButtonClicked(_ sender: NSButton) {
-        let colors: [NSColor] = [.systemRed, .systemBlue, .systemGreen, .systemYellow]
-        if sender.tag >= 0 && sender.tag < colors.count {
-            annotationView.currentColor = colors[sender.tag]
+    @objc private func arrowStyleButtonClicked(_ sender: NSButton) {
+        let styles = ArrowStyle.allPresets
+        if sender.tag >= 0 && sender.tag < styles.count {
+            annotationView.currentArrowStyle = styles[sender.tag]
+            updateArrowStyleStates(selectedIndex: sender.tag)
         }
+    }
+
+    @objc private func colorButtonClicked(_ sender: NSButton) {
+        let palette = ColorPalette.allPalettes[paletteIndex]
+        if sender.tag >= 0 && sender.tag < palette.colors.count {
+            annotationView.currentColor = palette.colors[sender.tag]
+            // 更新选中边框
+            for btn in colorButtons {
+                btn.layer?.borderColor = NSColor.clear.cgColor
+            }
+            sender.layer?.borderColor = NSColor.controlAccentColor.cgColor
+        }
+    }
+
+    @objc private func cyclePalette() {
+        paletteIndex = (paletteIndex + 1) % ColorPalette.allPalettes.count
+        rebuildColorButtons()
     }
 
     @objc private func saveImage() {

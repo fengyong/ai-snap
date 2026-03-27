@@ -23,6 +23,10 @@ class AnnotationView: NSView {
     // 当前被选中的对象 key
     private(set) var selectedKey: UInt32?
 
+    // 点捕捉：当前活跃的吸附点（用于可视化）
+    private var activeSnapPoint: CGPoint?
+    private let snapThreshold: CGFloat = 12.0
+
     // 调试面板：外部挂载的 NSImageView，用于实时显示 Layer B 可视化
     weak var debugImageView: NSImageView?
 
@@ -43,6 +47,27 @@ class AnnotationView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        let flags = event.modifierFlags
+
+        // 已选中对象时，修饰键触发旋转/缩放
+        if let key = selectedKey, let obj = objects[key] {
+            if flags.contains(.option) {
+                // Option+拖拽 → 旋转
+                let angle = atan2(point.y - obj.center.y, point.x - obj.center.x)
+                state = .rotating(colorKey: key, lastAngle: angle)
+                needsDisplay = true
+                return
+            }
+            if flags.contains(.shift) {
+                // Shift+拖拽 → 缩放
+                let dist = hypot(point.x - obj.center.x, point.y - obj.center.y)
+                if dist > 1 {
+                    state = .scaling(colorKey: key, lastDistance: dist)
+                }
+                needsDisplay = true
+                return
+            }
+        }
 
         // 在 Layer B 上查找鼠标位置的颜色
         let colorKey = hitTestBuffer.pickColorKey(at: point)
@@ -85,8 +110,36 @@ class AnnotationView: NSView {
             refreshDebugView()
             needsDisplay = true
 
+        case .rotating(let colorKey, let lastAngle):
+            guard let obj = objects[colorKey] else { return }
+            let currentAngle = atan2(point.y - obj.center.y, point.x - obj.center.x)
+            let deltaAngle = currentAngle - lastAngle
+            obj.rotate(by: deltaAngle)
+            state = .rotating(colorKey: colorKey, lastAngle: currentAngle)
+
+            hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+            refreshDebugView()
+            needsDisplay = true
+
+        case .scaling(let colorKey, let lastDistance):
+            guard let obj = objects[colorKey] else { return }
+            let currentDist = hypot(point.x - obj.center.x, point.y - obj.center.y)
+            if currentDist > 1 && lastDistance > 1 {
+                let factor = currentDist / lastDistance
+                let box = obj.boundingBox
+                let minDim = min(box.width, box.height)
+                if minDim * factor >= 5 || factor >= 1 {
+                    obj.scale(by: factor)
+                    state = .scaling(colorKey: colorKey, lastDistance: currentDist)
+                }
+            }
+
+            hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+            refreshDebugView()
+            needsDisplay = true
+
         case .drawing:
-            currentDrawEnd = point
+            currentDrawEnd = applySnap(to: point, excludeKey: nil)
             needsDisplay = true
 
         case .idle:
@@ -99,27 +152,29 @@ class AnnotationView: NSView {
 
         switch state {
         case .drawing(let tool, let start):
+            // 对终点应用吸附
+            let snappedEnd = applySnap(to: point, excludeKey: nil)
             // 最小长度检查
-            let dist = hypot(point.x - start.x, point.y - start.y)
+            let dist = hypot(snappedEnd.x - start.x, snappedEnd.y - start.y)
             if dist > 5 {
                 let colorKey = hitTestBuffer.generateUniqueColorKey()
                 let obj: any AnnotationObject
 
                 switch tool {
                 case .arrow:
-                    obj = Arrow(startPoint: start, endPoint: point,
+                    obj = Arrow(startPoint: start, endPoint: snappedEnd,
                                 color: currentColor, lineWidth: currentLineWidth,
                                 hitTestColorKey: colorKey, style: currentArrowStyle)
 
                 case .rectangle:
-                    obj = RectangleShape(from: start, to: point,
+                    obj = RectangleShape(from: start, to: snappedEnd,
                                          color: currentColor,
                                          lineWidth: currentLineWidth,
                                          hitTestColorKey: colorKey)
 
                 case .circle:
-                    let centerPt = CGPoint(x: (start.x + point.x) / 2,
-                                           y: (start.y + point.y) / 2)
+                    let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
+                                           y: (start.y + snappedEnd.y) / 2)
                     let radius = dist / 2
                     obj = CircleShape(center: centerPt, radius: radius,
                                       color: currentColor,
@@ -139,15 +194,17 @@ class AnnotationView: NSView {
         case .moving:
             break
 
+        case .rotating, .scaling:
+            break
+
         case .idle:
             break
         }
 
         state = .idle
+        activeSnapPoint = nil
         needsDisplay = true
-    }
-
-    // MARK: - Keyboard
+    }    // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 51 || event.keyCode == 117 { // Delete / Forward Delete
@@ -185,6 +242,11 @@ class AnnotationView: NSView {
         // 3. 绘制正在画的图形预览
         if case .drawing(let tool, let start) = state, let end = currentDrawEnd {
             drawPreview(tool: tool, start: start, end: end, in: ctx)
+        }
+
+        // 4. 绘制吸附指示器
+        if let snapPt = activeSnapPoint {
+            drawSnapIndicator(at: snapPt, in: ctx)
         }
     }
 
@@ -230,6 +292,192 @@ class AnnotationView: NSView {
                                        lineWidth: currentLineWidth,
                                        hitTestColorKey: 0)
             preview.draw(in: ctx)
+        }
+    }
+
+    // MARK: - Object Snap
+
+    /// 查找距离 cursor 最近的吸附点（排除指定对象自身）
+    private func findNearestSnapPoint(to cursor: CGPoint, excludeKey: UInt32?) -> SnapPoint? {
+        var bestDist: CGFloat = snapThreshold
+        var bestSnap: SnapPoint?
+
+        for (key, obj) in objects {
+            if key == excludeKey { continue }
+            for snap in obj.snapPoints() {
+                let dist = hypot(cursor.x - snap.point.x, cursor.y - snap.point.y)
+                if dist < bestDist {
+                    bestDist = dist
+                    bestSnap = snap
+                }
+            }
+        }
+        return bestSnap
+    }
+
+    /// 对一个点应用吸附，返回吸附后的点
+    private func applySnap(to point: CGPoint, excludeKey: UInt32?) -> CGPoint {
+        if let snap = findNearestSnapPoint(to: point, excludeKey: excludeKey) {
+            activeSnapPoint = snap.point
+            return snap.point
+        }
+        activeSnapPoint = nil
+        return point
+    }
+
+    /// 绘制吸附指示器
+    private func drawSnapIndicator(at point: CGPoint, in ctx: CGContext) {
+        let size: CGFloat = 8
+        ctx.setStrokeColor(NSColor.systemCyan.cgColor)
+        ctx.setLineWidth(1.5)
+
+        // 十字线
+        ctx.move(to: CGPoint(x: point.x - size, y: point.y))
+        ctx.addLine(to: CGPoint(x: point.x + size, y: point.y))
+        ctx.strokePath()
+        ctx.move(to: CGPoint(x: point.x, y: point.y - size))
+        ctx.addLine(to: CGPoint(x: point.x, y: point.y + size))
+        ctx.strokePath()
+
+        // 菱形
+        ctx.move(to: CGPoint(x: point.x, y: point.y - size * 0.6))
+        ctx.addLine(to: CGPoint(x: point.x + size * 0.6, y: point.y))
+        ctx.addLine(to: CGPoint(x: point.x, y: point.y + size * 0.6))
+        ctx.addLine(to: CGPoint(x: point.x - size * 0.6, y: point.y))
+        ctx.closePath()
+        ctx.strokePath()
+    }
+
+    // MARK: - Object Attachment
+
+    private let attachThreshold: CGFloat = 15.0
+
+    /// 检测一个点附近是否有可附着的形状，返回 Attachment 或 nil
+    private func detectAttachment(at point: CGPoint, excludeKey: UInt32?) -> Attachment? {
+        var bestDist: CGFloat = attachThreshold
+        var bestAttachment: Attachment?
+
+        for (key, obj) in objects {
+            if key == excludeKey { continue }
+            // 箭头不作为父对象
+            if obj is Arrow { continue }
+
+            // 先检查 snap points
+            for (index, snap) in obj.snapPoints().enumerated() {
+                let dist = hypot(point.x - snap.point.x, point.y - snap.point.y)
+                if dist < bestDist {
+                    bestDist = dist
+                    bestAttachment = Attachment(parentKey: key, anchorType: .snapPoint(index: index))
+                }
+            }
+
+            // 检查周长最近点
+            let nearest = obj.nearestPerimeterPoint(to: point)
+            let dist = hypot(point.x - nearest.x, point.y - nearest.y)
+            if dist < bestDist {
+                bestDist = dist
+                // 计算周长参数
+                let param = computePerimeterParameter(for: obj, at: nearest)
+                bestAttachment = Attachment(parentKey: key, anchorType: .perimeter(parameter: param))
+            }
+        }
+        return bestAttachment
+    }
+
+    /// 计算点在对象周长上的参数 (0...1)
+    private func computePerimeterParameter(for obj: any AnnotationObject, at point: CGPoint) -> CGFloat {
+        if let circle = obj as? CircleShape {
+            let dx = point.x - circle.center.x
+            let dy = point.y - circle.center.y
+            var angle = atan2(dy, dx) - circle.rotation
+            if angle < 0 { angle += 2 * .pi }
+            return angle / (2 * .pi)
+        }
+        if let rect = obj as? RectangleShape {
+            // 转换到局部坐标
+            let local = rotatePoint(point, around: rect.center, by: -rect.rotation)
+            let lx = local.x - rect.center.x
+            let ly = local.y - rect.center.y
+            let hw = rect.width / 2, hh = rect.height / 2
+            let perimeter = 2 * (rect.width + rect.height)
+            // 沿周长测量距离
+            var d: CGFloat = 0
+            if ly <= -hh + 0.1 { d = lx + hw }                                  // bottom
+            else if lx >= hw - 0.1 { d = rect.width + (ly + hh) }               // right
+            else if ly >= hh - 0.1 { d = rect.width + rect.height + (hw - lx) } // top
+            else { d = 2 * rect.width + rect.height + (hh - ly) }               // left
+            return max(0, min(1, d / perimeter))
+        }
+        if let stamp = obj as? StampObject {
+            let local = rotatePoint(point, around: stamp.center, by: -stamp.rotation)
+            let lx = local.x - stamp.center.x
+            let ly = local.y - stamp.center.y
+            let half = stamp.size / 2
+            let perimeter = stamp.size * 4
+            var d: CGFloat = 0
+            if ly <= -half + 0.1 { d = lx + half }
+            else if lx >= half - 0.1 { d = stamp.size + (ly + half) }
+            else if ly >= half - 0.1 { d = 2 * stamp.size + (half - lx) }
+            else { d = 3 * stamp.size + (half - ly) }
+            return max(0, min(1, d / perimeter))
+        }
+        return 0
+    }
+
+    /// 解析附着点的当前世界坐标
+    private func resolveAttachmentPosition(_ attachment: Attachment) -> CGPoint? {
+        guard let parent = objects[attachment.parentKey] else { return nil }
+
+        switch attachment.anchorType {
+        case .snapPoint(let index):
+            let snaps = parent.snapPoints()
+            guard index < snaps.count else { return nil }
+            return snaps[index].point
+
+        case .perimeter(let parameter):
+            if let circle = parent as? CircleShape {
+                return circle.pointOnPerimeter(at: parameter)
+            }
+            if let rect = parent as? RectangleShape {
+                return rect.pointOnPerimeter(at: parameter)
+            }
+            if let stamp = parent as? StampObject {
+                return stamp.pointOnPerimeter(at: parameter)
+            }
+            return nil
+        }
+    }
+
+    /// 更新所有附着到指定父对象的箭头端点
+    private func updateAttachedArrows(forParent parentKey: UInt32) {
+        for (_, obj) in objects {
+            guard let arrow = obj as? Arrow else { continue }
+            if let att = arrow.startAttachment, att.parentKey == parentKey {
+                if let pos = resolveAttachmentPosition(att) {
+                    arrow.startPoint = pos
+                }
+            }
+            if let att = arrow.endAttachment, att.parentKey == parentKey {
+                if let pos = resolveAttachmentPosition(att) {
+                    arrow.endPoint = pos
+                }
+            }
+        }
+    }
+
+    /// 级联删除：删除所有附着到指定父对象的箭头
+    private func cascadeDelete(parentKey: UInt32) {
+        var toDelete: [UInt32] = []
+        for (key, obj) in objects {
+            guard let arrow = obj as? Arrow else { continue }
+            if (arrow.startAttachment?.parentKey == parentKey) ||
+               (arrow.endAttachment?.parentKey == parentKey) {
+                toDelete.append(key)
+            }
+        }
+        for key in toDelete {
+            objects.removeValue(forKey: key)
+            zOrder.removeAll { $0 == key }
         }
     }
 

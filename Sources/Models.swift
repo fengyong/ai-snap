@@ -93,6 +93,74 @@ struct ArrowStyle {
         headType: .triangle, tailType: .none, lineStyle: .dashed,
         headLength: 14, headAngle: .pi / 6
     )
+
+    static let diamondArrow = ArrowStyle(
+        headType: .diamond, tailType: .none, lineStyle: .solid,
+        headLength: 14, headAngle: .pi / 6
+    )
+
+    static let circleEndpoints = ArrowStyle(
+        headType: .none, tailType: .circle, lineStyle: .solid,
+        headLength: 14, headAngle: .pi / 6
+    )
+
+    static let dottedDiamond = ArrowStyle(
+        headType: .diamond, tailType: .none, lineStyle: .dotted,
+        headLength: 14, headAngle: .pi / 6
+    )
+
+    static let allPresets: [ArrowStyle] = [
+        .default, .openArrow, .dashedArrow, .diamondArrow, .circleEndpoints, .dottedDiamond
+    ]
+
+    static let presetNames: [String] = [
+        "实心", "开放", "虚线", "菱形", "圆端", "点菱"
+    ]
+}
+
+// MARK: - Color Palette
+
+struct ColorPalette {
+    let name: String
+    let colors: [NSColor]
+
+    static let vivid = ColorPalette(name: "鲜明", colors: [
+        .systemRed, .systemBlue, .systemGreen, .systemYellow
+    ])
+
+    static let professional = ColorPalette(name: "专业", colors: [
+        NSColor(red: 0.176, green: 0.204, blue: 0.212, alpha: 1),  // #2D3436
+        NSColor(red: 0.035, green: 0.518, blue: 0.890, alpha: 1),  // #0984E3
+        NSColor(red: 0.000, green: 0.722, blue: 0.580, alpha: 1),  // #00B894
+        NSColor(red: 0.882, green: 0.439, blue: 0.333, alpha: 1),  // #E17055
+        NSColor(red: 0.416, green: 0.220, blue: 0.678, alpha: 1),  // #6A38AD
+    ])
+
+    static let pastel = ColorPalette(name: "柔和", colors: [
+        NSColor(red: 0.980, green: 0.694, blue: 0.627, alpha: 1),  // #FAB1A0
+        NSColor(red: 0.506, green: 0.925, blue: 0.925, alpha: 1),  // #81ECEC
+        NSColor(red: 0.635, green: 0.608, blue: 0.996, alpha: 1),  // #A29BFE
+        NSColor(red: 1.000, green: 0.918, blue: 0.655, alpha: 1),  // #FFEAA7
+        NSColor(red: 0.333, green: 0.937, blue: 0.769, alpha: 1),  // #55EFC4
+    ])
+
+    static let highContrast = ColorPalette(name: "高对比", colors: [
+        .white,
+        NSColor(red: 1, green: 0, blue: 0, alpha: 1),
+        NSColor(red: 0, green: 1, blue: 0, alpha: 1),
+        NSColor(red: 1, green: 1, blue: 0, alpha: 1),
+    ])
+
+    static let monochrome = ColorPalette(name: "灰度", colors: [
+        .black,
+        NSColor(white: 0.333, alpha: 1),
+        NSColor(white: 0.667, alpha: 1),
+        .white,
+    ])
+
+    static let allPalettes: [ColorPalette] = [
+        .vivid, .professional, .pastel, .highContrast, .monochrome
+    ]
 }
 
 // MARK: - Stamp Type
@@ -116,6 +184,8 @@ enum CanvasState {
     case idle
     case drawing(tool: DrawingTool, start: CGPoint)
     case moving(colorKey: UInt32, grabOffset: CGVector)
+    case rotating(colorKey: UInt32, lastAngle: CGFloat)
+    case scaling(colorKey: UInt32, lastDistance: CGFloat)
 }
 
 // MARK: - AnnotationObject Protocol
@@ -495,6 +565,25 @@ class RectangleShape: AnnotationObject {
                            around: center, by: rotation)
     }
 
+    /// 周长参数 (0...1) → 对应的周长上的世界坐标点
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        let hw = width / 2, hh = height / 2
+        let perimeter = 2 * (width + height)
+        let d = parameter * perimeter
+        var local: CGPoint
+        if d < width {
+            local = CGPoint(x: -hw + d, y: -hh)
+        } else if d < width + height {
+            local = CGPoint(x: hw, y: -hh + (d - width))
+        } else if d < 2 * width + height {
+            local = CGPoint(x: hw - (d - width - height), y: hh)
+        } else {
+            local = CGPoint(x: -hw, y: hh - (d - 2 * width - height))
+        }
+        return rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
+                           around: center, by: rotation)
+    }
+
     // MARK: Transform
 
     func move(by delta: CGVector) {
@@ -588,6 +677,13 @@ class CircleShape: AnnotationObject {
         }
         return CGPoint(x: center.x + radius * dx / dist,
                        y: center.y + radius * dy / dist)
+    }
+
+    /// 周长参数 (0...1) → 圆周上的世界坐标点
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        let angle = parameter * 2 * .pi + rotation
+        return CGPoint(x: center.x + radius * cos(angle),
+                       y: center.y + radius * sin(angle))
     }
 
     // MARK: Transform
@@ -759,6 +855,25 @@ class StampObject: AnnotationObject {
         }
 
         return rotatePoint(CGPoint(x: center.x + nearest.x, y: center.y + nearest.y),
+                           around: center, by: rotation)
+    }
+
+    /// 周长参数 (0...1) → 正方形包围盒周长上的世界坐标点
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        let half = size / 2
+        let perimeter = size * 4
+        let d = parameter * perimeter
+        var local: CGPoint
+        if d < size {
+            local = CGPoint(x: -half + d, y: -half)
+        } else if d < 2 * size {
+            local = CGPoint(x: half, y: -half + (d - size))
+        } else if d < 3 * size {
+            local = CGPoint(x: half - (d - 2 * size), y: half)
+        } else {
+            local = CGPoint(x: -half, y: half - (d - 3 * size))
+        }
+        return rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
                            around: center, by: rotation)
     }
 
