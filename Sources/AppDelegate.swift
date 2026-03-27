@@ -66,7 +66,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Annotation
 
     private func openAnnotationWindow(with image: CGImage) {
-        let nsImage = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        // 用屏幕 backingScaleFactor 将像素尺寸换算为逻辑点尺寸
+        let scaleFactor = NSScreen.main?.backingScaleFactor ?? 2.0
+        let logicalSize = NSSize(width: CGFloat(image.width) / scaleFactor,
+                                 height: CGFloat(image.height) / scaleFactor)
+        let nsImage = NSImage(cgImage: image, size: logicalSize)
         annotationWindow = AnnotationWindow(image: nsImage)
         annotationWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

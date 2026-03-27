@@ -16,17 +16,29 @@ class AnnotationWindow: NSWindow {
 
         // 右侧 debug 面板 = 原图 50% 大小
         let debugScale: CGFloat = 0.5
-        let debugWidth = imageSize.width * debugScale
-        let debugHeight = imageSize.height * debugScale
         let debugPadding: CGFloat = 8
 
-        // 窗口宽度 = 原图 + 间距 + debug 面板
-        let totalWidth = imageSize.width + debugPadding + debugWidth
+        // 计算自适应缩放：确保窗口不超过屏幕可见区域的 90%
+        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let maxW = screenFrame.width * 0.9
+        let maxH = screenFrame.height * 0.9 - toolbarHeight
+
+        // 总宽度 = 画布 + 间距 + debug面板(50%)
+        let naturalTotalW = imageSize.width * (1 + debugScale) + debugPadding
+        let naturalTotalH = imageSize.height
+
+        let fitScale = min(1.0, min(maxW / naturalTotalW, maxH / naturalTotalH))
+
+        let canvasW = imageSize.width * fitScale
+        let canvasH = imageSize.height * fitScale
+        let debugWidth = canvasW * debugScale
+        let debugHeight = canvasH * debugScale
+
+        let totalWidth = canvasW + debugPadding + debugWidth
         let windowSize = NSSize(width: max(totalWidth, 620),
-                                height: max(imageSize.height, debugHeight) + toolbarHeight)
+                                height: max(canvasH, debugHeight) + toolbarHeight)
 
         // 居中显示
-        let screenFrame = NSScreen.main?.visibleFrame ?? .zero
         let origin = NSPoint(
             x: screenFrame.midX - windowSize.width / 2,
             y: screenFrame.midY - windowSize.height / 2
@@ -44,16 +56,20 @@ class AnnotationWindow: NSWindow {
 
         let container = NSView(frame: NSRect(origin: .zero, size: windowSize))
 
-        // 标注画布（左侧）
+        // 标注画布（左侧）— 用 scrollView 包裹以支持缩放后的坐标映射
         annotationView = AnnotationView(image: image)
         annotationView.frame = NSRect(x: 0, y: toolbarHeight,
-                                      width: imageSize.width, height: imageSize.height)
+                                      width: canvasW, height: canvasH)
+        // 如果缩放了，设置 bounds 为原始图片尺寸，让 NSView 自动处理坐标映射
+        if fitScale < 1.0 {
+            annotationView.setBoundsSize(imageSize)
+        }
         container.addSubview(annotationView)
 
-        // Layer B 调试面板（右侧，50% 大小）
+        // Layer B 调试面板（右侧）
         let debugImageView = NSImageView(frame: NSRect(
-            x: imageSize.width + debugPadding,
-            y: toolbarHeight + (imageSize.height - debugHeight),
+            x: canvasW + debugPadding,
+            y: toolbarHeight + (canvasH - debugHeight),
             width: debugWidth,
             height: debugHeight
         ))
@@ -73,8 +89,8 @@ class AnnotationWindow: NSWindow {
         debugLabel.font = NSFont.systemFont(ofSize: 10, weight: .medium)
         debugLabel.textColor = .secondaryLabelColor
         debugLabel.frame = NSRect(
-            x: imageSize.width + debugPadding,
-            y: toolbarHeight + imageSize.height - debugHeight - 16,
+            x: canvasW + debugPadding,
+            y: toolbarHeight + canvasH - debugHeight - 16,
             width: debugWidth,
             height: 14
         )
