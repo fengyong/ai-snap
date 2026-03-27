@@ -256,8 +256,10 @@ class AnnotationView: NSView {
                 case .circle:
                     let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
                                            y: (start.y + snappedEnd.y) / 2)
-                    let radius = dist / 2
-                    obj = CircleShape(center: centerPt, radius: radius,
+                    let rx = abs(snappedEnd.x - start.x) / 2
+                    let ry = abs(snappedEnd.y - start.y) / 2
+                    obj = CircleShape(center: centerPt, radiusX: max(rx, 3),
+                                      radiusY: max(ry, 3),
                                       color: currentColor,
                                       lineWidth: currentLineWidth,
                                       hitTestColorKey: colorKey)
@@ -359,7 +361,7 @@ class AnnotationView: NSView {
 
     // MARK: - Undo / Redo
 
-    private func performUndo() {
+    func performUndo() {
         guard let action = undoStack.popLast() else { return }
         selectedKey = nil
 
@@ -408,7 +410,7 @@ class AnnotationView: NSView {
         needsDisplay = true
     }
 
-    private func performRedo() {
+    func performRedo() {
         guard let action = redoStack.popLast() else { return }
         selectedKey = nil
 
@@ -570,8 +572,10 @@ class AnnotationView: NSView {
         case .circle:
             let centerPt = CGPoint(x: (start.x + end.x) / 2,
                                    y: (start.y + end.y) / 2)
-            let radius = hypot(end.x - start.x, end.y - start.y) / 2
-            let preview = CircleShape(center: centerPt, radius: radius,
+            let rx = abs(end.x - start.x) / 2
+            let ry = abs(end.y - start.y) / 2
+            let preview = CircleShape(center: centerPt, radiusX: max(rx, 1),
+                                       radiusY: max(ry, 1),
                                        color: currentColor,
                                        lineWidth: currentLineWidth,
                                        hitTestColorKey: 0)
@@ -582,18 +586,27 @@ class AnnotationView: NSView {
 
         case .spotlight:
             let imageRect = CGRect(origin: .zero, size: baseImage.size)
-            ctx.saveGState()
             let spotRect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
                                   width: abs(end.x - start.x), height: abs(end.y - start.y))
             let spotPath = CGPath(roundedRect: spotRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
+            // 周围变暗
+            ctx.saveGState()
             let fullPath = CGMutablePath()
             fullPath.addRect(imageRect)
             fullPath.addPath(spotPath)
             ctx.addPath(fullPath)
             ctx.clip(using: .evenOdd)
-            ctx.setFillColor(NSColor.black.withAlphaComponent(0.4).cgColor)
+            ctx.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
             ctx.fill(imageRect)
             ctx.restoreGState()
+            // 中心提亮
+            ctx.saveGState()
+            ctx.addPath(spotPath)
+            ctx.clip()
+            ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            ctx.fill(imageRect)
+            ctx.restoreGState()
+            // 边框
             ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.8).cgColor)
             ctx.setLineWidth(2)
             ctx.setLineDash(phase: 0, lengths: [6, 3])
@@ -657,7 +670,6 @@ class AnnotationView: NSView {
 
     /// 绘制 Spotlight 遮罩：全图半透明遮盖，挖空所有 SpotlightShape 区域
     private func drawSpotlightOverlay(in ctx: CGContext) {
-        // 收集所有 Spotlight 对象
         var spotlights: [SpotlightShape] = []
         for key in zOrder {
             if let spot = objects[key] as? SpotlightShape {
@@ -667,9 +679,9 @@ class AnnotationView: NSView {
         guard !spotlights.isEmpty else { return }
 
         let imageRect = CGRect(origin: .zero, size: baseImage.size)
-        ctx.saveGState()
 
-        // 构造路径：全图矩形 + 所有 Spotlight 高亮区域（even-odd 挖空）
+        // 1. 周围区域变暗（even-odd 挖空高亮区域）
+        ctx.saveGState()
         let fullPath = CGMutablePath()
         fullPath.addRect(imageRect)
         for spot in spotlights {
@@ -684,12 +696,30 @@ class AnnotationView: NSView {
                                      transform: &transform)
             fullPath.addPath(roundedPath)
         }
-
         ctx.addPath(fullPath)
         ctx.clip(using: .evenOdd)
-        ctx.setFillColor(NSColor.black.withAlphaComponent(0.45).cgColor)
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
         ctx.fill(imageRect)
         ctx.restoreGState()
+
+        // 2. 中心高亮区域提亮（白色半透明叠加）
+        for spot in spotlights {
+            ctx.saveGState()
+            var transform = CGAffineTransform.identity
+                .translatedBy(x: spot.center.x, y: spot.center.y)
+                .rotated(by: spot.rotation)
+            let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
+                                   width: spot.width, height: spot.height)
+            let roundedPath = CGPath(roundedRect: localRect,
+                                     cornerWidth: spot.cornerRadius,
+                                     cornerHeight: spot.cornerRadius,
+                                     transform: &transform)
+            ctx.addPath(roundedPath)
+            ctx.clip()
+            ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            ctx.fill(imageRect)
+            ctx.restoreGState()
+        }
     }
 
     // MARK: - Object Attachment
@@ -731,9 +761,10 @@ class AnnotationView: NSView {
     /// 计算点在对象周长上的参数 (0...1)
     private func computePerimeterParameter(for obj: any AnnotationObject, at point: CGPoint) -> CGFloat {
         if let circle = obj as? CircleShape {
-            let dx = point.x - circle.center.x
-            let dy = point.y - circle.center.y
-            var angle = atan2(dy, dx) - circle.rotation
+            let local = rotatePoint(point, around: circle.center, by: -circle.rotation)
+            let dx = local.x - circle.center.x
+            let dy = local.y - circle.center.y
+            var angle = atan2(dy / circle.radiusY, dx / circle.radiusX)
             if angle < 0 { angle += 2 * .pi }
             return angle / (2 * .pi)
         }

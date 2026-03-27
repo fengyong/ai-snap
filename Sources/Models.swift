@@ -652,22 +652,24 @@ class RectangleShape: AnnotationObject {
     }
 }
 
-// MARK: - CircleShape
+// MARK: - CircleShape (Ellipse)
 
 class CircleShape: AnnotationObject {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
-    var radius: CGFloat
-    var rotation: CGFloat // matters for snap/attachment alignment
+    var radiusX: CGFloat
+    var radiusY: CGFloat
+    var rotation: CGFloat
     var color: NSColor
     var lineWidth: CGFloat
 
-    init(center: CGPoint, radius: CGFloat, color: NSColor,
+    init(center: CGPoint, radiusX: CGFloat, radiusY: CGFloat, color: NSColor,
          lineWidth: CGFloat = 2.0, hitTestColorKey: UInt32) {
         self.id = UUID()
         self.center = center
-        self.radius = radius
+        self.radiusX = radiusX
+        self.radiusY = radiusY
         self.rotation = 0
         self.color = color
         self.lineWidth = lineWidth
@@ -675,34 +677,45 @@ class CircleShape: AnnotationObject {
     }
 
     var boundingBox: CGRect {
-        let r = radius + lineWidth
-        return CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
+        // 旋转后的包围盒
+        let cosR = abs(cos(rotation)), sinR = abs(sin(rotation))
+        let hw = radiusX * cosR + radiusY * sinR + lineWidth
+        let hh = radiusX * sinR + radiusY * cosR + lineWidth
+        return CGRect(x: center.x - hw, y: center.y - hh, width: hw * 2, height: hh * 2)
     }
 
-    /// 4 quadrant points (0, 90, 180, 270 degrees, offset by rotation)
+    /// 4 quadrant points on the ellipse
     func quadrantPoints() -> [CGPoint] {
         [CGFloat(0), .pi / 2, .pi, 3 * .pi / 2].map { a in
-            CGPoint(x: center.x + radius * cos(a + rotation),
-                    y: center.y + radius * sin(a + rotation))
+            let localX = radiusX * cos(a)
+            let localY = radiusY * sin(a)
+            return rotatePoint(CGPoint(x: center.x + localX, y: center.y + localY),
+                               around: center, by: rotation)
         }
     }
 
     // MARK: Drawing
 
     func draw(in ctx: CGContext) {
-        let rect = CGRect(x: center.x - radius, y: center.y - radius,
-                          width: radius * 2, height: radius * 2)
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+        let rect = CGRect(x: -radiusX, y: -radiusY, width: radiusX * 2, height: radiusY * 2)
         ctx.setStrokeColor(color.cgColor)
         ctx.setLineWidth(lineWidth)
         ctx.strokeEllipse(in: rect)
+        ctx.restoreGState()
     }
 
     func drawHitTest(in ctx: CGContext, color: NSColor) {
-        let rect = CGRect(x: center.x - radius, y: center.y - radius,
-                          width: radius * 2, height: radius * 2)
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+        let rect = CGRect(x: -radiusX, y: -radiusY, width: radiusX * 2, height: radiusY * 2)
         ctx.setStrokeColor(color.cgColor)
         ctx.setLineWidth(lineWidth + 6)
         ctx.strokeEllipse(in: rect)
+        ctx.restoreGState()
     }
 
     // MARK: Selection & Snap
@@ -720,21 +733,29 @@ class CircleShape: AnnotationObject {
     }
 
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        let dx = point.x - center.x
-        let dy = point.y - center.y
-        let dist = hypot(dx, dy)
+        // 转换到局部坐标
+        let local = rotatePoint(point, around: center, by: -rotation)
+        let dx = local.x - center.x
+        let dy = local.y - center.y
+        // 椭圆上最近点的近似：沿方向射线与椭圆的交点
+        let dist = hypot(dx / radiusX, dy / radiusY)
         guard dist > 0 else {
-            return CGPoint(x: center.x + radius, y: center.y)
+            return rotatePoint(CGPoint(x: center.x + radiusX, y: center.y),
+                               around: center, by: rotation)
         }
-        return CGPoint(x: center.x + radius * dx / dist,
-                       y: center.y + radius * dy / dist)
+        let nx = dx / dist
+        let ny = dy / dist
+        let localNearest = CGPoint(x: center.x + radiusX * nx, y: center.y + radiusY * ny)
+        return rotatePoint(localNearest, around: center, by: rotation)
     }
 
-    /// 周长参数 (0...1) → 圆周上的世界坐标点
+    /// 周长参数 (0...1) → 椭圆周上的世界坐标点
     func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        let angle = parameter * 2 * .pi + rotation
-        return CGPoint(x: center.x + radius * cos(angle),
-                       y: center.y + radius * sin(angle))
+        let angle = parameter * 2 * .pi
+        let localX = radiusX * cos(angle)
+        let localY = radiusY * sin(angle)
+        return rotatePoint(CGPoint(x: center.x + localX, y: center.y + localY),
+                           around: center, by: rotation)
     }
 
     // MARK: Transform
@@ -749,7 +770,8 @@ class CircleShape: AnnotationObject {
     }
 
     func scale(by factor: CGFloat) {
-        radius *= abs(factor)
+        radiusX *= abs(factor)
+        radiusY *= abs(factor)
     }
 }
 
