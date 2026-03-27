@@ -163,6 +163,18 @@ struct ColorPalette {
     ]
 }
 
+// MARK: - Watermark Config
+
+struct WatermarkConfig {
+    var text: String = "AISnap"
+    var enabled: Bool = false
+    var fontSize: CGFloat = 14
+    var color: NSColor = NSColor.white.withAlphaComponent(0.3)
+    var tiled: Bool = true       // true = 平铺; false = 右下角单个
+    var tileSpacing: CGFloat = 120
+    var angle: CGFloat = -.pi / 6  // 平铺旋转角度（-30度）
+}
+
 // MARK: - Stamp Type
 
 enum StampType {
@@ -172,12 +184,36 @@ enum StampType {
     case exclamation
 }
 
+/// 预设表情/符号列表
+let defaultStamps: [(StampType, String)] = [
+    (.checkmark, "\u{2713}"), (.crossmark, "\u{2717}"), (.exclamation, "!"),
+    (.emoji("\u{1F44D}"), "\u{1F44D}"), (.emoji("\u{1F44E}"), "\u{1F44E}"), (.emoji("\u{2764}\u{FE0F}"), "\u{2764}\u{FE0F}"),
+    (.emoji("\u{2B50}"), "\u{2B50}"), (.emoji("\u{1F525}"), "\u{1F525}"), (.emoji("\u{1F4A1}"), "\u{1F4A1}"),
+    (.emoji("\u{2753}"), "\u{2753}"), (.emoji("\u{26A0}\u{FE0F}"), "\u{26A0}\u{FE0F}"), (.emoji("\u{1F3AF}"), "\u{1F3AF}"),
+    (.emoji("\u{1F4CC}"), "\u{1F4CC}"), (.emoji("\u{1F4AC}"), "\u{1F4AC}"), (.emoji("\u{1F50D}"), "\u{1F50D}"),
+    (.emoji("\u{1F446}"), "\u{1F446}"), (.emoji("\u{2705}"), "\u{2705}"), (.emoji("\u{1F389}"), "\u{1F389}"),
+]
+
 // MARK: - Drawing Tool & Canvas State
 
-enum DrawingTool {
+enum DrawingTool: Equatable {
     case arrow
     case rectangle
     case circle
+    case stamp(StampType)
+    case spotlight
+
+    static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
+        switch (lhs, rhs) {
+        case (.arrow, .arrow), (.rectangle, .rectangle),
+             (.circle, .circle), (.spotlight, .spotlight):
+            return true
+        case (.stamp, .stamp):
+            return true  // 所有 stamp 视为同类工具
+        default:
+            return false
+        }
+    }
 }
 
 enum CanvasState {
@@ -890,5 +926,140 @@ class StampObject: AnnotationObject {
 
     func scale(by factor: CGFloat) {
         size *= abs(factor)
+    }
+}
+
+// MARK: - SpotlightShape
+
+class SpotlightShape: AnnotationObject {
+    let id: UUID
+    let hitTestColorKey: UInt32
+    var center: CGPoint
+    var width: CGFloat
+    var height: CGFloat
+    var rotation: CGFloat
+    var color: NSColor
+    var cornerRadius: CGFloat
+
+    init(center: CGPoint, width: CGFloat, height: CGFloat,
+         color: NSColor = NSColor.black.withAlphaComponent(0.5),
+         cornerRadius: CGFloat = 8, hitTestColorKey: UInt32) {
+        self.id = UUID()
+        self.center = center
+        self.width = width
+        self.height = height
+        self.rotation = 0
+        self.color = color
+        self.cornerRadius = cornerRadius
+        self.hitTestColorKey = hitTestColorKey
+    }
+
+    convenience init(from pointA: CGPoint, to pointB: CGPoint,
+                     color: NSColor = NSColor.black.withAlphaComponent(0.5),
+                     cornerRadius: CGFloat = 8, hitTestColorKey: UInt32) {
+        let cx = (pointA.x + pointB.x) / 2
+        let cy = (pointA.y + pointB.y) / 2
+        let w = abs(pointB.x - pointA.x)
+        let h = abs(pointB.y - pointA.y)
+        self.init(center: CGPoint(x: cx, y: cy), width: w, height: h,
+                  color: color, cornerRadius: cornerRadius, hitTestColorKey: hitTestColorKey)
+    }
+
+    var boundingBox: CGRect {
+        let hw = width / 2, hh = height / 2
+        return CGRect(x: center.x - hw, y: center.y - hh, width: width, height: height)
+    }
+
+    func cornerPoints() -> [CGPoint] {
+        let hw = width / 2, hh = height / 2
+        let locals = [
+            CGPoint(x: -hw, y: -hh), CGPoint(x: hw, y: -hh),
+            CGPoint(x: hw, y: hh), CGPoint(x: -hw, y: hh),
+        ]
+        return locals.map { local in
+            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
+                        around: center, by: rotation)
+        }
+    }
+
+    // MARK: Drawing
+
+    /// Spotlight 不在常规 draw 中绘制遮罩；遮罩由 AnnotationView 统一处理。
+    /// 仅绘制高亮边框。
+    func draw(in ctx: CGContext) {
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+        let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
+        let path = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+        ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.8).cgColor)
+        ctx.setLineWidth(2)
+        ctx.setLineDash(phase: 0, lengths: [6, 3])
+        ctx.addPath(path)
+        ctx.strokePath()
+        ctx.restoreGState()
+    }
+
+    func drawHitTest(in ctx: CGContext, color: NSColor) {
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+        let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setLineWidth(8)
+        ctx.stroke(rect)
+        ctx.restoreGState()
+    }
+
+    // MARK: Selection & Snap
+
+    func selectionHandlePoints() -> [CGPoint] {
+        cornerPoints()
+    }
+
+    func snapPoints() -> [SnapPoint] {
+        var points = [SnapPoint(point: center, type: .center)]
+        for corner in cornerPoints() {
+            points.append(SnapPoint(point: corner, type: .corner))
+        }
+        return points
+    }
+
+    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
+        let localPt = rotatePoint(point, around: center, by: -rotation)
+        let lx = localPt.x - center.x
+        let ly = localPt.y - center.y
+        let hw = width / 2, hh = height / 2
+        let cx = max(-hw, min(hw, lx))
+        let cy = max(-hh, min(hh, ly))
+        var nearest: CGPoint
+        if abs(cx) < hw && abs(cy) < hh {
+            let dists = [cx + hw, hw - cx, cy + hh, hh - cy]
+            let minD = dists.min()!
+            if minD == dists[0] { nearest = CGPoint(x: -hw, y: cy) }
+            else if minD == dists[1] { nearest = CGPoint(x: hw, y: cy) }
+            else if minD == dists[2] { nearest = CGPoint(x: cx, y: -hh) }
+            else { nearest = CGPoint(x: cx, y: hh) }
+        } else {
+            nearest = CGPoint(x: cx, y: cy)
+        }
+        return rotatePoint(CGPoint(x: center.x + nearest.x, y: center.y + nearest.y),
+                           around: center, by: rotation)
+    }
+
+    // MARK: Transform
+
+    func move(by delta: CGVector) {
+        center.x += delta.dx
+        center.y += delta.dy
+    }
+
+    func rotate(by angle: CGFloat) {
+        rotation += angle
+    }
+
+    func scale(by factor: CGFloat) {
+        width *= abs(factor)
+        height *= abs(factor)
     }
 }
