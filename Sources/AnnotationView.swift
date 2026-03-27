@@ -20,6 +20,9 @@ class AnnotationView: NSView {
     var currentLineWidth: CGFloat = 3.0
     var currentArrowStyle: ArrowStyle = .default
 
+    // 水印配置
+    var watermarkConfig = WatermarkConfig()
+
     // 当前被选中的对象 key
     private(set) var selectedKey: UInt32?
 
@@ -78,6 +81,17 @@ class AnnotationView: NSView {
                                   dy: point.y - obj.center.y)
             state = .moving(colorKey: colorKey, grabOffset: offset)
             selectedKey = colorKey
+        } else if case .stamp(let stampType) = currentTool {
+            // Stamp 工具：单击直接放置
+            let key = hitTestBuffer.generateUniqueColorKey()
+            let stamp = StampObject(center: point, size: 32, stampType: stampType,
+                                    color: currentColor, hitTestColorKey: key)
+            objects[key] = stamp
+            zOrder.append(key)
+            hitTestBuffer.drawObject(stamp)
+            refreshDebugView()
+            selectedKey = key
+            state = .idle
         } else {
             // 未命中 → 开始画新图形
             state = .drawing(tool: currentTool, start: point)
@@ -104,6 +118,14 @@ class AnnotationView: NSView {
             )
 
             obj.move(by: delta)
+
+            // 如果移动的是箭头，解除附着
+            if let arrow = obj as? Arrow {
+                arrow.startAttachment = nil
+                arrow.endAttachment = nil
+            }
+            // 如果移动的是形状，更新附着的箭头端点
+            updateAttachedArrows(forParent: colorKey)
 
             // 重绘 Layer B
             hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
@@ -162,9 +184,18 @@ class AnnotationView: NSView {
 
                 switch tool {
                 case .arrow:
-                    obj = Arrow(startPoint: start, endPoint: snappedEnd,
+                    let arrow = Arrow(startPoint: start, endPoint: snappedEnd,
                                 color: currentColor, lineWidth: currentLineWidth,
                                 hitTestColorKey: colorKey, style: currentArrowStyle)
+                    arrow.startAttachment = detectAttachment(at: start, excludeKey: colorKey)
+                    arrow.endAttachment = detectAttachment(at: snappedEnd, excludeKey: colorKey)
+                    if let att = arrow.startAttachment, let pos = resolveAttachmentPosition(att) {
+                        arrow.startPoint = pos
+                    }
+                    if let att = arrow.endAttachment, let pos = resolveAttachmentPosition(att) {
+                        arrow.endPoint = pos
+                    }
+                    obj = arrow
 
                 case .rectangle:
                     obj = RectangleShape(from: start, to: snappedEnd,
@@ -180,6 +211,17 @@ class AnnotationView: NSView {
                                       color: currentColor,
                                       lineWidth: currentLineWidth,
                                       hitTestColorKey: colorKey)
+
+                case .stamp:
+                    // stamp 在 mouseDown 中直接放置，不会走到这里
+                    currentDrawEnd = nil
+                    state = .idle
+                    needsDisplay = true
+                    return
+
+                case .spotlight:
+                    obj = SpotlightShape(from: start, to: snappedEnd,
+                                         hitTestColorKey: colorKey)
                 }
 
                 objects[colorKey] = obj
@@ -209,6 +251,8 @@ class AnnotationView: NSView {
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 51 || event.keyCode == 117 { // Delete / Forward Delete
             if let key = selectedKey {
+                // 级联删除附着的子箭头
+                cascadeDelete(parentKey: key)
                 objects.removeValue(forKey: key)
                 zOrder.removeAll { $0 == key }
                 selectedKey = nil
@@ -228,7 +272,10 @@ class AnnotationView: NSView {
         let imageRect = CGRect(origin: .zero, size: baseImage.size)
         baseImage.draw(in: imageRect)
 
-        // 2. 按 Z 序绘制所有对象
+        // 2. 绘制 Spotlight 遮罩（半透明遮盖 + 挖空高亮区域）
+        drawSpotlightOverlay(in: ctx)
+
+        // 3. 按 Z 序绘制所有对象
         for key in zOrder {
             guard let obj = objects[key] else { continue }
             obj.draw(in: ctx)
@@ -239,12 +286,12 @@ class AnnotationView: NSView {
             }
         }
 
-        // 3. 绘制正在画的图形预览
+        // 4. 绘制正在画的图形预览
         if case .drawing(let tool, let start) = state, let end = currentDrawEnd {
             drawPreview(tool: tool, start: start, end: end, in: ctx)
         }
 
-        // 4. 绘制吸附指示器
+        // 5. 绘制吸附指示器
         if let snapPt = activeSnapPoint {
             drawSnapIndicator(at: snapPt, in: ctx)
         }
@@ -292,6 +339,29 @@ class AnnotationView: NSView {
                                        lineWidth: currentLineWidth,
                                        hitTestColorKey: 0)
             preview.draw(in: ctx)
+
+        case .stamp:
+            break  // stamp 是单击放置，不需要拖拽预览
+
+        case .spotlight:
+            let imageRect = CGRect(origin: .zero, size: baseImage.size)
+            ctx.saveGState()
+            let spotRect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+                                  width: abs(end.x - start.x), height: abs(end.y - start.y))
+            let spotPath = CGPath(roundedRect: spotRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
+            let fullPath = CGMutablePath()
+            fullPath.addRect(imageRect)
+            fullPath.addPath(spotPath)
+            ctx.addPath(fullPath)
+            ctx.clip(using: .evenOdd)
+            ctx.setFillColor(NSColor.black.withAlphaComponent(0.4).cgColor)
+            ctx.fill(imageRect)
+            ctx.restoreGState()
+            ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.8).cgColor)
+            ctx.setLineWidth(2)
+            ctx.setLineDash(phase: 0, lengths: [6, 3])
+            ctx.addPath(spotPath)
+            ctx.strokePath()
         }
     }
 
@@ -346,6 +416,43 @@ class AnnotationView: NSView {
         ctx.addLine(to: CGPoint(x: point.x - size * 0.6, y: point.y))
         ctx.closePath()
         ctx.strokePath()
+    }
+
+    /// 绘制 Spotlight 遮罩：全图半透明遮盖，挖空所有 SpotlightShape 区域
+    private func drawSpotlightOverlay(in ctx: CGContext) {
+        // 收集所有 Spotlight 对象
+        var spotlights: [SpotlightShape] = []
+        for key in zOrder {
+            if let spot = objects[key] as? SpotlightShape {
+                spotlights.append(spot)
+            }
+        }
+        guard !spotlights.isEmpty else { return }
+
+        let imageRect = CGRect(origin: .zero, size: baseImage.size)
+        ctx.saveGState()
+
+        // 构造路径：全图矩形 + 所有 Spotlight 高亮区域（even-odd 挖空）
+        let fullPath = CGMutablePath()
+        fullPath.addRect(imageRect)
+        for spot in spotlights {
+            var transform = CGAffineTransform.identity
+                .translatedBy(x: spot.center.x, y: spot.center.y)
+                .rotated(by: spot.rotation)
+            let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
+                                   width: spot.width, height: spot.height)
+            let roundedPath = CGPath(roundedRect: localRect,
+                                     cornerWidth: spot.cornerRadius,
+                                     cornerHeight: spot.cornerRadius,
+                                     transform: &transform)
+            fullPath.addPath(roundedPath)
+        }
+
+        ctx.addPath(fullPath)
+        ctx.clip(using: .evenOdd)
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.45).cgColor)
+        ctx.fill(imageRect)
+        ctx.restoreGState()
     }
 
     // MARK: - Object Attachment
@@ -500,13 +607,58 @@ class AnnotationView: NSView {
         if let ctx = NSGraphicsContext.current?.cgContext {
             let rect = CGRect(origin: .zero, size: size)
             baseImage.draw(in: rect)
+            // Spotlight 遮罩
+            drawSpotlightOverlay(in: ctx)
             for key in zOrder {
                 if let obj = objects[key] {
                     obj.draw(in: ctx)
                 }
             }
+            // 水印（最后绘制，覆盖在所有内容之上）
+            if watermarkConfig.enabled && !watermarkConfig.text.isEmpty {
+                drawWatermark(in: ctx, size: size)
+            }
         }
         image.unlockFocus()
         return image
+    }
+
+    /// 绘制水印
+    private func drawWatermark(in ctx: CGContext, size: NSSize) {
+        let config = watermarkConfig
+        let font = NSFont.systemFont(ofSize: config.fontSize, weight: .medium)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: config.color,
+        ]
+        let nsText = config.text as NSString
+        let textSize = nsText.size(withAttributes: attrs)
+
+        if config.tiled {
+            // 平铺水印
+            ctx.saveGState()
+            let diagonal = hypot(size.width, size.height)
+            let spacing = config.tileSpacing
+            // 从中心旋转绘制平铺网格
+            ctx.translateBy(x: size.width / 2, y: size.height / 2)
+            ctx.rotate(by: config.angle)
+            let halfD = diagonal / 2 + spacing
+            var y = -halfD
+            while y < halfD {
+                var x = -halfD
+                while x < halfD {
+                    nsText.draw(at: CGPoint(x: x, y: y), withAttributes: attrs)
+                    x += textSize.width + spacing
+                }
+                y += textSize.height + spacing
+            }
+            ctx.restoreGState()
+        } else {
+            // 右下角单个水印
+            let margin: CGFloat = 12
+            let drawPoint = CGPoint(x: size.width - textSize.width - margin,
+                                    y: margin)
+            nsText.draw(at: drawPoint, withAttributes: attrs)
+        }
     }
 }
