@@ -30,6 +30,14 @@ class AnnotationView: NSView {
     private var activeSnapPoint: CGPoint?
     private let snapThreshold: CGFloat = 12.0
 
+    // Undo/Redo 栈
+    private var undoStack: [UndoAction] = []
+    private var redoStack: [UndoAction] = []
+    // 拖拽操作前的起始中心，用于计算总 delta
+    private var dragStartCenter: CGPoint?
+    private var rotateStartAngle: CGFloat = 0
+    private var scaleStartFactor: CGFloat = 1
+
     // 调试面板：外部挂载的 NSImageView，用于实时显示 Layer B 可视化
     weak var debugImageView: NSImageView?
 
@@ -52,12 +60,48 @@ class AnnotationView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let flags = event.modifierFlags
 
+        // 检测是否点击了选中对象的删除叉号按钮
+        if let key = selectedKey, let obj = objects[key] {
+            let box = obj.boundingBox
+            let padding: CGFloat = 4
+            let selRect = box.insetBy(dx: -padding, dy: -padding)
+            let deleteSize: CGFloat = 16
+            let deleteCenter = CGPoint(x: selRect.maxX + deleteSize * 0.3,
+                                        y: selRect.maxY + deleteSize * 0.3)
+            let distToDelete = hypot(point.x - deleteCenter.x, point.y - deleteCenter.y)
+            if distToDelete <= deleteSize / 2 + 4 {
+                // 记录被删除的对象（包含级联删除的箭头）
+                let zOrderBefore = zOrder
+                var deletedObjects: [(UInt32, any AnnotationObject)] = []
+                if let obj = objects[key] { deletedObjects.append((key, obj)) }
+                // 收集级联删除的子箭头
+                for (k, o) in objects {
+                    if let arrow = o as? Arrow,
+                       (arrow.startAttachment?.parentKey == key || arrow.endAttachment?.parentKey == key) {
+                        deletedObjects.append((k, o))
+                    }
+                }
+                undoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderBefore))
+                redoStack.removeAll()
+
+                cascadeDelete(parentKey: key)
+                objects.removeValue(forKey: key)
+                zOrder.removeAll { $0 == key }
+                selectedKey = nil
+                hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+                refreshDebugView()
+                needsDisplay = true
+                return
+            }
+        }
+
         // 已选中对象时，修饰键触发旋转/缩放
         if let key = selectedKey, let obj = objects[key] {
             if flags.contains(.option) {
                 // Option+拖拽 → 旋转
                 let angle = atan2(point.y - obj.center.y, point.x - obj.center.x)
                 state = .rotating(colorKey: key, lastAngle: angle)
+                rotateStartAngle = 0
                 needsDisplay = true
                 return
             }
@@ -66,6 +110,7 @@ class AnnotationView: NSView {
                 let dist = hypot(point.x - obj.center.x, point.y - obj.center.y)
                 if dist > 1 {
                     state = .scaling(colorKey: key, lastDistance: dist)
+                    scaleStartFactor = 1
                 }
                 needsDisplay = true
                 return
@@ -81,6 +126,7 @@ class AnnotationView: NSView {
                                   dy: point.y - obj.center.y)
             state = .moving(colorKey: colorKey, grabOffset: offset)
             selectedKey = colorKey
+            dragStartCenter = obj.center
         } else if case .stamp(let stampType) = currentTool {
             // Stamp 工具：单击直接放置
             let key = hitTestBuffer.generateUniqueColorKey()
@@ -90,6 +136,8 @@ class AnnotationView: NSView {
             zOrder.append(key)
             hitTestBuffer.drawObject(stamp)
             refreshDebugView()
+            undoStack.append(.add(colorKey: key))
+            redoStack.removeAll()
             selectedKey = key
             state = .idle
         } else {
@@ -137,6 +185,7 @@ class AnnotationView: NSView {
             let currentAngle = atan2(point.y - obj.center.y, point.x - obj.center.x)
             let deltaAngle = currentAngle - lastAngle
             obj.rotate(by: deltaAngle)
+            rotateStartAngle += deltaAngle
             state = .rotating(colorKey: colorKey, lastAngle: currentAngle)
 
             hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
@@ -152,6 +201,7 @@ class AnnotationView: NSView {
                 let minDim = min(box.width, box.height)
                 if minDim * factor >= 5 || factor >= 1 {
                     obj.scale(by: factor)
+                    scaleStartFactor *= factor
                     state = .scaling(colorKey: colorKey, lastDistance: currentDist)
                 }
             }
@@ -227,17 +277,38 @@ class AnnotationView: NSView {
                 objects[colorKey] = obj
                 zOrder.append(colorKey)
 
+                // 记录 undo
+                undoStack.append(.add(colorKey: colorKey))
+                redoStack.removeAll()
+
                 // 在 Layer B 上绘制新对象
                 hitTestBuffer.drawObject(obj)
                 refreshDebugView()
             }
             currentDrawEnd = nil
 
-        case .moving:
-            break
+        case .moving(let colorKey, _):
+            if let obj = objects[colorKey], let startCenter = dragStartCenter {
+                let totalDelta = CGVector(dx: obj.center.x - startCenter.x,
+                                          dy: obj.center.y - startCenter.y)
+                if abs(totalDelta.dx) > 0.5 || abs(totalDelta.dy) > 0.5 {
+                    undoStack.append(.move(colorKey: colorKey, delta: totalDelta))
+                    redoStack.removeAll()
+                }
+            }
+            dragStartCenter = nil
 
-        case .rotating, .scaling:
-            break
+        case .rotating(let colorKey, _):
+            if abs(rotateStartAngle) > 0.001 {
+                undoStack.append(.rotate(colorKey: colorKey, angle: rotateStartAngle))
+                redoStack.removeAll()
+            }
+
+        case .scaling(let colorKey, _):
+            if abs(scaleStartFactor - 1) > 0.001 {
+                undoStack.append(.scale(colorKey: colorKey, factor: scaleStartFactor))
+                redoStack.removeAll()
+            }
 
         case .idle:
             break
@@ -249,9 +320,32 @@ class AnnotationView: NSView {
     }    // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
+        // Cmd+Z = Undo, Cmd+Shift+Z = Redo
+        if event.modifierFlags.contains(.command) {
+            if event.charactersIgnoringModifiers == "z" {
+                if event.modifierFlags.contains(.shift) {
+                    performRedo()
+                } else {
+                    performUndo()
+                }
+                return
+            }
+        }
+
         if event.keyCode == 51 || event.keyCode == 117 { // Delete / Forward Delete
             if let key = selectedKey {
-                // 级联删除附着的子箭头
+                let zOrderBefore = zOrder
+                var deletedObjects: [(UInt32, any AnnotationObject)] = []
+                if let obj = objects[key] { deletedObjects.append((key, obj)) }
+                for (k, o) in objects {
+                    if let arrow = o as? Arrow,
+                       (arrow.startAttachment?.parentKey == key || arrow.endAttachment?.parentKey == key) {
+                        deletedObjects.append((k, o))
+                    }
+                }
+                undoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderBefore))
+                redoStack.removeAll()
+
                 cascadeDelete(parentKey: key)
                 objects.removeValue(forKey: key)
                 zOrder.removeAll { $0 == key }
@@ -261,6 +355,106 @@ class AnnotationView: NSView {
                 needsDisplay = true
             }
         }
+    }
+
+    // MARK: - Undo / Redo
+
+    private func performUndo() {
+        guard let action = undoStack.popLast() else { return }
+        selectedKey = nil
+
+        switch action {
+        case .add(let colorKey):
+            // 撤销添加 = 删除该对象
+            if let obj = objects[colorKey] {
+                redoStack.append(.delete(objects: [(colorKey, obj)], zOrderSnapshot: zOrder))
+            }
+            objects.removeValue(forKey: colorKey)
+            zOrder.removeAll { $0 == colorKey }
+
+        case .delete(let deletedObjects, let zOrderSnapshot):
+            // 撤销删除 = 恢复所有被删除的对象和 z-order
+            for (key, obj) in deletedObjects {
+                objects[key] = obj
+            }
+            zOrder = zOrderSnapshot
+            redoStack.append(.add(colorKey: deletedObjects[0].0))
+
+        case .move(let colorKey, let delta):
+            if let obj = objects[colorKey] {
+                let reverseDelta = CGVector(dx: -delta.dx, dy: -delta.dy)
+                obj.move(by: reverseDelta)
+                updateAttachedArrows(forParent: colorKey)
+                redoStack.append(.move(colorKey: colorKey, delta: delta))
+            }
+
+        case .rotate(let colorKey, let angle):
+            if let obj = objects[colorKey] {
+                obj.rotate(by: -angle)
+                updateAttachedArrows(forParent: colorKey)
+                redoStack.append(.rotate(colorKey: colorKey, angle: angle))
+            }
+
+        case .scale(let colorKey, let factor):
+            if let obj = objects[colorKey] {
+                obj.scale(by: 1.0 / factor)
+                updateAttachedArrows(forParent: colorKey)
+                redoStack.append(.scale(colorKey: colorKey, factor: factor))
+            }
+        }
+
+        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+        refreshDebugView()
+        needsDisplay = true
+    }
+
+    private func performRedo() {
+        guard let action = redoStack.popLast() else { return }
+        selectedKey = nil
+
+        switch action {
+        case .add(let colorKey):
+            // redo 添加 → 实际上是 redo "撤销删除" 的反向 = 再次删除
+            // 但这里 add 在 redo 栈意味着原操作是 delete，redo = 再次 delete
+            if let obj = objects[colorKey] {
+                undoStack.append(.delete(objects: [(colorKey, obj)], zOrderSnapshot: zOrder))
+            }
+            objects.removeValue(forKey: colorKey)
+            zOrder.removeAll { $0 == colorKey }
+
+        case .delete(let deletedObjects, let zOrderSnapshot):
+            // redo delete → 恢复对象 (原操作是 add，redo = 再次 add)
+            for (key, obj) in deletedObjects {
+                objects[key] = obj
+            }
+            zOrder = zOrderSnapshot
+            undoStack.append(.add(colorKey: deletedObjects[0].0))
+
+        case .move(let colorKey, let delta):
+            if let obj = objects[colorKey] {
+                obj.move(by: delta)
+                updateAttachedArrows(forParent: colorKey)
+                undoStack.append(.move(colorKey: colorKey, delta: delta))
+            }
+
+        case .rotate(let colorKey, let angle):
+            if let obj = objects[colorKey] {
+                obj.rotate(by: angle)
+                updateAttachedArrows(forParent: colorKey)
+                undoStack.append(.rotate(colorKey: colorKey, angle: angle))
+            }
+
+        case .scale(let colorKey, let factor):
+            if let obj = objects[colorKey] {
+                obj.scale(by: factor)
+                updateAttachedArrows(forParent: colorKey)
+                undoStack.append(.scale(colorKey: colorKey, factor: factor))
+            }
+        }
+
+        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+        refreshDebugView()
+        needsDisplay = true
     }
 
     // MARK: - Drawing (Layer A)
@@ -298,10 +492,27 @@ class AnnotationView: NSView {
     }
 
     private func drawSelectionHandles(for obj: any AnnotationObject, in ctx: CGContext) {
+        let box = obj.boundingBox
+        let padding: CGFloat = 4
+
+        // 1. 发光选中框（蓝色阴影 + 虚线边框）
+        ctx.saveGState()
+        let selRect = box.insetBy(dx: -padding, dy: -padding)
+        ctx.setShadow(offset: .zero, blur: 8, color: NSColor.systemBlue.withAlphaComponent(0.6).cgColor)
+        ctx.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.7).cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineDash(phase: 0, lengths: [5, 3])
+        let selPath = CGPath(roundedRect: selRect, cornerWidth: 3, cornerHeight: 3, transform: nil)
+        ctx.addPath(selPath)
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        // 2. 四角手柄点
         let handleSize: CGFloat = 6
         ctx.setFillColor(NSColor.white.cgColor)
         ctx.setStrokeColor(NSColor.systemBlue.cgColor)
         ctx.setLineWidth(1.5)
+        ctx.setLineDash(phase: 0, lengths: [])
 
         for point in obj.selectionHandlePoints() {
             let handleRect = CGRect(
@@ -313,6 +524,32 @@ class AnnotationView: NSView {
             ctx.fillEllipse(in: handleRect)
             ctx.strokeEllipse(in: handleRect)
         }
+
+        // 3. 右上角删除叉号按钮
+        let deleteSize: CGFloat = 16
+        let deleteCenter = CGPoint(x: selRect.maxX + deleteSize * 0.3,
+                                    y: selRect.maxY + deleteSize * 0.3)
+        // 红色圆底
+        ctx.saveGState()
+        ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 3, color: NSColor.black.withAlphaComponent(0.3).cgColor)
+        let deleteRect = CGRect(x: deleteCenter.x - deleteSize / 2,
+                                y: deleteCenter.y - deleteSize / 2,
+                                width: deleteSize, height: deleteSize)
+        ctx.setFillColor(NSColor.systemRed.cgColor)
+        ctx.fillEllipse(in: deleteRect)
+        ctx.restoreGState()
+
+        // 白色叉号
+        let crossSize: CGFloat = 4
+        ctx.setStrokeColor(NSColor.white.cgColor)
+        ctx.setLineWidth(2)
+        ctx.setLineCap(.round)
+        ctx.move(to: CGPoint(x: deleteCenter.x - crossSize, y: deleteCenter.y - crossSize))
+        ctx.addLine(to: CGPoint(x: deleteCenter.x + crossSize, y: deleteCenter.y + crossSize))
+        ctx.strokePath()
+        ctx.move(to: CGPoint(x: deleteCenter.x - crossSize, y: deleteCenter.y + crossSize))
+        ctx.addLine(to: CGPoint(x: deleteCenter.x + crossSize, y: deleteCenter.y - crossSize))
+        ctx.strokePath()
     }
 
     private func drawPreview(tool: DrawingTool, start: CGPoint, end: CGPoint, in ctx: CGContext) {
