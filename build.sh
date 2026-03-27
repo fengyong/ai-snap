@@ -3,7 +3,7 @@ set -e
 
 APP_NAME="AISnap"
 BUNDLE_ID="com.aisnap.app"
-BUILD_DIR=".build/release"
+BUILD_DIR=".build/arm64-apple-macosx/release"
 APP_BUNDLE="${APP_NAME}.app"
 
 echo "==> 编译 Release 版本..."
