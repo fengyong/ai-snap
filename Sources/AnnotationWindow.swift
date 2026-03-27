@@ -9,6 +9,7 @@ class AnnotationWindow: NSWindow {
     private var colorButtonContainer: NSView!
     private var paletteIndex: Int = 0
     private var watermarkField: NSTextField!
+    private var lineWidthLabel: NSTextField!
 
     init(image: NSImage) {
         let imageSize = image.size
@@ -208,6 +209,26 @@ class AnnotationWindow: NSWindow {
 
         addSeparator(to: toolbar, at: &xOffset, height: height)
 
+        // ── 线宽 ──
+        addGroupLabel("线宽", to: toolbar, at: xOffset, width: 100)
+        let lineWidthSlider = NSSlider(frame: NSRect(x: xOffset, y: 14, width: 70, height: 20))
+        lineWidthSlider.minValue = 1
+        lineWidthSlider.maxValue = 30
+        lineWidthSlider.doubleValue = Double(annotationView.currentLineWidth)
+        lineWidthSlider.target = self
+        lineWidthSlider.action = #selector(lineWidthChanged(_:))
+        lineWidthSlider.toolTip = "调节线条粗细 (1-30)"
+        toolbar.addSubview(lineWidthSlider)
+
+        lineWidthLabel = NSTextField(labelWithString: "\(Int(annotationView.currentLineWidth))px")
+        lineWidthLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .regular)
+        lineWidthLabel.textColor = .secondaryLabelColor
+        lineWidthLabel.frame = NSRect(x: xOffset + 72, y: 16, width: 32, height: 14)
+        toolbar.addSubview(lineWidthLabel)
+        xOffset += 108
+
+        addSeparator(to: toolbar, at: &xOffset, height: height)
+
         // ── 贴纸 ──
         addGroupLabel("贴纸", to: toolbar, at: xOffset, width: 56)
         let stampPopup = NSPopUpButton(frame: NSRect(x: xOffset, y: 12, width: 56, height: 24), pullsDown: true)
@@ -342,6 +363,12 @@ class AnnotationWindow: NSWindow {
     }
 
     // MARK: - Actions
+
+    @objc private func lineWidthChanged(_ sender: NSSlider) {
+        let value = CGFloat(sender.doubleValue)
+        annotationView.currentLineWidth = value
+        lineWidthLabel.stringValue = "\(Int(value))px"
+    }
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
         let tools: [DrawingTool] = [.arrow, .rectangle, .circle, .spotlight]
