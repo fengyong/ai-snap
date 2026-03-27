@@ -803,13 +803,13 @@ class StampObject: AnnotationObject {
     }
 
     func drawHitTest(in ctx: CGContext, color: NSColor) {
-        // All stamps: filled bounding rect for hit test
+        // All stamps: filled bounding rect for hit test, with extra padding for easier selection
         ctx.saveGState()
         ctx.translateBy(x: center.x, y: center.y)
         ctx.rotate(by: rotation)
-        let half = size / 2
+        let half = size / 2 + 8
         ctx.setFillColor(color.cgColor)
-        ctx.fill(CGRect(x: -half, y: -half, width: size, height: size))
+        ctx.fill(CGRect(x: -half, y: -half, width: half * 2, height: half * 2))
         ctx.restoreGState()
     }
 
