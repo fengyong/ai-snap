@@ -84,4 +84,38 @@ class HitTestBuffer {
             }
         }
     }
+
+    /// 生成 Layer B 的可视化调试图像
+    /// 真实 Layer B 的颜色极暗（#000001, #000002...），肉眼不可见。
+    /// 此方法用相同的 drawHitTest 逻辑，但映射到明亮的颜色，揭示幕后的魔术。
+    func debugVisualization(objects: [UInt32: any AnnotationObject], zOrder: [UInt32]) -> NSImage {
+        let size = NSSize(width: width, height: height)
+        let image = NSImage(size: size)
+        image.lockFocus()
+
+        guard let ctx = NSGraphicsContext.current?.cgContext else {
+            image.unlockFocus()
+            return image
+        }
+
+        // 模拟 Layer B 的关键设置：关闭抗锯齿
+        ctx.setShouldAntialias(false)
+        ctx.setAllowsAntialiasing(false)
+
+        // 深色背景（代替 Layer B 的纯黑 #000000）
+        ctx.setFillColor(NSColor(white: 0.1, alpha: 1).cgColor)
+        ctx.fill(CGRect(origin: .zero, size: size))
+
+        // 每个对象用黄金比例分配色相，保证相邻对象颜色区分度最大
+        let goldenRatio: CGFloat = 0.618033988749895
+        for (i, key) in zOrder.enumerated() {
+            guard let obj = objects[key] else { continue }
+            let hue = (CGFloat(i + 1) * goldenRatio).truncatingRemainder(dividingBy: 1.0)
+            let brightColor = NSColor(hue: hue, saturation: 0.85, brightness: 0.95, alpha: 1.0)
+            obj.drawHitTest(in: ctx, color: brightColor)
+        }
+
+        image.unlockFocus()
+        return image
+    }
 }

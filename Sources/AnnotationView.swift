@@ -23,6 +23,9 @@ class AnnotationView: NSView {
     // 当前被选中的对象 key
     private(set) var selectedKey: UInt32?
 
+    // 调试面板：外部挂载的 NSImageView，用于实时显示 Layer B 可视化
+    weak var debugImageView: NSImageView?
+
     init(image: NSImage) {
         self.baseImage = image
         let size = image.size
@@ -79,9 +82,8 @@ class AnnotationView: NSView {
 
             // 重绘 Layer B
             hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+            refreshDebugView()
             needsDisplay = true
-
-        case .drawing:
             currentDrawEnd = point
             needsDisplay = true
 
