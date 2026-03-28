@@ -1005,8 +1005,13 @@ class SpotlightShape: AnnotationObject {
     }
 
     var boundingBox: CGRect {
-        let hw = width / 2, hh = height / 2
-        return CGRect(x: center.x - hw, y: center.y - hh, width: width, height: height)
+        let corners = cornerPoints()
+        let xs = corners.map { $0.x }
+        let ys = corners.map { $0.y }
+        let padding: CGFloat = 2 // stroke width used in draw()
+        return CGRect(x: xs.min()! - padding, y: ys.min()! - padding,
+                      width: (xs.max()! - xs.min()!) + padding * 2,
+                      height: (ys.max()! - ys.min()!) + padding * 2)
     }
 
     func cornerPoints() -> [CGPoint] {
