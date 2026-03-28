@@ -52,6 +52,35 @@ class AnnotationView: NSView {
         fatalError("init(coder:) not implemented")
     }
 
+    // MARK: - Tracking Area (for passive snap on hover)
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in trackingAreas {
+            removeTrackingArea(area)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        // 仅在空闲状态下进行被动端点捕捉检测
+        if case .idle = state {
+            if let snap = findNearestSnapPoint(to: point, excludeKey: nil) {
+                activeSnapPoint = snap.point
+            } else {
+                activeSnapPoint = nil
+            }
+            needsDisplay = true
+        }
+    }
+
     // MARK: - Mouse Events
 
     override var acceptsFirstResponder: Bool { true }
@@ -254,6 +283,16 @@ class AnnotationView: NSView {
                                          hitTestColorKey: colorKey)
 
                 case .circle:
+                    let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
+                                           y: (start.y + snappedEnd.y) / 2)
+                    let r = max(abs(snappedEnd.x - start.x), abs(snappedEnd.y - start.y)) / 2
+                    obj = CircleShape(center: centerPt, radiusX: max(r, 3),
+                                      radiusY: max(r, 3),
+                                      color: currentColor,
+                                      lineWidth: currentLineWidth,
+                                      hitTestColorKey: colorKey)
+
+                case .ellipse:
                     let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
                                            y: (start.y + snappedEnd.y) / 2)
                     let rx = abs(snappedEnd.x - start.x) / 2
@@ -570,6 +609,17 @@ class AnnotationView: NSView {
             preview.draw(in: ctx)
 
         case .circle:
+            let centerPt = CGPoint(x: (start.x + end.x) / 2,
+                                   y: (start.y + end.y) / 2)
+            let r = max(abs(end.x - start.x), abs(end.y - start.y)) / 2
+            let preview = CircleShape(center: centerPt, radiusX: max(r, 1),
+                                       radiusY: max(r, 1),
+                                       color: currentColor,
+                                       lineWidth: currentLineWidth,
+                                       hitTestColorKey: 0)
+            preview.draw(in: ctx)
+
+        case .ellipse:
             let centerPt = CGPoint(x: (start.x + end.x) / 2,
                                    y: (start.y + end.y) / 2)
             let rx = abs(end.x - start.x) / 2

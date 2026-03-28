@@ -161,11 +161,12 @@ class AnnotationWindow: NSWindow {
         var xOffset: CGFloat = 8
 
         // ── 绘图工具（带文字标签）──
-        addGroupLabel("绘图工具", to: toolbar, at: xOffset, width: 140)
+        addGroupLabel("绘图工具", to: toolbar, at: xOffset, width: 190)
         let tools: [(String, String)] = [
             ("箭头", "绘制箭头标注"),
             ("矩形", "绘制矩形框"),
-            ("椭圆", "拖拽绘制椭圆/圆形"),
+            ("圆形", "拖拽绘制正圆"),
+            ("椭圆", "拖拽绘制椭圆"),
             ("聚光", "聚光灯高亮区域"),
         ]
         for (i, (title, tip)) in tools.enumerated() {
@@ -371,7 +372,7 @@ class AnnotationWindow: NSWindow {
     }
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
-        let tools: [DrawingTool] = [.arrow, .rectangle, .circle, .spotlight]
+        let tools: [DrawingTool] = [.arrow, .rectangle, .circle, .ellipse, .spotlight]
         if sender.tag >= 0 && sender.tag < tools.count {
             annotationView.currentTool = tools[sender.tag]
             updateToolButtonStates(selectedIndex: sender.tag)
@@ -458,7 +459,7 @@ class AnnotationWindow: NSWindow {
     @objc private func showAbout() {
         let alert = NSAlert()
         alert.messageText = "AISnap"
-        alert.informativeText = "macOS 截图标注工具\n\n支持箭头、矩形、圆形、聚光灯、表情贴纸、水印等标注功能。"
+        alert.informativeText = "macOS 截图标注工具\n\n支持箭头、矩形、圆形、椭圆、聚光灯、表情贴纸、水印等标注功能。"
         alert.alertStyle = .informational
         alert.addButton(withTitle: "好的")
         alert.runModal()
@@ -471,8 +472,13 @@ class AnnotationWindow: NSWindow {
         【绘图工具】
         - 箭头：在画布上拖拽绘制箭头标注
         - 矩形：拖拽绘制矩形边框
-        - 圆形：拖拽绘制圆形/椭圆
+        - 圆形：拖拽绘制正圆（取宽高较大值为直径）
+        - 椭圆：拖拽绘制椭圆（宽高独立）
         - 聚光：拖拽框选高亮区域，其余区域变暗
+
+        【端点捕捉】
+        鼠标悬停在已有对象的中心、边角、象限点附近时
+        会显示青色十字捕捉指示器，便于精确对齐（如同心圆）
 
         【贴纸】
         从下拉菜单选择表情，然后在画布上单击放置
