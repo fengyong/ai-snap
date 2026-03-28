@@ -8,6 +8,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupStatusBar()
+        // 首次启动时请求屏幕录制权限
+        requestScreenCapturePermission()
+    }
+
+    // MARK: - Screen Recording Permission
+
+    private func requestScreenCapturePermission() {
+        if #available(macOS 10.15, *) {
+            if !CGPreflightScreenCaptureAccess() {
+                CGRequestScreenCaptureAccess()
+            }
+        }
+    }
+
+    private func checkScreenCapturePermission() -> Bool {
+        if #available(macOS 10.15, *) {
+            return CGPreflightScreenCaptureAccess()
+        }
+        return true
+    }
+
+    private func showPermissionAlert() {
+        let alert = NSAlert()
+        alert.messageText = "需要屏幕录制权限"
+        alert.informativeText = "AISnap 需要屏幕录制权限才能截图。\n\n请前往 系统设置 → 隐私与安全性 → 屏幕录制，启用 AISnap 后重试。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "打开系统设置")
+        alert.addButton(withTitle: "取消")
+        let response = alert.runModal()
+        if response == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+        }
     }
 
     // MARK: - Status Bar
@@ -35,6 +67,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Actions
 
     @objc private func startRegionCapture() {
+        guard checkScreenCapturePermission() else {
+            showPermissionAlert()
+            return
+        }
+
         annotationWindow?.close()
         annotationWindow = nil
 
@@ -48,6 +85,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func startWindowCapture() {
+        guard checkScreenCapturePermission() else {
+            showPermissionAlert()
+            return
+        }
+
         annotationWindow?.close()
         annotationWindow = nil
 
