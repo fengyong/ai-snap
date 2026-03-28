@@ -29,6 +29,8 @@ class AnnotationView: NSView {
     // 点捕捉：当前活跃的吸附点（用于可视化）
     private var activeSnapPoint: CGPoint?
     private let snapThreshold: CGFloat = 12.0
+    // 起始点是否吸附到了 snap point → 以该点为中心绘制
+    private var drawingFromCenter: Bool = false
 
     // Undo/Redo 栈
     private var undoStack: [UndoAction] = []
@@ -171,7 +173,10 @@ class AnnotationView: NSView {
             state = .idle
         } else {
             // 未命中 → 开始画新图形
-            state = .drawing(tool: currentTool, start: point)
+            // 对起始点进行 snap：如果吸附到已有对象的 snap point，则以该点为中心绘制
+            let snappedStart = applySnap(to: point, excludeKey: nil)
+            drawingFromCenter = (activeSnapPoint != nil)
+            state = .drawing(tool: currentTool, start: snappedStart)
             selectedKey = nil
         }
         needsDisplay = true
@@ -277,31 +282,61 @@ class AnnotationView: NSView {
                     obj = arrow
 
                 case .rectangle:
-                    obj = RectangleShape(from: start, to: snappedEnd,
-                                         color: currentColor,
-                                         lineWidth: currentLineWidth,
-                                         hitTestColorKey: colorKey)
+                    if drawingFromCenter {
+                        // 以 start 为中心，拖拽确定半尺寸
+                        let hw = abs(snappedEnd.x - start.x)
+                        let hh = abs(snappedEnd.y - start.y)
+                        obj = RectangleShape(center: start, width: max(hw * 2, 6),
+                                             height: max(hh * 2, 6),
+                                             color: currentColor,
+                                             lineWidth: currentLineWidth,
+                                             hitTestColorKey: colorKey)
+                    } else {
+                        obj = RectangleShape(from: start, to: snappedEnd,
+                                             color: currentColor,
+                                             lineWidth: currentLineWidth,
+                                             hitTestColorKey: colorKey)
+                    }
 
                 case .circle:
-                    let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
-                                           y: (start.y + snappedEnd.y) / 2)
-                    let r = max(abs(snappedEnd.x - start.x), abs(snappedEnd.y - start.y)) / 2
-                    obj = CircleShape(center: centerPt, radiusX: max(r, 3),
-                                      radiusY: max(r, 3),
-                                      color: currentColor,
-                                      lineWidth: currentLineWidth,
-                                      hitTestColorKey: colorKey)
+                    if drawingFromCenter {
+                        let r = hypot(snappedEnd.x - start.x, snappedEnd.y - start.y)
+                        obj = CircleShape(center: start, radiusX: max(r, 3),
+                                          radiusY: max(r, 3),
+                                          color: currentColor,
+                                          lineWidth: currentLineWidth,
+                                          hitTestColorKey: colorKey)
+                    } else {
+                        let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
+                                               y: (start.y + snappedEnd.y) / 2)
+                        let r = max(abs(snappedEnd.x - start.x), abs(snappedEnd.y - start.y)) / 2
+                        obj = CircleShape(center: centerPt, radiusX: max(r, 3),
+                                          radiusY: max(r, 3),
+                                          color: currentColor,
+                                          lineWidth: currentLineWidth,
+                                          hitTestColorKey: colorKey)
+                    }
 
                 case .ellipse:
-                    let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
-                                           y: (start.y + snappedEnd.y) / 2)
-                    let rx = abs(snappedEnd.x - start.x) / 2
-                    let ry = abs(snappedEnd.y - start.y) / 2
-                    obj = CircleShape(center: centerPt, radiusX: max(rx, 3),
-                                      radiusY: max(ry, 3),
-                                      color: currentColor,
-                                      lineWidth: currentLineWidth,
-                                      hitTestColorKey: colorKey)
+                    if drawingFromCenter {
+                        let rx = abs(snappedEnd.x - start.x)
+                        let ry = abs(snappedEnd.y - start.y)
+                        obj = CircleShape(center: start, radiusX: max(rx, 3),
+                                          radiusY: max(ry, 3),
+                                          color: currentColor,
+                                          lineWidth: currentLineWidth,
+                                          hitTestColorKey: colorKey)
+                    } else {
+                        let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
+                                               y: (start.y + snappedEnd.y) / 2)
+                        let rx = abs(snappedEnd.x - start.x) / 2
+                        let ry = abs(snappedEnd.y - start.y) / 2
+                        obj = CircleShape(center: centerPt, radiusX: max(rx, 3),
+                                          radiusY: max(ry, 3),
+                                          color: currentColor,
+                                          lineWidth: currentLineWidth,
+                                          hitTestColorKey: colorKey)
+                    }
 
                 case .stamp:
                     // stamp 在 mouseDown 中直接放置，不会走到这里
@@ -357,6 +392,7 @@ class AnnotationView: NSView {
 
         state = .idle
         activeSnapPoint = nil
+        drawingFromCenter = false
         needsDisplay = true
     }    // MARK: - Keyboard
 
@@ -602,34 +638,66 @@ class AnnotationView: NSView {
             preview.draw(in: ctx)
 
         case .rectangle:
-            let preview = RectangleShape(from: start, to: end,
-                                          color: currentColor,
-                                          lineWidth: currentLineWidth,
-                                          hitTestColorKey: 0)
-            preview.draw(in: ctx)
+            if drawingFromCenter {
+                let hw = abs(end.x - start.x)
+                let hh = abs(end.y - start.y)
+                let preview = RectangleShape(center: start, width: max(hw * 2, 2),
+                                              height: max(hh * 2, 2),
+                                              color: currentColor,
+                                              lineWidth: currentLineWidth,
+                                              hitTestColorKey: 0)
+                preview.draw(in: ctx)
+            } else {
+                let preview = RectangleShape(from: start, to: end,
+                                              color: currentColor,
+                                              lineWidth: currentLineWidth,
+                                              hitTestColorKey: 0)
+                preview.draw(in: ctx)
+            }
 
         case .circle:
-            let centerPt = CGPoint(x: (start.x + end.x) / 2,
-                                   y: (start.y + end.y) / 2)
-            let r = max(abs(end.x - start.x), abs(end.y - start.y)) / 2
-            let preview = CircleShape(center: centerPt, radiusX: max(r, 1),
-                                       radiusY: max(r, 1),
-                                       color: currentColor,
-                                       lineWidth: currentLineWidth,
-                                       hitTestColorKey: 0)
-            preview.draw(in: ctx)
+            if drawingFromCenter {
+                let r = hypot(end.x - start.x, end.y - start.y)
+                let preview = CircleShape(center: start, radiusX: max(r, 1),
+                                           radiusY: max(r, 1),
+                                           color: currentColor,
+                                           lineWidth: currentLineWidth,
+                                           hitTestColorKey: 0)
+                preview.draw(in: ctx)
+            } else {
+                let centerPt = CGPoint(x: (start.x + end.x) / 2,
+                                       y: (start.y + end.y) / 2)
+                let r = max(abs(end.x - start.x), abs(end.y - start.y)) / 2
+                let preview = CircleShape(center: centerPt, radiusX: max(r, 1),
+                                           radiusY: max(r, 1),
+                                           color: currentColor,
+                                           lineWidth: currentLineWidth,
+                                           hitTestColorKey: 0)
+                preview.draw(in: ctx)
+            }
 
         case .ellipse:
-            let centerPt = CGPoint(x: (start.x + end.x) / 2,
-                                   y: (start.y + end.y) / 2)
-            let rx = abs(end.x - start.x) / 2
-            let ry = abs(end.y - start.y) / 2
-            let preview = CircleShape(center: centerPt, radiusX: max(rx, 1),
-                                       radiusY: max(ry, 1),
-                                       color: currentColor,
-                                       lineWidth: currentLineWidth,
-                                       hitTestColorKey: 0)
-            preview.draw(in: ctx)
+            if drawingFromCenter {
+                let rx = abs(end.x - start.x)
+                let ry = abs(end.y - start.y)
+                let preview = CircleShape(center: start, radiusX: max(rx, 1),
+                                           radiusY: max(ry, 1),
+                                           color: currentColor,
+                                           lineWidth: currentLineWidth,
+                                           hitTestColorKey: 0)
+                preview.draw(in: ctx)
+            } else {
+                let centerPt = CGPoint(x: (start.x + end.x) / 2,
+                                       y: (start.y + end.y) / 2)
+                let rx = abs(end.x - start.x) / 2
+                let ry = abs(end.y - start.y) / 2
+                let preview = CircleShape(center: centerPt, radiusX: max(rx, 1),
+                                           radiusY: max(ry, 1),
+                                           color: currentColor,
+                                           lineWidth: currentLineWidth,
+                                           hitTestColorKey: 0)
+                preview.draw(in: ctx)
+            }
 
         case .stamp:
             break  // stamp 是单击放置，不需要拖拽预览
