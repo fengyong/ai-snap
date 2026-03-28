@@ -10,3 +10,6 @@ To https://github.com/fengyong/ai-snap.git
    be38b36..13672d1  master -> master
 [2026-03-28 17:23:14] ✅ 推送成功
 [2026-03-28 17:33:14] 检查并提交代码...
+致命错误：无法访问 'https://github.com/fengyong/ai-snap.git/'：Recv failure: Operation timed out
+[2026-03-28 17:34:43] ❌ 推送失败
+[2026-03-28 17:59:49] 检查并提交代码...
