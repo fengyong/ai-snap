@@ -40,3 +40,6 @@ To https://github.com/fengyong/ai-snap.git
    d8ac0e4..8f037f2  master -> master
 [2026-03-28 20:22:54] ✅ 推送成功
 [2026-03-28 20:32:54] 检查并提交代码...
+致命错误：无法访问 'https://github.com/fengyong/ai-snap.git/'：Failed to connect to github.com port 443 after 75013 ms: Couldn't connect to server
+[2026-03-28 20:34:09] ❌ 推送失败
+[2026-03-28 20:44:09] 检查并提交代码...
