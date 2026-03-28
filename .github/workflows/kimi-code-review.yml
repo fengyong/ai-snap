@@ -1,0 +1,180 @@
+# Kimi Code CLI - 自动化代码审查
+# 由月之暗面（Moonshot AI）提供支持
+
+name: Kimi Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR Number to review'
+        required: true
+        type: string
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: read
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Kimi Code Review
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = context.payload.pull_request?.number || '${{ github.event.inputs.pr_number }}';
+            
+            // Kimi Review 内容
+            const reviewBody = `## 📝 Code Review 报告
+            
+            <img src="https://www.moonshot.cn/favicon.ico" width="20"> **Reviewed by [Kimi](https://kimi.moonshot.cn) · 月之暗面（Moonshot AI）**
+            
+            > 本报告由 Kimi Code CLI 自动生成，基于对代码的静态分析和架构审查。
+            
+            ---
+            
+            ### 🔴 Bug 1: Undo/Redo 逻辑错误（严重）
+            **文件**: \`Sources/AnnotationView.swift\` (Line 492-530)
+            
+            **问题描述**: Redo 的 \`add\` 分支逻辑与预期相反，当前实现会导致重做时删除对象而非恢复。
+            
+            **当前问题代码**:
+            \`\`\`swift
+            case .add(let colorKey):
+                // redo 添加 = 再次删除（错误！）
+                if let obj = objects[colorKey] {
+                    redoStack.append(.delete(objects: [(colorKey, obj)], zOrderSnapshot: zOrder))
+                }
+                objects.removeValue(forKey: colorKey)  // ❌ 错误：应该是恢复对象
+            \`\`\`
+            
+            **修复建议**: 需要重新审视 Undo/Redo 状态机逻辑，确保 redo add 对应 undo delete 的反向操作。
+            
+            ---
+            
+            ### 🔴 Bug 2: 多显示器支持不完整
+            **文件**: \`RegionSelectionWindow.swift\` (Line 37-50)
+            
+            **问题描述**: 仅为主屏幕创建了可交互的选区窗口，其他屏幕只有遮罩窗口无法交互。
+            
+            **修复建议**:
+            \`\`\`swift
+            // 为每个屏幕创建独立的选区视图
+            for screen in NSScreen.screens {
+                let selectionWindow = RegionSelectionWindow(screen: screen)
+                // ...
+            }
+            \`\`\`
+            
+            ---
+            
+            ### 🟡 Bug 3: 箭头样式按钮未绑定功能
+            **文件**: \`AnnotationWindow.swift\` (Line 7)
+            
+            **问题描述**: \`arrowStyleButtons\` 数组声明但从未使用，UI 中未实现箭头样式切换。
+            
+            **修复建议**: 在工具栏添加箭头样式选择按钮组，绑定到 \`currentArrowStyle\`。
+            
+            ---
+            
+            ### 🟡 Bug 4: Hit Test 颜色 Key 溢出风险
+            **文件**: \`HitTestBuffer.swift\` (Line 33-37)
+            
+            **问题描述**: \`nextColorIndex\` 无限递增，极端情况下可能溢出。
+            
+            **修复建议**:
+            \`\`\`swift
+            func generateUniqueColorKey() -> UInt32 {
+                let key = nextColorIndex
+                nextColorIndex += 1
+                if nextColorIndex > 0xFFFFFF {
+                    nextColorIndex = 1  // 循环复用或抛出错误
+                }
+                return key
+            }
+            \`\`\`
+            
+            ---
+            
+            ### 🟡 Bug 5: SpotlightShape boundingBox 未考虑旋转
+            **文件**: \`Models.swift\` (Line 1007-1010)
+            
+            **问题描述**: 与其他形状（如 RectangleShape）的 \`boundingBox\` 实现不一致，未考虑 \`rotation\` 属性。
+            
+            **修复建议**: 参考 RectangleShape 的实现，使用 \`cornerPoints()\` 计算旋转后的包围盒。
+            
+            ---
+            
+            ### 🟡 Bug 6: DrawingTool Equatable 实现问题
+            **文件**: \`Models.swift\` (Line 222-233)
+            
+            **问题描述**: 所有 \`stamp\` 类型被视为相等，导致 \`.stamp(.checkmark)\` 和 \`.stamp(.emoji("🔥"))\` 比较结果为 true。
+            
+            **修复建议**:
+            \`\`\`swift
+            case (.stamp(let a), .stamp(let b)):
+                return a == b  // 需要 StampType 也实现 Equatable
+            \`\`\`
+            
+            ---
+            
+            ### 🟡 改进建议 1: 减少强制解包
+            **多处文件** (\`Models.swift\`, \`AnnotationView.swift\` 等)
+            
+            多处使用 \`!\` 强制解包，建议使用 \`guard let\` 或提供默认值替代。
+            
+            ---
+            
+            ### 🟡 改进建议 2: 拆分 AnnotationView
+            **文件**: \`Sources/AnnotationView.swift\` (~1000 行)
+            
+            类职责过重，建议将吸附、附着、导出逻辑抽取到独立管理器。
+            
+            ---
+            
+            ## 📊 总体评分
+            
+            | 维度 | 评分 | 评价 |
+            |------|:----:|------|
+            | 架构设计 | ⭐⭐⭐⭐⭐ | Color Picking 方案精巧，分层清晰 |
+            | 代码质量 | ⭐⭐⭐⭐ | 规范良好，存在少量强制解包 |
+            | 可维护性 | ⭐⭐⭐⭐ | 协议设计优秀，建议拆分 AnnotationView |
+            | 功能完整性 | ⭐⭐⭐⭐ | Undo/Redo 需修复，箭头样式 UI 缺失 |
+            
+            **综合评分**: 8.5/10
+            
+            ---
+            
+            ## 🎯 优先级修复列表
+            
+            | 优先级 | 问题 | 文件 | 估计工时 |
+            |--------|------|------|---------|
+            | 🔴 高 | 修复 Redo 逻辑错误 | AnnotationView.swift:492 | 2h |
+            | 🔴 高 | 完善多显示器支持 | RegionSelectionWindow.swift:37 | 3h |
+            | 🟡 中 | 修复 SpotlightShape boundingBox | Models.swift:1007 | 1h |
+            | 🟢 低 | 添加箭头样式 UI | AnnotationWindow.swift:7 | 2h |
+            
+            ---
+            
+            *🤖 Generated by Kimi Code CLI | [月之暗面](https://www.moonshot.cn)*
+            `;
+            
+            // 提交 Review
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(prNumber),
+              body: reviewBody,
+              event: 'COMMENT'  // 或 'REQUEST_CHANGES'
+            });
+            
+            console.log(`✅ Kimi Review 已提交到 PR #${prNumber}`);
