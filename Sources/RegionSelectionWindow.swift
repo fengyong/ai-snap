@@ -4,6 +4,7 @@ import Cocoa
 class RegionSelectionWindow: NSWindow {
     private let completionHandler: (CGImage?) -> Void
     private var selectionView: RegionSelectionView!
+    private var overlayWindows: [NSWindow] = []
 
     init(completion: @escaping (CGImage?) -> Void) {
         self.completionHandler = completion
@@ -32,16 +33,37 @@ class RegionSelectionWindow: NSWindow {
             self?.cancelSelection()
         }
         self.contentView = selectionView
+
+        // 为其他屏幕创建覆盖窗口
+        for screen in NSScreen.screens where screen != NSScreen.main {
+            let overlay = NSWindow(
+                contentRect: screen.frame,
+                styleMask: .borderless,
+                backing: .buffered,
+                defer: false
+            )
+            overlay.level = .statusBar + 1
+            overlay.isOpaque = false
+            overlay.backgroundColor = NSColor.black.withAlphaComponent(0.3)
+            overlay.hasShadow = false
+            overlayWindows.append(overlay)
+        }
     }
 
     func beginSelection() {
         makeKeyAndOrderFront(nil)
+        for overlay in overlayWindows {
+            overlay.orderFront(nil)
+        }
         NSCursor.crosshair.push()
     }
 
     private func finishSelection(rect: NSRect) {
         NSCursor.pop()
         orderOut(nil)
+        for overlay in overlayWindows {
+            overlay.orderOut(nil)
+        }
 
         // NSView 坐标 → 屏幕坐标 (左上角原点，给 CGWindowList 用)
         let screenFrame = NSScreen.main?.frame ?? .zero
@@ -52,8 +74,8 @@ class RegionSelectionWindow: NSWindow {
             height: rect.height
         )
 
-        // 稍微延迟以确保覆盖窗口消失
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+        // 延迟确保覆盖窗口完全消失后再截图
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
             let image = ScreenCapture.captureRegion(captureRect)
             self?.completionHandler(image)
         }
@@ -62,6 +84,9 @@ class RegionSelectionWindow: NSWindow {
     private func cancelSelection() {
         NSCursor.pop()
         orderOut(nil)
+        for overlay in overlayWindows {
+            overlay.orderOut(nil)
+        }
         completionHandler(nil)
     }
 
