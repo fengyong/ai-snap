@@ -11,8 +11,13 @@
 </head>
 <body>
 
+<!-- ========== 封面图 ========== -->
+<section style="margin: 0 0 10px; text-align: center;">
+  <img src="vibe_images/cover_1774681939.png" style="max-width: 100%; border-radius: 10px;" alt="封面：从 Turbo C 到 AI 编程">
+</section>
+
 <!-- ========== 标题 ========== -->
-<section style="text-align: center; padding: 40px 0 10px;">
+<section style="text-align: center; padding: 20px 0 10px;">
   <h1 style="font-size: 24px; font-weight: 700; color: #1a1a1a; letter-spacing: 1px; line-height: 1.6; margin: 0;">一个后端码农的<br>AI 元年客户端开发历险记</h1>
 </section>
 
@@ -82,6 +87,12 @@
     <p style="font-size: 15px; color: #333; line-height: 2; margin: 0 0 8px;"><strong style="color: #2b5b84;">Layer O</strong>（原始层）：截图捕获的原始图片，只读不改，对用户不可见</p>
     <p style="font-size: 15px; color: #333; line-height: 2; margin: 0 0 8px;"><strong style="color: #2b5b84;">Layer A</strong>（可见层）：在原始图之上正常渲染所有标注对象，用户看到的就是这一层</p>
     <p style="font-size: 15px; color: #333; line-height: 2; margin: 0;"><strong style="color: #2b5b84;">Layer B</strong>（隐藏层）：每个对象用一个<strong style="color: #1a3a5c;">唯一的纯色</strong>绘制，肉眼看不出区别，但颜色值就是对象的 ID</p>
+  </section>
+
+  <!-- 三层架构配图 -->
+  <section style="margin: 20px 0; text-align: center;">
+    <img src="vibe_images/three-layers_1774681867.png" style="max-width: 72%; border-radius: 8px;" alt="三层架构示意图：Layer A（可见层）、Layer O（原始层）、Layer B（隐藏层）">
+    <p style="font-size: 13px; color: #999; margin-top: 8px;">三层架构：可见层 A、原始层 O、隐藏 Hit Test 层 B</p>
   </section>
 
   <p style="font-size: 15px; color: #333; line-height: 2; margin: 16px 0;">当用户点击画布时，不需要遍历任何对象、不需要计算任何几何碰撞——只需要读取 Layer B 上那个像素的颜色值，就能精确知道点中了哪个对象。</p>
@@ -263,6 +274,11 @@
 <!-- ========== 23:03 ~ 02:26 ========== -->
 <section style="margin: 40px 0 0;">
   <h2 style="font-size: 18px; font-weight: 700; color: #2b5b84; border-bottom: 2px solid #3a7bd5; padding-bottom: 8px; margin-bottom: 20px;"><span style="color: #d4690e;">23:03 ~ 次日 02:26</span> —— 三个多小时的深夜马拉松</h2>
+
+  <!-- 深夜编码配图 -->
+  <section style="margin: 0 0 20px; text-align: center;">
+    <img src="vibe_images/late-night-coding_1774681892.png" style="max-width: 100%; border-radius: 8px;" alt="深夜编码：屏幕的光映在脸上">
+  </section>
 
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 16px;">接下来发生的事情，用"对话"来描述已经不太准确了。更像是两个人在一间深夜的屋子里，一个在白板上画，一个在键盘上敲，偶尔交换一下意见。</p>
 
