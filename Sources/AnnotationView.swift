@@ -409,6 +409,13 @@ class AnnotationView: NSView {
             }
         }
 
+        if event.keyCode == 53 { // ESC → 取消选中，回到绘制模式
+            selectedKey = nil
+            state = .idle
+            needsDisplay = true
+            return
+        }
+
         if event.keyCode == 51 || event.keyCode == 117 { // Delete / Forward Delete
             if let key = selectedKey {
                 let zOrderBefore = zOrder
