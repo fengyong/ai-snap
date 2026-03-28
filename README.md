@@ -83,3 +83,17 @@ swift build -c release
 ## 代码统计
 
 约 2,860 行 Swift 代码，8 个源文件，无第三方依赖。
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+- 🐛 [提交 Bug](https://github.com/fengyong/ai-snap/issues/new?labels=bug)
+- 💡 [功能建议](https://github.com/fengyong/ai-snap/issues/new?labels=enhancement)
+- 📖 [查看贡献指南](CONTRIBUTING.md)
+
+### Code Review
+
+本项目使用 [Kimi Code CLI](https://kimi.moonshot.cn) 进行 AI 代码审查。提交 PR 后将自动触发 Review。
+
+[![Reviewed by Kimi](https://img.shields.io/badge/Reviewed%20by-Kimi-orange)](https://kimi.moonshot.cn)
