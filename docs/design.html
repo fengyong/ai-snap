@@ -264,6 +264,7 @@
 <!-- 侧栏导航 -->
 <nav class="sidebar">
   <div class="sidebar-title">AISnap</div>
+  <a href="#what-happened">发生了什么</a>
   <a href="#overview">1. 系统概览</a>
   <a href="#tech-stack" class="level-2">技术栈</a>
   <a href="#structure">2. 项目结构</a>
@@ -295,6 +296,14 @@
 
 <h1>AISnap 设计文档</h1>
 <p class="subtitle">macOS 截图标注工具 &mdash; 支持区域截图、窗口截图，以及在截图上绘制可移动的箭头标注</p>
+
+<h2 id="what-happened">发生了什么</h2>
+<p>我们需要一个轻量的 macOS 原生截图标注工具 &mdash; 截取屏幕区域或指定窗口，在截图上画箭头做标注，画好的箭头还能拖动调整位置。不依赖 Electron 等重型框架，用 Swift + AppKit 从零构建，追求启动快、体积小、操作直觉化。</p>
+
+<figure class="figure">
+  <img src="hero-screenshot.jpg" alt="AISnap 区域截图演示">
+  <figcaption>区域截图演示 &mdash; 拖拽选取屏幕任意区域，虚线框标识选中范围。</figcaption>
+</figure>
 
 <!-- 1. 系统概览 -->
 <h2 id="overview">1. 系统概览</h2>
@@ -430,7 +439,7 @@
 
 <!-- 实际效果截图 -->
 <figure class="figure">
-  <img src="dual-layer-demo.png" alt="AISnap 双图层 Color Picking 实际效果">
+  <img src="dual-layer-demo.jpg" alt="AISnap 双图层 Color Picking 实际效果">
   <figcaption>双图层 Color Picking 实际效果 &mdash; 左侧为 Layer A (用户可见)，右侧为 Layer B 调试可视化 (命中检测层)。<br>每个图形对象在 Layer B 中使用唯一的亮色绘制，鼠标点击时读取 Layer B 对应位置的像素即可 O(1) 完成命中检测。</figcaption>
 </figure>
 
