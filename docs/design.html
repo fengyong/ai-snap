@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AISnap 设计文档</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #1c2128;
+    --text: #e6edf3;
+    --text-secondary: #8b949e;
+    --accent: #58a6ff;
+    --accent-subtle: #1f6feb33;
+    --border: #30363d;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --purple: #bc8cff;
+    --code-bg: #1c2128;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 16px;
+  }
+
+  /* 导航侧栏 */
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0;
+    width: 280px;
+    height: 100vh;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    padding: 24px 0;
+    z-index: 100;
+  }
+
+  .sidebar-title {
+    padding: 0 20px 16px;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+
+  .sidebar a {
+    display: block;
+    padding: 6px 20px;
+    color: var(--text-secondary);
+    text-decoration: none;
+    font-size: 14px;
+    transition: all 0.15s;
+  }
+
+  .sidebar a:hover {
+    color: var(--text);
+    background: var(--accent-subtle);
+  }
+
+  .sidebar a.level-2 { padding-left: 36px; font-size: 13px; }
+
+  /* 主内容 */
+  .main {
+    margin-left: 280px;
+    max-width: 900px;
+    padding: 40px 48px 80px;
+  }
+
+  h1 {
+    font-size: 36px;
+    font-weight: 800;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    color: var(--text-secondary);
+    font-size: 18px;
+    margin-bottom: 40px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 24px;
+  }
+
+  h2 {
+    font-size: 24px;
+    font-weight: 700;
+    margin-top: 48px;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  h3 {
+    font-size: 18px;
+    font-weight: 600;
+    margin-top: 32px;
+    margin-bottom: 12px;
+    color: var(--accent);
+  }
+
+  p { margin-bottom: 14px; }
+
+  ul, ol {
+    margin-bottom: 14px;
+    padding-left: 24px;
+  }
+
+  li { margin-bottom: 4px; }
+
+  strong { color: var(--text); }
+
+  code {
+    font-family: "SF Mono", "Fira Code", "JetBrains Mono", monospace;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 14px;
+    border: 1px solid var(--border);
+  }
+
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    overflow-x: auto;
+    margin-bottom: 16px;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+    font-size: 15px;
+  }
+
+  th {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+    text-align: left;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+  }
+
+  td {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+  }
+
+  tr:hover td {
+    background: var(--accent-subtle);
+  }
+
+  /* 高亮区块 */
+  .callout {
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    border-left: 4px solid;
+  }
+
+  .callout-blue {
+    background: #1f6feb15;
+    border-color: var(--accent);
+  }
+
+  .callout-green {
+    background: #3fb95015;
+    border-color: var(--green);
+  }
+
+  .callout-yellow {
+    background: #d2992215;
+    border-color: var(--yellow);
+  }
+
+  .callout-red {
+    background: #f8514915;
+    border-color: var(--red);
+  }
+
+  .callout-title {
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  /* 图片 */
+  .figure {
+    margin: 24px 0;
+    text-align: center;
+  }
+
+  .figure img {
+    max-width: 100%;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+  }
+
+  .figure figcaption {
+    margin-top: 10px;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+
+  /* ASCII 图 */
+  .ascii-diagram {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 24px;
+    overflow-x: auto;
+    margin-bottom: 16px;
+    font-family: "SF Mono", "Fira Code", monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    white-space: pre;
+    color: var(--text-secondary);
+  }
+
+  /* 标签 */
+  .tag {
+    display: inline-block;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+  }
+
+  .tag-blue { background: #1f6feb33; color: var(--accent); }
+  .tag-green { background: #3fb95033; color: var(--green); }
+  .tag-yellow { background: #d2992233; color: var(--yellow); }
+
+  /* 响应式 */
+  @media (max-width: 1024px) {
+    .sidebar { display: none; }
+    .main { margin-left: 0; padding: 24px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- 侧栏导航 -->
+<nav class="sidebar">
+  <div class="sidebar-title">AISnap</div>
+  <a href="#overview">1. 系统概览</a>
+  <a href="#tech-stack" class="level-2">技术栈</a>
+  <a href="#structure">2. 项目结构</a>
+  <a href="#modules" class="level-2">模块职责</a>
+  <a href="#color-picking">3. 双图层 Color Picking</a>
+  <a href="#traditional-vs-dual" class="level-2">3.1 传统 vs 双图层</a>
+  <a href="#three-layers" class="level-2">3.2 三层架构</a>
+  <a href="#data-structure" class="level-2">3.3 数据结构</a>
+  <a href="#hit-test-flow" class="level-2">3.4 命中检测流程</a>
+  <a href="#anti-aliasing" class="level-2">3.5 抗锯齿约束</a>
+  <a href="#arrow-model">4. 箭头数据模型</a>
+  <a href="#state-machine">5. 状态机</a>
+  <a href="#grab-offset" class="level-2">5.1 grabOffset</a>
+  <a href="#capture">6. 截图捕获</a>
+  <a href="#region-capture" class="level-2">6.1 区域截图</a>
+  <a href="#window-capture" class="level-2">6.2 窗口截图</a>
+  <a href="#coord-system" class="level-2">6.3 坐标系</a>
+  <a href="#annotation-window">7. 标注窗口</a>
+  <a href="#render-pipeline">8. 渲染管线</a>
+  <a href="#keyboard">9. 键盘交互</a>
+  <a href="#permissions">10. 权限要求</a>
+  <a href="#build">11. 构建与运行</a>
+  <a href="#extensibility">12. 扩展性分析</a>
+  <a href="#debug-viz">13. Layer B 调试可视化</a>
+</nav>
+
+<!-- 主内容 -->
+<div class="main">
+
+<h1>AISnap 设计文档</h1>
+<p class="subtitle">macOS 截图标注工具 &mdash; 支持区域截图、窗口截图，以及在截图上绘制可移动的箭头标注</p>
+
+<!-- 1. 系统概览 -->
+<h2 id="overview">1. 系统概览</h2>
+
+<div class="ascii-diagram">
+&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;             macOS &#x83DC;&#x5355;&#x680F;                 &#x2502;
+&#x2502;        &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;               &#x2502;
+&#x2502;        &#x2502; AISnap &#x56FE;&#x6807;   &#x2502;               &#x2502;
+&#x2502;        &#x2502; &#x251C;&#x2500; &#x533A;&#x57DF;&#x622A;&#x56FE;    &#x2502;               &#x2502;
+&#x2502;        &#x2502; &#x251C;&#x2500; &#x7A97;&#x53E3;&#x622A;&#x56FE;    &#x2502;               &#x2502;
+&#x2502;        &#x2502; &#x2514;&#x2500; &#x9000;&#x51FA;       &#x2502;               &#x2502;
+&#x2502;        &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2534;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;               &#x2502;
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;
+                &#x2502; &#x7528;&#x6237;&#x9009;&#x62E9;&#x622A;&#x56FE;&#x65B9;&#x5F0F;
+                &#x25BC;
+   &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+   &#x2502;    &#x622A;&#x56FE;&#x6355;&#x83B7;&#x9636;&#x6BB5;       &#x2502;
+   &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;
+               &#x2502; CGImage
+               &#x25BC;
+   &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+   &#x2502;   AnnotationWindow     &#x2502;
+   &#x2502;  &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510; &#x2502;
+   &#x2502;  &#x2502; AnnotationView  &#x2502; &#x2502;
+   &#x2502;  &#x2502; (&#x753B;&#x5E03;+&#x53CC;&#x56FE;&#x5C42;)  &#x2502; &#x2502;
+   &#x2502;  &#x251C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2524; &#x2502;
+   &#x2502;  &#x2502; &#x5DE5;&#x5177;&#x680F;           &#x2502; &#x2502;
+   &#x2502;  &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518; &#x2502;
+   &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;</div>
+
+<h3 id="tech-stack">技术栈</h3>
+<table>
+  <tr><th>项目</th><th>选型</th></tr>
+  <tr><td>语言</td><td>Swift 5.9</td></tr>
+  <tr><td>UI 框架</td><td>AppKit (NSView / NSWindow)</td></tr>
+  <tr><td>构建系统</td><td>Swift Package Manager</td></tr>
+  <tr><td>最低版本</td><td>macOS 13 (Ventura)</td></tr>
+  <tr><td>截图 API</td><td>CGWindowListCreateImage</td></tr>
+</table>
+
+<div class="callout callout-blue">
+  <div class="callout-title">为什么选 AppKit 而非 SwiftUI?</div>
+  <ul>
+    <li>需要精确控制鼠标事件 (mouseDown / mouseDragged / mouseUp)</li>
+    <li>需要直接操作 CGContext 进行像素级渲染</li>
+    <li>需要创建特殊窗口类型 (无边框全屏覆盖层)</li>
+    <li>SwiftUI 在底层图形交互场景中控制力不足</li>
+  </ul>
+</div>
+
+<!-- 2. 项目结构 -->
+<h2 id="structure">2. 项目结构</h2>
+
+<pre><code>ai-snap/
+├── Package.swift                       # SPM 配置
+└── Sources/
+    ├── main.swift                      # 应用入口
+    ├── AppDelegate.swift               # 应用生命周期 + 菜单栏
+    ├── Models.swift                    # 数据模型 (Arrow, CanvasState)
+    ├── HitTestBuffer.swift             # 隐藏图层 (Layer B) 实现
+    ├── ScreenCapture.swift             # 屏幕捕获 (区域/窗口)
+    ├── RegionSelectionWindow.swift     # 全屏覆盖选区窗口
+    ├── AnnotationView.swift            # 标注画布 (核心)
+    └── AnnotationWindow.swift          # 标注窗口 + 工具栏</code></pre>
+
+<h3 id="modules">模块职责</h3>
+<table>
+  <tr><th>文件</th><th>职责</th><th>依赖</th></tr>
+  <tr><td><code>main.swift</code></td><td>NSApplication 启动引导</td><td>AppDelegate</td></tr>
+  <tr><td><code>AppDelegate</code></td><td>菜单栏图标、截图流程调度</td><td>RegionSelectionWindow, ScreenCapture, AnnotationWindow</td></tr>
+  <tr><td><code>Models</code></td><td>Arrow 数据结构、CanvasState 状态枚举</td><td>无</td></tr>
+  <tr><td><code>HitTestBuffer</code></td><td>离屏位图缓冲区，Color Picking 命中检测</td><td>Models</td></tr>
+  <tr><td><code>ScreenCapture</code></td><td>CGWindowList API 封装</td><td>无</td></tr>
+  <tr><td><code>RegionSelectionWindow</code></td><td>全屏半透明覆盖层 + 拖拽选区</td><td>ScreenCapture</td></tr>
+  <tr><td><code>AnnotationView</code></td><td>双图层画布渲染、鼠标交互、箭头绘制/移动</td><td>Models, HitTestBuffer</td></tr>
+  <tr><td><code>AnnotationWindow</code></td><td>窗口容器、工具栏 (颜色/保存/复制)</td><td>AnnotationView</td></tr>
+</table>
+
+<!-- 3. 核心设计 -->
+<h2 id="color-picking">3. 核心设计: 双图层 Color Picking</h2>
+
+<p>这是本项目的核心架构决策，用于解决<strong>"如何判断用户点击了哪个箭头"</strong>的命中检测 (Hit Test) 问题。</p>
+
+<figure class="figure">
+  <img src="discussion-screenshot.png" alt="双图层技术方案讨论记录">
+  <figcaption>技术方案讨论记录 &mdash; 确立了双图层 Color Picking 的核心原理：Layer O (原始底图)、Layer A (用户可见层)、Layer B (隐藏命中检测层)，以 Map&lt;UniqueColor, Arrow&gt; 作为数据结构，实现 O(1) 命中检测。</figcaption>
+</figure>
+
+<h3 id="traditional-vs-dual">3.1 传统方案 vs 双图层方案</h3>
+
+<table>
+  <tr><th></th><th>几何计算方案</th><th>双图层 Color Picking <span class="tag tag-green">本项目采用</span></th></tr>
+  <tr><td>Hit Test 复杂度</td><td>O(n)，每种形状需专门计算</td><td>O(1)，读像素 + Map 查找</td></tr>
+  <tr><td>新增形状成本</td><td>需写新的几何判定代码</td><td>零，画上去就行</td></tr>
+  <tr><td>精确度</td><td>近似 (tolerance)</td><td>像素级精确</td></tr>
+  <tr><td>内存</td><td>无额外开销</td><td>多一个同尺寸 bitmap</td></tr>
+  <tr><td>抗锯齿</td><td>无限制</td><td>Layer B 必须关闭</td></tr>
+</table>
+
+<h3 id="three-layers">3.2 三层架构</h3>
+
+<div class="ascii-diagram">
+&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;              &#x7528;&#x6237;&#x53EF;&#x89C1;                       &#x2502;
+&#x2502;  &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;  &#x2502;
+&#x2502;  &#x2502;         Layer A (&#x663E;&#x793A;&#x5C42;)              &#x2502;  &#x2502;
+&#x2502;  &#x2502;  &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;  &#x2502;  &#x2502;
+&#x2502;  &#x2502;  &#x2502;       Layer O (&#x539F;&#x59CB;&#x622A;&#x56FE;)        &#x2502;  &#x2502;  &#x2502;
+&#x2502;  &#x2502;  &#x2502;                                &#x2502;  &#x2502;  &#x2502;
+&#x2502;  &#x2502;  &#x2502;   + &#x6240;&#x6709;&#x7BAD;&#x5934; (&#x7528;&#x6237;&#x9009;&#x62E9;&#x7684;&#x989C;&#x8272;)    &#x2502;  &#x2502;  &#x2502;
+&#x2502;  &#x2502;  &#x2502;   + &#x9009;&#x4E2D;&#x72B6;&#x6001;&#x9AD8;&#x4EAE;               &#x2502;  &#x2502;  &#x2502;
+&#x2502;  &#x2502;  &#x2502;   + &#x6B63;&#x5728;&#x7ED8;&#x5236;&#x7684;&#x9884;&#x89C8;&#x7BAD;&#x5934;          &#x2502;  &#x2502;  &#x2502;
+&#x2502;  &#x2502;  &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;  &#x2502;  &#x2502;
+&#x2502;  &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;  &#x2502;
+&#x2502;                                            &#x2502;
+&#x2502;              &#x7528;&#x6237;&#x4E0D;&#x53EF;&#x89C1;                     &#x2502;
+&#x2502;  &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;  &#x2502;
+&#x2502;  &#x2502;         Layer B (&#x547D;&#x4E2D;&#x68C0;&#x6D4B;&#x5C42;)          &#x2502;  &#x2502;
+&#x2502;  &#x2502;                                      &#x2502;  &#x2502;
+&#x2502;  &#x2502;   &#x540C;&#x6837;&#x7684;&#x7BAD;&#x5934;&#xFF0C;&#x4F46;&#x6BCF;&#x4E2A;&#x7BAD;&#x5934;&#x4F7F;&#x7528;&#x552F;&#x4E00;&#x989C;&#x8272;    &#x2502;  &#x2502;
+&#x2502;  &#x2502;   &#x80CC;&#x666F;&#x8272; = #000000 (&#x65E0;&#x5BF9;&#x8C61;)          &#x2502;  &#x2502;
+&#x2502;  &#x2502;   &#x7BAD;&#x5934;1 = #000001                    &#x2502;  &#x2502;
+&#x2502;  &#x2502;   &#x7BAD;&#x5934;2 = #000002                    &#x2502;  &#x2502;
+&#x2502;  &#x2502;   &#x6297;&#x952F;&#x9F7F;: &#x5173;&#x95ED;                       &#x2502;  &#x2502;
+&#x2502;  &#x2502;   &#x7EBF;&#x5BBD;: &#x6BD4; Layer A &#x7C97; 6pt           &#x2502;  &#x2502;
+&#x2502;  &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;  &#x2502;
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;</div>
+
+<p><strong>Layer O</strong> &mdash; 原始截图 (NSImage): 截图完成后不再修改，每次重绘时作为底图绘制到 Layer A。</p>
+<p><strong>Layer A</strong> &mdash; 用户可见的显示层 (NSView.draw): 每帧完整重绘 Layer O + 所有箭头 (用户选择的颜色)，包含选中高亮、绘制预览等视觉反馈。</p>
+<p><strong>Layer B</strong> &mdash; 隐藏的命中检测层 (CGContext 离屏位图): 与 Layer A 同尺寸，同样的箭头形状但使用唯一颜色绘制。<strong>必须关闭抗锯齿</strong>，线宽比 Layer A 粗 6pt 增大可选中区域。</p>
+
+<!-- 实际效果截图 -->
+<figure class="figure">
+  <img src="dual-layer-demo.png" alt="AISnap 双图层 Color Picking 实际效果">
+  <figcaption>双图层 Color Picking 实际效果 &mdash; 左侧为 Layer A (用户可见)，右侧为 Layer B 调试可视化 (命中检测层)。<br>每个图形对象在 Layer B 中使用唯一的亮色绘制，鼠标点击时读取 Layer B 对应位置的像素即可 O(1) 完成命中检测。</figcaption>
+</figure>
+
+<h3 id="data-structure">3.3 数据结构</h3>
+
+<pre><code>// 箭头存储: Map&lt;唯一颜色Key, Arrow&gt;
+var arrows: [UInt32: Arrow] = [:]</code></pre>
+
+<p>用 <code>UInt32</code> 作为 key，对应 RGB 24 位颜色值 (忽略 Alpha):</p>
+
+<pre><code>key = (R &lt;&lt; 16) | (G &lt;&lt; 8) | B
+
+key 0       = #000000 &rarr; 保留给背景，代表"无对象"
+key 1       = #000001 &rarr; 第 1 个箭头
+key 2       = #000002 &rarr; 第 2 个箭头
+...
+key 16777215 = #FFFFFF &rarr; 理论上限约 1600 万个对象</code></pre>
+
+<h3 id="hit-test-flow">3.4 命中检测流程</h3>
+
+<div class="ascii-diagram">
+&#x7528;&#x6237;&#x5728; Layer A (&#x53EF;&#x89C1;&#x5C42;) &#x4E0A;&#x6309;&#x4E0B;&#x9F20;&#x6807;
+    &#x2502;
+    &#x2502;  &#x83B7;&#x53D6;&#x9F20;&#x6807;&#x5750;&#x6807; (x, y)
+    &#x25BC;
+&#x5728; Layer B &#x7684; CGContext &#x4E2D;&#x8BFB;&#x53D6; (x, y) &#x5904;&#x7684;&#x50CF;&#x7D20;
+    &#x2502;
+    &#x2502;  pixel = data[y * bytesPerRow + x * 4]
+    &#x2502;  colorKey = (R &lt;&lt; 16) | (G &lt;&lt; 8) | B
+    &#x25BC;
+    colorKey == 0 ?
+    &#x251C;&#x2500; &#x662F;: &#x672A;&#x547D;&#x4E2D;&#x4EFB;&#x4F55;&#x5BF9;&#x8C61; &#x2192; &#x5F00;&#x59CB;&#x7ED8;&#x5236;&#x65B0;&#x7BAD;&#x5934;
+    &#x2514;&#x2500; &#x5426;: &#x5728; Map &#x4E2D;&#x67E5;&#x627E;   &#x2192; &#x8FDB;&#x5165;&#x79FB;&#x52A8;&#x6A21;&#x5F0F;</div>
+
+<p>像素读取直接操作内存指针，无 GPU 回读开销:</p>
+
+<pre><code>let ptr = data.assumingMemoryBound(to: UInt8.self)
+let offset = y * bytesPerRow + x * 4
+let r = UInt32(ptr[offset])
+let g = UInt32(ptr[offset + 1])
+let b = UInt32(ptr[offset + 2])
+let colorKey = (r &lt;&lt; 16) | (g &lt;&lt; 8) | b</code></pre>
+
+<h3 id="anti-aliasing">3.5 关键约束: Layer B 必须关闭抗锯齿</h3>
+
+<pre><code>context.setShouldAntialias(false)
+context.setAllowsAntialiasing(false)</code></pre>
+
+<div class="callout callout-red">
+  <div class="callout-title">为什么必须关闭?</div>
+  <p>如果开启抗锯齿，箭头边缘像素会被混合成中间色。例如箭头颜色 <code>#000001</code> 和背景 <code>#000000</code> 之间会出现渐变像素，这些中间色在 Map 中不存在对应条目，导致边缘区域无法选中。</p>
+  <p>关闭抗锯齿后，每个像素非此即彼 &mdash; 要么是箭头颜色，要么是背景色。</p>
+</div>
+
+<!-- 4. 箭头数据模型 -->
+<h2 id="arrow-model">4. 箭头数据模型</h2>
+
+<pre><code>struct Arrow {
+    let id: UUID                    // 唯一标识
+    var startPoint: CGPoint         // 箭尾坐标
+    var endPoint: CGPoint           // 箭头坐标
+    var color: NSColor              // 用户可见的颜色
+    var lineWidth: CGFloat          // 线宽 (默认 3.0)
+    let hitTestColorKey: UInt32     // Layer B 中的唯一颜色 key
+}</code></pre>
+
+<p>绘制方法 <code>Arrow.draw(in:withColor:lineWidthOverride:)</code> 同时服务于 Layer A 和 Layer B:</p>
+<ul>
+  <li><strong>Layer A 调用:</strong> 使用用户选择的颜色</li>
+  <li><strong>Layer B 调用:</strong> 传入 <code>overrideColor</code> 为唯一颜色，<code>lineWidthOverride</code> 为加粗线宽</li>
+</ul>
+
+<p>箭头的视觉组成:</p>
+<ol>
+  <li><strong>箭身:</strong> startPoint &rarr; endPoint 的直线段</li>
+  <li><strong>箭头:</strong> endPoint 处的三角形 (张角 30&deg;，长度 14pt)</li>
+</ol>
+
+<!-- 5. 状态机 -->
+<h2 id="state-machine">5. 状态机</h2>
+
+<p>画布交互使用三状态状态机:</p>
+
+<div class="ascii-diagram">
+                    &#x70B9;&#x51FB;&#x7A7A;&#x767D;&#x533A;&#x57DF;
+        &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+        &#x2502;                              &#x25BC;
+    &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;   &#x70B9;&#x51FB;&#x5DF2;&#x6709;&#x7BAD;&#x5934;      &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+    &#x2502; idle &#x2502; &#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x25B6; &#x2502; moving &#x2502;
+    &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;                   &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x252C;&#x2500;&#x2500;&#x2500;&#x2518;
+        &#x25B2;                             &#x2502;
+        &#x2502;        mouseUp              &#x2502;
+        &#x2502;&#x25C4;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;
+        &#x2502;
+        &#x2502;   &#x70B9;&#x51FB;&#x7A7A;&#x767D;&#x533A;&#x57DF;
+        &#x25BC;
+    &#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+    &#x2502;drawing&#x2502;  &#x2500;&#x2500; mouseUp &#x2500;&#x2500;&#x25B6; &#x521B;&#x5EFA; Arrow &#x2500;&#x25B6; idle
+    &#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;</div>
+
+<pre><code>enum CanvasState {
+    case idle
+    case drawing(start: CGPoint)
+    case moving(colorKey: UInt32, grabOffset: CGVector)
+}</code></pre>
+
+<h3 id="grab-offset">5.1 moving 状态中的 grabOffset</h3>
+
+<div class="callout callout-green">
+  <div class="callout-title">grabOffset 的作用</div>
+  <p>移动箭头时记录 grabOffset (鼠标按下位置相对箭头中心的偏移量)。作用: 避免箭头"跳到"鼠标位置，箭头从按下的位置平滑跟随移动。</p>
+</div>
+
+<pre><code>鼠标按下时:
+    center = (startPoint + endPoint) / 2
+    grabOffset = mousePosition - center
+
+鼠标拖动时:
+    newCenter = mousePosition - grabOffset
+    delta = newCenter - oldCenter
+    startPoint += delta
+    endPoint += delta</code></pre>
+
+<!-- 6. 截图捕获 -->
+<h2 id="capture">6. 截图捕获</h2>
+
+<h3 id="region-capture">6.1 区域截图流程</h3>
+
+<div class="ascii-diagram">
+&#x7528;&#x6237;&#x70B9;&#x51FB;"&#x533A;&#x57DF;&#x622A;&#x56FE;"
+    &#x2502;
+    &#x25BC;
+&#x521B;&#x5EFA; RegionSelectionWindow
+    &#x2502;  - &#x5168;&#x5C4F;&#x65E0;&#x8FB9;&#x6846;&#x7A97;&#x53E3;
+    &#x2502;  - &#x534A;&#x900F;&#x660E;&#x9ED1;&#x8272;&#x80CC;&#x666F; (30% &#x4E0D;&#x900F;&#x660E;&#x5EA6;)
+    &#x2502;  - &#x7A97;&#x53E3;&#x5C42;&#x7EA7;: statusBar + 1
+    &#x2502;  - &#x9F20;&#x6807;&#x6307;&#x9488;&#x5207;&#x6362;&#x4E3A;&#x5341;&#x5B57;&#x5149;&#x6807;
+    &#x25BC;
+&#x7528;&#x6237;&#x62D6;&#x62FD;&#x9009;&#x533A;
+    &#x2502;  - &#x7ED8;&#x5236;&#x767D;&#x8272;&#x865A;&#x7EBF;&#x9009;&#x533A;&#x8FB9;&#x6846;
+    &#x2502;  - &#x9009;&#x533A;&#x5185;&#x90E8;&#x4F7F;&#x7528; blendMode(.clear) &#x6E05;&#x9664;&#x906E;&#x7F69;
+    &#x25BC;
+&#x7528;&#x6237;&#x91CA;&#x653E;&#x9F20;&#x6807; (&#x9009;&#x533A; &gt; 5x5 px)
+    &#x2502;  - &#x5750;&#x6807;&#x8F6C;&#x6362; (Y &#x8F74;&#x7FFB;&#x8F6C;)
+    &#x2502;  - &#x5173;&#x95ED;&#x8986;&#x76D6;&#x7A97;&#x53E3;&#xFF0C;&#x5EF6;&#x8FDF; 100ms
+    &#x25BC;
+CGWindowListCreateImage &#x2192; AnnotationWindow</div>
+
+<p>按 <strong>Escape</strong> 键可取消区域选择。</p>
+
+<h3 id="window-capture">6.2 窗口截图流程</h3>
+
+<div class="ascii-diagram">
+&#x7528;&#x6237;&#x70B9;&#x51FB;"&#x7A97;&#x53E3;&#x622A;&#x56FE;"
+    &#x2502;
+    &#x25BC;
+&#x5EF6;&#x8FDF; 500ms (&#x7ED9;&#x7528;&#x6237;&#x5207;&#x6362;&#x7A97;&#x53E3;&#x7684;&#x65F6;&#x95F4;)
+    &#x2502;
+    &#x25BC;
+CGWindowListCopyWindowInfo &#x83B7;&#x53D6;&#x6240;&#x6709;&#x53EF;&#x89C1;&#x7A97;&#x53E3;
+    &#x2502;
+    &#x25BC;
+&#x904D;&#x5386;&#x7A97;&#x53E3;&#x5217;&#x8868; (&#x6309; Z &#x5E8F;&#xFF0C;&#x6700;&#x524D;&#x9762;&#x7684;&#x4F18;&#x5148;)
+    &#x2502;  - &#x8DF3;&#x8FC7;&#x81EA;&#x8EAB;&#x8FDB;&#x7A0B;&#x7684;&#x7A97;&#x53E3;
+    &#x2502;  - &#x68C0;&#x6D4B;&#x9F20;&#x6807;&#x662F;&#x5426;&#x5728;&#x7A97;&#x53E3; bounds &#x5185;
+    &#x25BC;
+CGWindowListCreateImage &#x2192; AnnotationWindow</div>
+
+<h3 id="coord-system">6.3 坐标系说明</h3>
+
+<div class="callout callout-yellow">
+  <div class="callout-title">macOS 两套坐标系</div>
+  <ul>
+    <li><strong>AppKit (NSView/NSEvent):</strong> 原点在左下角，Y 轴向上</li>
+    <li><strong>Core Graphics (CGWindowList):</strong> 原点在左上角，Y 轴向下</li>
+  </ul>
+  <p>转换公式: <code>cgY = screenHeight - nsY - rectHeight</code></p>
+</div>
+
+<!-- 7. 标注窗口 -->
+<h2 id="annotation-window">7. 标注窗口</h2>
+
+<div class="ascii-diagram">
+&#x250C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2510;
+&#x2502;  AISnap - &#x6807;&#x6CE8;                  &#x2500; &#x25A1; &#x2715;&#x2502;  &#x2190; &#x6807;&#x9898;&#x680F;
+&#x251C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2524;
+&#x2502;                                    &#x2502;
+&#x2502;          AnnotationView              &#x2502;
+&#x2502;          (&#x622A;&#x56FE; + &#x7BAD;&#x5934;&#x6807;&#x6CE8;)            &#x2502;
+&#x2502;          &#x5BBD;&#x9AD8; = &#x622A;&#x56FE;&#x5C3A;&#x5BF8;              &#x2502;
+&#x2502;                                    &#x2502;
+&#x251C;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2524;
+&#x2502;  &#x1F534; &#x1F535; &#x1F7E2; &#x1F7E1;     [&#x4FDD;&#x5B58;] [&#x590D;&#x5236;]        &#x2502;  &#x2190; &#x5DE5;&#x5177;&#x680F; (44pt)
+&#x2514;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2500;&#x2518;</div>
+
+<table>
+  <tr><th>控件</th><th>功能</th></tr>
+  <tr><td>颜色按钮 (红/蓝/绿/黄)</td><td>切换后续箭头的绘制颜色</td></tr>
+  <tr><td>保存</td><td>NSSavePanel &rarr; 导出 PNG</td></tr>
+  <tr><td>复制</td><td>合成图片 &rarr; 写入系统剪贴板</td></tr>
+</table>
+
+<p>导出时调用 <code>AnnotationView.compositeImage()</code>: 绘制 Layer O + 所有箭头 (用户颜色)。Layer B 不参与导出。</p>
+
+<!-- 8. 渲染管线 -->
+<h2 id="render-pipeline">8. 渲染管线</h2>
+
+<p>每次 <code>needsDisplay = true</code> 触发的 <code>draw(_:)</code> 调用:</p>
+
+<div class="ascii-diagram">
+Layer A &#x6E32;&#x67D3;&#x987A;&#x5E8F; (NSView.draw):
+    &#x2502;
+    &#x251C;&#x2500; 1. &#x7ED8;&#x5236; Layer O (baseImage)
+    &#x2502;     &#x2514;&#x2500; NSImage.draw(in: imageRect)
+    &#x2502;
+    &#x251C;&#x2500; 2. &#x904D;&#x5386; arrows Map&#xFF0C;&#x9010;&#x4E2A;&#x7ED8;&#x5236;&#x7BAD;&#x5934;
+    &#x2502;     &#x251C;&#x2500; Arrow.draw(in: ctx)              &#x2190; &#x7528;&#x6237;&#x9009;&#x62E9;&#x7684;&#x989C;&#x8272;
+    &#x2502;     &#x2514;&#x2500; if selected: drawSelectionHandles &#x2190; &#x84DD;&#x8272;&#x5706;&#x5F62;&#x7AEF;&#x70B9;&#x624B;&#x67C4;
+    &#x2502;
+    &#x2514;&#x2500; 3. if state == .drawing:
+          &#x2514;&#x2500; &#x7ED8;&#x5236;&#x9884;&#x89C8;&#x7BAD;&#x5934; (&#x5F53;&#x524D;&#x62D6;&#x62FD;&#x4E2D;&#x7684;&#x65B0;&#x7BAD;&#x5934;)</div>
+
+<p>Layer B 在以下时机重绘:</p>
+<ul>
+  <li>新箭头创建后: <code>hitTestBuffer.drawArrow(arrow)</code> <span class="tag tag-green">增量</span></li>
+  <li>箭头移动后: <code>hitTestBuffer.redrawAll(arrows:)</code> <span class="tag tag-yellow">全量</span></li>
+  <li>箭头删除后: <code>hitTestBuffer.redrawAll(arrows:)</code> <span class="tag tag-yellow">全量</span></li>
+</ul>
+
+<p>性能说明: 截图标注场景中箭头数量通常 &lt; 20 个，全量重绘无性能问题。</p>
+
+<!-- 9. 键盘交互 -->
+<h2 id="keyboard">9. 键盘交互</h2>
+
+<table>
+  <tr><th>按键</th><th>场景</th><th>行为</th></tr>
+  <tr><td>Escape</td><td>区域选择阶段</td><td>取消选区，关闭覆盖窗口</td></tr>
+  <tr><td>Delete / Forward Delete</td><td>标注阶段，有选中箭头</td><td>从 Map 中删除箭头，重绘 A/B</td></tr>
+</table>
+
+<!-- 10. 权限要求 -->
+<h2 id="permissions">10. 权限要求</h2>
+
+<div class="callout callout-yellow">
+  <div class="callout-title">屏幕录制权限</div>
+  <p>应用需要<strong>屏幕录制</strong>权限才能正常截图。</p>
+  <ul>
+    <li>位置: 系统设置 &rarr; 隐私与安全 &rarr; 屏幕录制</li>
+    <li>首次调用 <code>CGWindowListCreateImage</code> 时系统会弹出授权请求</li>
+    <li>未授权时截图结果为空白图片</li>
+  </ul>
+</div>
+
+<!-- 11. 构建与运行 -->
+<h2 id="build">11. 构建与运行</h2>
+
+<pre><code># 构建
+swift build
+
+# 运行
+swift run AISnap
+
+# Release 构建 + 打包 DMG
+./build.sh</code></pre>
+
+<p>运行后应用以菜单栏图标形式存在 (无 Dock 图标)，通过 <code>NSApp.setActivationPolicy(.accessory)</code> 实现。</p>
+
+<!-- 12. 扩展性分析 -->
+<h2 id="extensibility">12. 扩展性分析</h2>
+
+<p>双图层 Color Picking 方案的最大优势是扩展成本极低:</p>
+
+<table>
+  <tr><th>新增图形类型</th><th>需要做的事</th></tr>
+  <tr><td>矩形</td><td>1. 新增模型 2. 实现 draw 方法 3. 画到 Layer A 和 B 上</td></tr>
+  <tr><td>圆形</td><td>同上</td></tr>
+  <tr><td>文字框</td><td>同上</td></tr>
+  <tr><td>自由画笔</td><td>同上</td></tr>
+</table>
+
+<div class="callout callout-blue">
+  <div class="callout-title">核心优势</div>
+  <p>所有图形类型共享同一套命中检测逻辑 &mdash; 读像素 + Map 查找，<strong>无需编写任何新的几何计算代码</strong>。</p>
+  <p>Map 的 key 空间 (24 位 RGB = 约 1600 万种颜色) 对标注工具而言完全够用。</p>
+</div>
+
+<!-- 13. Layer B 调试可视化 -->
+<h2 id="debug-viz">13. Layer B 调试可视化</h2>
+
+<h3>问题: Layer B 肉眼不可见</h3>
+
+<p>Layer B 的颜色编码方式决定了它在视觉上几乎全黑 &mdash; <code>#000001</code>, <code>#000002</code> 等颜色亮度差异仅 1/255，人眼完全无法区分。</p>
+
+<h3>解决方案: 黄金比例色相放大</h3>
+
+<p>用相同的 <code>drawHitTest()</code> 方法重新绘制 Layer B 的内容，但将每个对象的颜色映射到人眼可区分的明亮色彩。使用黄金比例 (0.618034...) 作为色相步进值，保证无论对象数量多少，相邻对象的颜色差异始终最大化。</p>
+
+<pre><code>对象 1: hue = 1 * 0.618 = 0.618  (偏蓝)
+对象 2: hue = 2 * 0.618 = 0.236  (偏黄绿)
+对象 3: hue = 3 * 0.618 = 0.854  (偏紫)
+对象 4: hue = 4 * 0.618 = 0.472  (偏青)</code></pre>
+
+<h3>Layer A vs Layer B 对比</h3>
+
+<table>
+  <tr><th>观察项</th><th>Layer A (左)</th><th>Layer B 可视化 (右)</th></tr>
+  <tr><td>颜色</td><td>用户选择的颜色</td><td>每个对象一种亮色</td></tr>
+  <tr><td>线宽</td><td>原始线宽</td><td>线宽 + 6pt (更粗)</td></tr>
+  <tr><td>抗锯齿</td><td>开启 (边缘平滑)</td><td>关闭 (边缘锯齿状)</td></tr>
+  <tr><td>空心形状</td><td>只有描边</td><td>只有描边 (可穿透内部)</td></tr>
+  <tr><td>选中手柄</td><td>显示蓝色圆点</td><td>不显示 (纯形状)</td></tr>
+</table>
+
+<div class="callout callout-green">
+  <div class="callout-title">旋转不增加 Layer B 的复杂度</div>
+  <p>旋转后的命中区域自动正确，因为它就是像素 &mdash; 不需要任何数学变换。这是双图层方案最精妙的地方: <strong>把几何问题转化为像素问题，让光栅化替你完成所有数学计算。</strong></p>
+</div>
+
+</div>
+</body>
+</html>
