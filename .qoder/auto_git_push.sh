@@ -1,6 +1,6 @@
 #!/bin/bash
 
-REPO_DIR="/Users/dev/qoder/ai-snap"
+REPO_DIR="/Users/fengyong/qoder/ai-snap"
 LOG_FILE="$REPO_DIR/.qoder/auto_git_push.log"
 
 cd "$REPO_DIR" || exit 1
