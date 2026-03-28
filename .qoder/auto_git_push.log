@@ -126,3 +126,8 @@ To https://github.com/fengyong/ai-snap.git
    7141284..ea94a99  master -> master
 [2026-03-29 01:36:21] ✅ 推送成功
 [2026-03-29 03:22:30] 检查并提交代码...
+To https://github.com/fengyong/ai-snap.git
+ ! [remote rejected] master -> master (cannot lock ref 'refs/heads/master': is at 635870df66e9de269d5776f815fc8e1b1d249743 but expected ea94a992fa63b9ba13eb10e85ea82aa8548939c0)
+错误：无法推送一些引用到 'https://github.com/fengyong/ai-snap.git'
+[2026-03-29 05:25:07] ❌ 推送失败
+[2026-03-29 07:37:04] 检查并提交代码...
