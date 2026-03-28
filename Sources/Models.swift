@@ -214,14 +214,16 @@ enum UndoAction {
 enum DrawingTool: Equatable {
     case arrow
     case rectangle
-    case circle
+    case circle    // 正圆（radiusX == radiusY）
+    case ellipse   // 椭圆（独立 radiusX / radiusY）
     case stamp(StampType)
     case spotlight
 
     static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
         switch (lhs, rhs) {
         case (.arrow, .arrow), (.rectangle, .rectangle),
-             (.circle, .circle), (.spotlight, .spotlight):
+             (.circle, .circle), (.ellipse, .ellipse),
+             (.spotlight, .spotlight):
             return true
         case (.stamp, .stamp):
             return true  // 所有 stamp 视为同类工具
