@@ -52,8 +52,11 @@ class HitTestBuffer {
         guard x >= 0, x < width, y >= 0, y < height else { return 0 }
         guard let data = context.data else { return 0 }
 
+        // CGBitmapContext 像素数据从上到下存储（row 0 = 顶部），
+        // 但绘图坐标系 y=0 在底部，因此需要翻转 Y
+        let flippedY = height - 1 - y
         let bytesPerRow = context.bytesPerRow
-        let offset = y * bytesPerRow + x * 4
+        let offset = flippedY * bytesPerRow + x * 4
 
         let ptr = data.assumingMemoryBound(to: UInt8.self)
         let r = UInt32(ptr[offset])
