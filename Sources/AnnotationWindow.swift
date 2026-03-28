@@ -4,7 +4,6 @@ import Cocoa
 class AnnotationWindow: NSWindow {
     private var annotationView: AnnotationView!
     private var toolButtons: [NSButton] = []
-    private var arrowStyleButtons: [NSButton] = []
     private var colorButtons: [NSButton] = []
     private var colorButtonContainer: NSView!
     private var paletteIndex: Int = 0

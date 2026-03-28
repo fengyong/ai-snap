@@ -443,6 +443,7 @@ class AnnotationView: NSView {
         switch action {
         case .add(let colorKey):
             // 撤销添加 = 删除该对象
+            // 保存当前 zOrder（含该对象）供 redo 恢复用
             if let obj = objects[colorKey] {
                 redoStack.append(.delete(objects: [(colorKey, obj)], zOrderSnapshot: zOrder))
             }
@@ -451,11 +452,13 @@ class AnnotationView: NSView {
 
         case .delete(let deletedObjects, let zOrderSnapshot):
             // 撤销删除 = 恢复所有被删除的对象和 z-order
+            // 保存当前 zOrder（不含已删除对象）供 redo 重新删除用
+            let zOrderWithout = zOrder
             for (key, obj) in deletedObjects {
                 objects[key] = obj
             }
             zOrder = zOrderSnapshot
-            redoStack.append(.add(colorKey: deletedObjects[0].0))
+            redoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderWithout))
 
         case .move(let colorKey, let delta):
             if let obj = objects[colorKey] {
@@ -490,22 +493,28 @@ class AnnotationView: NSView {
         selectedKey = nil
 
         switch action {
-        case .add(let colorKey):
-            // redo 添加 → 实际上是 redo "撤销删除" 的反向 = 再次删除
-            // 但这里 add 在 redo 栈意味着原操作是 delete，redo = 再次 delete
-            if let obj = objects[colorKey] {
-                undoStack.append(.delete(objects: [(colorKey, obj)], zOrderSnapshot: zOrder))
-            }
-            objects.removeValue(forKey: colorKey)
-            zOrder.removeAll { $0 == colorKey }
+        case .add:
+            // .add 不再出现在 redo 栈中，保留以保证 switch 完整
+            break
 
-        case .delete(let deletedObjects, let zOrderSnapshot):
-            // redo delete → 恢复对象 (原操作是 add，redo = 再次 add)
-            for (key, obj) in deletedObjects {
-                objects[key] = obj
+        case .delete(let savedObjects, let savedZOrder):
+            // 通过检查对象是否存在判断操作方向
+            let firstKey = savedObjects[0].0
+            if objects[firstKey] != nil {
+                // 对象存在 → 重做删除（从 undo .delete 推入）
+                undoStack.append(.delete(objects: savedObjects, zOrderSnapshot: zOrder))
+                for (key, _) in savedObjects {
+                    objects.removeValue(forKey: key)
+                }
+                zOrder = savedZOrder
+            } else {
+                // 对象不存在 → 重做添加（从 undo .add 推入）
+                for (key, obj) in savedObjects {
+                    objects[key] = obj
+                }
+                zOrder = savedZOrder
+                undoStack.append(.add(colorKey: firstKey))
             }
-            zOrder = zOrderSnapshot
-            undoStack.append(.add(colorKey: deletedObjects[0].0))
 
         case .move(let colorKey, let delta):
             if let obj = objects[colorKey] {
