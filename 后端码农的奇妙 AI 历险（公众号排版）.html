@@ -13,7 +13,7 @@
 
 <!-- ========== 封面图 ========== -->
 <section style="margin: 0 0 10px; text-align: center;">
-  <img src="vibe_images/cover_1774681939.png" style="max-width: 100%; border-radius: 10px;" alt="封面：从 Turbo C 到 AI 编程">
+  <img src="docs/hero-screenshot.png" style="max-width: 100%; border-radius: 10px; box-shadow: 0 4px 20px rgba(0,0,0,0.12);" alt="AISnap 截图标注工具">
 </section>
 
 <!-- ========== 标题 ========== -->
@@ -79,6 +79,12 @@
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 16px;">接下来我花了大约 28 分钟，把那个在脑子里躺了二十年的方案完整地讲给了 AI：<strong style="color: #1a3a5c;">三层架构 + Color Picking</strong>。</p>
 
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 16px;">二十年前我用 Delphi 写过一个粗糙的演示版，但从没在真正的产品里实现过——因为我早就不做客户端了。这次，我出思路，AI 出代码。</p>
+
+  <!-- 需求讨论截图 -->
+  <section style="margin: 16px 0 24px; text-align: center;">
+    <img src="docs/discussion-screenshot.png" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.12);" alt="需求讨论：Color Picking 方案的架构推演">
+    <p style="font-size: 13px; color: #999; margin-top: 8px;">实际对话截图：后端码农向 AI 讲解三层架构方案</p>
+  </section>
 
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 12px;">原理并不复杂，但非常精巧：</p>
 
@@ -275,11 +281,6 @@
 <section style="margin: 40px 0 0;">
   <h2 style="font-size: 18px; font-weight: 700; color: #2b5b84; border-bottom: 2px solid #3a7bd5; padding-bottom: 8px; margin-bottom: 20px;"><span style="color: #d4690e;">23:03 ~ 次日 02:26</span> —— 三个多小时的深夜马拉松</h2>
 
-  <!-- 深夜编码配图 -->
-  <section style="margin: 0 0 20px; text-align: center;">
-    <img src="vibe_images/late-night-coding_1774681892.png" style="max-width: 100%; border-radius: 8px;" alt="深夜编码：屏幕的光映在脸上">
-  </section>
-
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 16px;">接下来发生的事情，用"对话"来描述已经不太准确了。更像是两个人在一间深夜的屋子里，一个在白板上画，一个在键盘上敲，偶尔交换一下意见。</p>
 
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 16px;">AI 按照 10 步开发计划自动推进。我偶尔插嘴：</p>
@@ -301,6 +302,12 @@
 
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 6px;"><strong style="color: #d4690e;">23:28</strong> ——</p>
   <blockquote style="margin: 12px 0 16px; padding: 14px 20px; background: #fffef5; border-left: 4px solid #f0c040; border-radius: 0 6px 6px 0; font-size: 15px; color: #5a4a00; line-height: 1.8;">"你要把你的调试技巧中想到的这些方法写入到设计文档里面去，让其他人看到你的精彩思路。"</blockquote>
+
+  <!-- 双图层 Debug 面板截图 -->
+  <section style="margin: 16px 0 24px; text-align: center;">
+    <img src="docs/dual-layer-demo.jpg" style="max-width: 100%; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.12);" alt="双图层实际效果：左侧可见层标注，右侧 Layer B Debug 面板">
+    <p style="font-size: 13px; color: #999; margin-top: 8px;">魔术揭秘：左侧是用户看到的标注，右侧是 Layer B 的真面目——每个对象一种唯一颜色</p>
+  </section>
 
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 16px;">23:35，AI 的对话上下文溢出了——它产出了太多代码，上下文窗口被填满。系统自动做了一次总结续接。</p>
 
@@ -458,6 +465,11 @@
   </section>
 
   <p style="font-size: 16px; color: #2b5b84; line-height: 2; margin: 24px 0; text-align: center; font-weight: 600;">一个 AI 在审查另一个 AI 写的代码。<br>而我，一个看不太懂 Swift 的后端码农，在中间当裁判。</p>
+
+  <!-- AI审AI配图 -->
+  <section style="margin: 16px 0 24px; text-align: center;">
+    <img src="vibe_images/ai-review-ai_1774681962.png" style="max-width: 80%; border-radius: 8px;" alt="两个 AI 对坐，人类在中间当裁判">
+  </section>
 
   <p style="font-size: 15px; color: #333; line-height: 2; margin-bottom: 16px;">我让编码 AI 逐个评估：Bug 2 在前一天的多屏幕支持中已经修过了；Bug 6 是设计如此，不改；其余 4 个确实是真实缺陷。</p>
 
