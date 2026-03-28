@@ -33,6 +33,10 @@ class HitTestBuffer {
     func generateUniqueColorKey() -> UInt32 {
         let key = nextColorIndex
         nextColorIndex += 1
+        // 24-bit RGB 最多支持 16,777,215 个唯一对象，超出后回绕
+        if nextColorIndex > 0xFFFFFF {
+            nextColorIndex = 1
+        }
         return key
     }
 
