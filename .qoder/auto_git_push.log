@@ -131,3 +131,6 @@ To https://github.com/fengyong/ai-snap.git
 错误：无法推送一些引用到 'https://github.com/fengyong/ai-snap.git'
 [2026-03-29 05:25:07] ❌ 推送失败
 [2026-03-29 07:37:04] 检查并提交代码...
+致命错误：'https://github.com/fengyong/ai-snap.git/' 鉴权失败
+[2026-03-29 07:53:41] ❌ 推送失败
+[2026-03-29 09:14:12] 检查并提交代码...
