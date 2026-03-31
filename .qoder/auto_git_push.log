@@ -191,3 +191,9 @@ To https://github.com/fengyong/ai-snap.git
    9dca415..0429aa2  master -> master
 [2026-03-31 14:11:49] ✅ 推送成功
 [2026-03-31 20:19:40] 检查并提交代码...
+错误：RPC 失败。curl 28 Failed to connect to github.com port 443 after 1018684 ms: Timeout was reached
+send-pack: unexpected disconnect while reading sideband packet
+致命错误：远端意外挂断了
+Everything up-to-date
+[2026-03-31 20:37:12] ❌ 推送失败
+[2026-04-01 00:50:18] 检查并提交代码...
