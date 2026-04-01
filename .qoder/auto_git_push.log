@@ -228,3 +228,6 @@ To https://github.com/fengyong/ai-snap.git
    7aa0a93..146784c  master -> master
 [2026-04-01 14:48:38] ✅ 推送成功
 [2026-04-01 17:24:49] 检查并提交代码...
+致命错误：'https://github.com/fengyong/ai-snap.git/' 鉴权失败
+[2026-04-01 17:40:45] ❌ 推送失败
+[2026-04-01 20:09:22] 检查并提交代码...
