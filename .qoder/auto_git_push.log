@@ -242,3 +242,6 @@ To https://github.com/fengyong/ai-snap.git
    4dc648a..7881e32  master -> master
 [2026-04-02 01:11:12] ✅ 推送成功
 [2026-04-02 02:56:42] 检查并提交代码...
+致命错误：'https://github.com/fengyong/ai-snap.git/' 鉴权失败
+[2026-04-02 02:58:30] ❌ 推送失败
+[2026-04-02 05:36:19] 检查并提交代码...
