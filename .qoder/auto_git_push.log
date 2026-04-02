@@ -245,3 +245,6 @@ To https://github.com/fengyong/ai-snap.git
 致命错误：'https://github.com/fengyong/ai-snap.git/' 鉴权失败
 [2026-04-02 02:58:30] ❌ 推送失败
 [2026-04-02 05:36:19] 检查并提交代码...
+致命错误：无法访问 'https://github.com/fengyong/ai-snap.git/'：Recv failure: Operation timed out
+[2026-04-02 05:52:14] ❌ 推送失败
+[2026-04-02 08:30:27] 检查并提交代码...
