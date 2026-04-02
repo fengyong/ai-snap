@@ -252,3 +252,6 @@ To https://github.com/fengyong/ai-snap.git
    7881e32..b818458  master -> master
 [2026-04-02 08:46:18] ✅ 推送成功
 [2026-04-02 10:26:24] 检查并提交代码...
+致命错误：无法访问 'https://github.com/fengyong/ai-snap.git/'：Failed to connect to github.com port 443 after 583522 ms: Timeout was reached
+[2026-04-02 10:36:08] ❌ 推送失败
+[2026-04-02 13:01:16] 检查并提交代码...
