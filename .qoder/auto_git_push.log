@@ -312,3 +312,6 @@ To https://github.com/fengyong/ai-snap.git
    85d717c..e7ac7ea  master -> master
 [2026-04-03 23:55:43] ✅ 推送成功
 [2026-04-04 00:57:55] 检查并提交代码...
+致命错误：无法访问 'https://github.com/fengyong/ai-snap.git/'：Failed to connect to github.com port 443 after 75010 ms: Couldn't connect to server
+[2026-04-04 00:59:10] ❌ 推送失败
+[2026-04-04 05:21:44] 检查并提交代码...
