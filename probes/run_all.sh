@@ -98,6 +98,30 @@ run_probe picker_probe           "${ALL_SOURCES[@]}"
 run_probe ocr_probe              "${ALL_SOURCES[@]}"
 run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
 
+# ── 清理测试偏好域 ─────────────────────────────────────────────────────
+#
+# prefs_probe / hotkey_probe 会用 UserDefaults(suiteName:) 建一个隔离的测试域。
+# 早期 suite 名带 UUID()，于是**每跑一次就往 ~/Library/Preferences 里多一个 plist**
+# （实测在用户机器上累积了 24 个）。
+#
+# 现在 suite 名固定了（不会累积），但探针**自己删不干净**：removePersistentDomain
+# 清的是进程视角的域，而持久化由 cfprefsd 负责 —— 实测 prefs_probe 删掉之后
+# 文件又被写了回来。
+#
+# 所以放到这里、探针**退出之后**删：那时 cfprefsd 已经没有客户端，
+# 不会再把它写回来。名字限定 com.aisnap.probe.*，不会误删别的东西。
+#
+# 而且要「等一下再删、删完复查」：cfprefsd 是**异步落盘**的，探针刚退出时
+# 写入可能还没到磁盘 —— 立刻删等于删了个空气，文件随后才出现（实测踩到）。
+for _attempt in 1 2 3 4 5; do
+  removed=0
+  for f in "$HOME"/Library/Preferences/com.aisnap.probe.*.plist; do
+    if [ -e "$f" ]; then rm -f "$f"; removed=1; fi
+  done
+  [ "$removed" = "0" ] && break
+  sleep 0.3
+done
+
 echo
 echo "========================================"
 echo "通过 $PASS 个探针，失败 $FAIL 个"

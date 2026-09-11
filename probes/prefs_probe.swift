@@ -5,7 +5,7 @@
 // 可以脱离 GUI 直接测。这比「肉眼看一遍代码」可靠得多。
 import Cocoa
 
-let suiteName = "com.aisnap.prefstest.\(UUID().uuidString)"
+let suiteName = "com.aisnap.probe.prefs"
 guard let store = UserDefaults(suiteName: suiteName) else {
     print("无法创建测试用 UserDefaults suite"); exit(1)
 }
@@ -102,7 +102,25 @@ check("watermarkText 回缺省", after.watermarkText == "AISnap", after.watermar
 check("paletteIndex 回缺省", after.paletteIndex == 0, "\(after.paletteIndex)")
 check("lastToolTag 回缺省", after.lastToolTag == 0, "\(after.lastToolTag)")
 
-store.removePersistentDomain(forName: suiteName)
+// 清理测试域。
+    //
+    // ⚠️ 只调 removePersistentDomain 是**不够**的：它清的是当前进程视角的域，
+    // 磁盘上的 ~/Library/Preferences/<suite>.plist 会留下。
+    // 早先 suite 名还用了 UUID()，于是探针每跑一次就多一个 plist ——
+    // 实测在用户机器上累积了 24 个 com.aisnap.*test.*.plist。
+    // 现在：固定 suite 名（不会累积）+ 显式删文件（不会残留）。
+    func cleanupTestDomain() {
+        // 顺序很重要：**先同步**把待写数据刷到磁盘，再删域、再删文件。
+        // 反过来的话，cfprefsd 会在我们删完之后才把文件写出来 ——
+        // 实测「删了但文件还在」，就是踩了这个异步落盘。
+        CFPreferencesAppSynchronize(suiteName as CFString)
+        store.removePersistentDomain(forName: suiteName)
+        CFPreferencesAppSynchronize(suiteName as CFString)
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Preferences/\(suiteName).plist")
+        try? FileManager.default.removeItem(at: url)
+    }
+    cleanupTestDomain()
 
 print("\n=== 结果 ===")
 if failures == 0 {
