@@ -131,16 +131,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
 
-        annotationWindow?.close()
-        annotationWindow = nil
+        // 让本应用已有的窗口先离开屏幕 —— 否则会被冻结进底图
+        annotationWindow?.orderOut(nil)
 
-        regionSelectionWindow = RegionSelectionWindow { [weak self] image in
+        // 等窗口服务器完成合成，再去冻结屏幕。
+        // 这是**一次性**等待，不是每次截图都要付：冻结之后覆盖层显示的是静止画面，
+        // 选区确定后只需裁剪冻结图，不再需要「关掉覆盖层 → 等它消失 → 再截图」那一套。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            self?.presentRegionSelection()
+        }
+    }
+
+    private func presentRegionSelection() {
+        let window = RegionSelectionWindow { [weak self] image in
             self?.regionSelectionWindow = nil
             if let image = image {
                 self?.openAnnotationWindow(with: image)
             }
         }
-        regionSelectionWindow?.beginSelection()
+        regionSelectionWindow = window
+
+        Task { @MainActor in
+            // 先冻结、再显示：覆盖层画的是冻结帧，所以它自己不会被拍进去
+            guard await window.freezeScreens() else {
+                self.regionSelectionWindow = nil
+                self.showCaptureFailureAlert()
+                return
+            }
+            window.beginSelection()
+        }
+    }
+
+    private func showCaptureFailureAlert() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "屏幕捕获失败"
+        alert.informativeText = """
+            没能读取屏幕内容，本次截图中止。
+
+            若反复出现，请到 系统设置 → 隐私与安全性 → 屏幕录制 里确认 AISnap 已启用。
+            """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 
     @objc private func startWindowCapture() {
