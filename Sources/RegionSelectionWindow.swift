@@ -41,13 +41,11 @@ class RegionSelectionWindow: NSWindow {
             defer: false
         )
 
-        // 冻结图会铺满整个窗口，所以不再需要半透明背景
-        self.level = .statusBar + 1
-        self.isOpaque = true
-        self.backgroundColor = .black
+        // 窗口外观交给 OverlayWindowStyle（关键点是**背景透明而非纯黑**：
+        // 冻结帧画好之前透出的是真实屏幕，若是纯黑就会全屏黑闪。见那里的说明）
+        OverlayWindowStyle.apply(to: self)
         self.ignoresMouseEvents = false
         self.acceptsMouseMovedEvents = true
-        self.hasShadow = false
 
         selectionView = RegionSelectionView(frame: screenFrame)
         selectionView.onSelectionComplete = { [weak self] rect in
@@ -66,10 +64,8 @@ class RegionSelectionWindow: NSWindow {
                 backing: .buffered,
                 defer: false
             )
-            overlay.level = .statusBar + 1
-            overlay.isOpaque = true
-            overlay.backgroundColor = .black
-            overlay.hasShadow = false
+            // 与主屏覆盖层共用同一份外观配置（透明背景的理由见 OverlayWindowStyle）
+            OverlayWindowStyle.apply(to: overlay)
             overlay.ignoresMouseEvents = true
             overlay.contentView = FrozenScreenView(frame: NSRect(origin: .zero, size: screen.frame.size))
             overlayWindows.append(overlay)
@@ -107,6 +103,17 @@ class RegionSelectionWindow: NSWindow {
         for overlay in overlayWindows {
             overlay.orderFront(nil)
         }
+
+        // 上屏之后补一次同步绘制，让「冻结帧 + 变暗」尽早出现。
+        // 顺序不能反过来：**未上屏的窗口没有 window device**，实测那时
+        // `display()` / `displayIfNeeded()` 都是 no-op（draw 根本不被调用）。
+        // 窗口是透明的，所以即便这一帧迟到，用户看到的也只是「还没变暗的真实屏幕」，
+        // 不会有黑闪 —— 这次调用只是把变暗提前，不是正确性的前提。
+        selectionView.display()
+        for overlay in overlayWindows {
+            overlay.contentView?.display()
+        }
+
         NSCursor.crosshair.push()
     }
 

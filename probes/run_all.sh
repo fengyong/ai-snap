@@ -83,6 +83,7 @@ run_probe cyclic_index_probe     Sources/Models.swift
 run_probe text_shape_probe       Sources/Models.swift
 run_probe screen_geometry_probe  Sources/Capture/ScreenGeometry.swift
 run_probe anchored_placement_probe Sources/AnchoredPlacement.swift
+run_probe overlay_style_probe    Sources/OverlayWindowStyle.swift
 run_probe redaction_probe        Sources/Models.swift Sources/Capture/ScreenGeometry.swift \
                                  Sources/Redaction/ImageRedaction.swift \
                                  Sources/Redaction/RedactionShape.swift
