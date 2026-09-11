@@ -22,6 +22,7 @@ final class SettingsWindowController: NSWindowController {
     private var statusLabel: NSTextField!
     private var feedURLField: NSTextField!
     private var autoCheckBox: NSButton!
+    private var launchAtLoginBox: NSButton!
     private var keyMonitor: Any?
     /// 正在录制的目标：nil 表示没有在录制
     private var recordingTarget: RecordingTarget?
@@ -88,6 +89,27 @@ final class SettingsWindowController: NSWindowController {
         let separator = NSBox()
         separator.boxType = .separator
         root.addArrangedSubview(separator)
+
+        // ── 启动 ──
+        let launchTitle = NSTextField(labelWithString: "启动")
+        launchTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        root.addArrangedSubview(launchTitle)
+
+        launchAtLoginBox = NSButton(checkboxWithTitle: "开机自动启动（登录后在后台待命）",
+                                    target: self, action: #selector(launchAtLoginToggled(_:)))
+        root.addArrangedSubview(launchAtLoginBox)
+
+        let launchHint = NSTextField(wrappingLabelWithString:
+            "AISnap 常驻状态栏、不占 Dock，截图靠全局快捷键 —— 所以它需要一直在后台待命。"
+            + "打开这个开关就不用每次重启后手动启动。")
+        launchHint.font = NSFont.systemFont(ofSize: 11)
+        launchHint.textColor = .secondaryLabelColor
+        launchHint.preferredMaxLayoutWidth = 420
+        root.addArrangedSubview(launchHint)
+
+        let separator1 = NSBox()
+        separator1.boxType = .separator
+        root.addArrangedSubview(separator1)
 
         // ── 更新 ──
         let updateTitle = NSTextField(labelWithString: "更新")
@@ -183,6 +205,32 @@ final class SettingsWindowController: NSWindowController {
         windowButton.title = Preferences.shared.windowCaptureHotkey.displayString
         feedURLField.stringValue = Preferences.shared.updateFeedURL
         autoCheckBox.state = Preferences.shared.automaticallyChecksForUpdates ? .on : .off
+        refreshLaunchAtLogin()
+    }
+
+    // MARK: - 开机启动
+
+    /// 以**系统状态**回写控件。不能用「用户点了什么」当作显示状态：
+    /// 注册可能失败、也可能需要用户去系统设置里批准，那时勾选框不能显示成已设置 ——
+    /// 否则关掉窗口再打开会看到它自己变回去了，用户只会觉得这个开关坏了。
+    private func refreshLaunchAtLogin() {
+        launchAtLoginBox.state = (LaunchAtLogin.status == .enabled) ? .on : .off
+        launchAtLoginBox.isEnabled = (LaunchAtLogin.status != .unavailable)
+        if LaunchAtLogin.status == .unavailable {
+            launchAtLoginBox.toolTip = "需要从「应用程序」里的 AISnap 使用"
+        }
+    }
+
+    @objc private func launchAtLoginToggled(_ sender: NSButton) {
+        if let problem = LaunchAtLogin.setEnabled(sender.state == .on) {
+            statusLabel.stringValue = problem
+            statusLabel.textColor = .systemOrange
+            statusLabel.isHidden = false
+        }
+        refreshLaunchAtLogin()
+        if let window = window {
+            window.setContentSize(window.contentView?.fittingSize ?? window.frame.size)
+        }
     }
 
     // MARK: - 更新设置
@@ -299,6 +347,9 @@ final class SettingsWindowController: NSWindowController {
     /// 供 AppDelegate 调用：窗口显示前先同步一次已存值。
     func present() {
         stopRecording()
+        // 每次都重新读：开机启动的真实状态在系统手里，用户可能在
+        // 「系统设置 → 通用 → 登录项与扩展」里改过，窗口不能显示上次的旧状态
+        refreshFromPreferences()
         showProblems([])
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
