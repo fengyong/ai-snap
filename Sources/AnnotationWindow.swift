@@ -440,10 +440,8 @@ class AnnotationWindow: NSWindow {
                   let self = self else { return }
 
             let image = self.annotationView.compositeImage()
-            if let tiffData = image.tiffRepresentation,
-               let bitmap = NSBitmapImageRep(data: tiffData),
-               let pngData = bitmap.representation(using: .png, properties: [:]) {
-                try? pngData.write(to: url)
+            if let data = self.pngData(from: image) {
+                try? data.write(to: url)
             }
         }
     }
@@ -452,8 +450,52 @@ class AnnotationWindow: NSWindow {
         let image = annotationView.compositeImage()
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.writeObjects([image])
+
+        // 同时写入「图片内容」与「图片文件」：
+        //   - 图片内容 → 可直接粘贴到聊天窗口 / 文档
+        //   - 图片文件 → 可在访达里直接 ⌘V 存成 .png
+        var items: [NSPasteboardWriting] = [image]
+        if let url = writeTemporaryPNG(image) {
+            items.append(url as NSURL)
+        }
+        pb.writeObjects(items)
     }
+
+    // MARK: - 导出辅助
+
+    /// 把 NSImage 编码为 PNG 数据。
+    private func pngData(from image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
+    /// 写入剪贴板用的临时 PNG，返回其 URL。
+    ///
+    /// 失败时返回 nil —— 此时调用方仍会写入图片内容，复制功能不受影响。
+    /// 文件名带毫秒时间戳，避免连续复制时互相覆盖（文件引用会失效）。
+    private func writeTemporaryPNG(_ image: NSImage) -> URL? {
+        guard let data = pngData(from: image) else { return nil }
+
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AISnap", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let name = "AISnap-\(AnnotationWindow.timestampFormatter.string(from: Date())).png"
+        let url = dir.appendingPathComponent(name)
+        do {
+            try data.write(to: url)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    private static let timestampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd-HHmmss-SSS"
+        return formatter
+    }()
 
     @objc private func showAbout() {
         let alert = NSAlert()
@@ -500,7 +542,8 @@ class AnnotationWindow: NSWindow {
 
         【导出】
         - 保存：导出为 PNG 文件
-        - 复制：复制到系统剪贴板
+        - 复制：复制到系统剪贴板（同时写入图片内容和图片文件，
+          因此既可直接粘贴到聊天窗口，也能在访达里 ⌘V 存成 .png）
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "知道了")
