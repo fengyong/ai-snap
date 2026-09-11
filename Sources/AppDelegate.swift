@@ -59,6 +59,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "区域截图", action: #selector(startRegionCapture), keyEquivalent: "1"))
         menu.addItem(NSMenuItem(title: "窗口截图", action: #selector(startWindowCapture), keyEquivalent: "2"))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "恢复默认设置",
+                                action: #selector(resetPreferences), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quitApp), keyEquivalent: "q"))
 
         for item in menu.items {
@@ -119,6 +122,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    /// 清空已存的偏好，回到出厂默认值。
+    ///
+    /// 只影响**之后**新建的标注窗口：已经打开的窗口里，控件与画布仍持有旧值，
+    /// 用户一动它们就会把偏好又写回去。所以这里明确告知影响范围，
+    /// 而不是假装「立即全部生效」。
+    @objc private func resetPreferences() {
+        Preferences.shared.resetToDefaults()
+
+        // 附件型应用（无 Dock 图标）不主动激活的话，弹窗会被压在其它窗口后面
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "已恢复默认设置"
+        alert.informativeText = """
+            线宽、颜色、线型、箭头样式、调色板、水印与默认工具已恢复为出厂值。
+
+            已打开的标注窗口不受影响，下次截图时生效。
+            """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 
     // MARK: - Annotation
