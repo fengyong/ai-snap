@@ -56,6 +56,13 @@ extension AnnotationView {
                 updateAttachedArrows(forParent: colorKey)
                 redoStack.append(.scale(colorKey: colorKey, factor: factor))
             }
+
+        case .editText(let colorKey, let previous):
+            if let shape = objects[colorKey] as? TextShape {
+                let current = shape.text
+                shape.text = previous
+                redoStack.append(.editText(colorKey: colorKey, previous: current))
+            }
         }
 
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
@@ -114,6 +121,13 @@ extension AnnotationView {
                 obj.scale(by: factor)
                 updateAttachedArrows(forParent: colorKey)
                 undoStack.append(.scale(colorKey: colorKey, factor: factor))
+            }
+
+        case .editText(let colorKey, let previous):
+            if let shape = objects[colorKey] as? TextShape {
+                let current = shape.text
+                shape.text = previous
+                undoStack.append(.editText(colorKey: colorKey, previous: current))
             }
         }
 

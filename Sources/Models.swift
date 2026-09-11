@@ -24,6 +24,64 @@ func distanceBetween(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
     return hypot(a.x - b.x, a.y - b.y)
 }
 
+// MARK: - Rect Perimeter
+
+/// 矩形类形状的周长参数化。
+///
+/// 「参数 → 点」与「点 → 参数」是**互逆的一对**，必须用同一套分段反向。
+/// 分成两份独立实现（一份在形状里、一份在附着判定里）的后果很隐蔽：
+/// 箭头会吸附到与鼠标实际位置不符的地方，看起来像「箭头自己乱跳」。
+/// 这里做成单一实现，让两者不一致这件事在结构上不可能发生。
+///
+/// 分段顺序：**下边（左→右）→ 右边（下→上）→ 上边（右→左）→ 左边（上→下）**，
+/// 与 `RectangleShape` 一直以来的约定保持一致。
+///
+/// 矩形、贴纸（正方形）、文字标注三种形状共用。
+enum RectPerimeter {
+
+    /// 点 → 周长参数 (0...1)
+    static func parameter(for point: CGPoint, center: CGPoint,
+                          size: CGSize, rotation: CGFloat) -> CGFloat {
+        let perimeter = 2 * (size.width + size.height)
+        guard perimeter > 0 else { return 0 }
+
+        // 先转到形状的局部坐标（把旋转消掉），再按轴对齐矩形判定
+        let local = rotatePoint(point, around: center, by: -rotation)
+        let lx = local.x - center.x
+        let ly = local.y - center.y
+        let hw = size.width / 2, hh = size.height / 2
+
+        var d: CGFloat = 0
+        if ly <= -hh + 0.1 { d = lx + hw }                                   // 下边
+        else if lx >= hw - 0.1 { d = size.width + (ly + hh) }                // 右边
+        else if ly >= hh - 0.1 { d = size.width + size.height + (hw - lx) }  // 上边
+        else { d = 2 * size.width + size.height + (hh - ly) }                // 左边
+        return max(0, min(1, d / perimeter))
+    }
+
+    /// 周长参数 (0...1) → 边界上的世界坐标点
+    static func point(at parameter: CGFloat, center: CGPoint,
+                      size: CGSize, rotation: CGFloat) -> CGPoint {
+        let perimeter = 2 * (size.width + size.height)
+        guard perimeter > 0 else { return center }
+
+        let hw = size.width / 2, hh = size.height / 2
+        let d = parameter * perimeter
+        var local: CGPoint
+        if d < size.width {
+            local = CGPoint(x: -hw + d, y: -hh)                                  // 下边
+        } else if d < size.width + size.height {
+            local = CGPoint(x: hw, y: -hh + (d - size.width))                    // 右边
+        } else if d < 2 * size.width + size.height {
+            local = CGPoint(x: hw - (d - size.width - size.height), y: hh)       // 上边
+        } else {
+            local = CGPoint(x: -hw, y: hh - (d - 2 * size.width - size.height))  // 左边
+        }
+        return rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
+                           around: center, by: rotation)
+    }
+}
+
 // MARK: - Snap Points
 
 enum SnapPointType {
@@ -279,6 +337,8 @@ enum UndoAction {
     case rotate(colorKey: UInt32, angle: CGFloat)
     /// 缩放了对象
     case scale(colorKey: UInt32, factor: CGFloat)
+    /// 改了文字标注的内容（撤销 = 改回 previous）
+    case editText(colorKey: UInt32, previous: String)
 }
 
 // MARK: - Cyclic Index
@@ -316,6 +376,7 @@ enum DrawingTool: Equatable {
     case ellipse   // 椭圆（独立 radiusX / radiusY）
     case stamp(StampType)
     case step      // 序号标注（单击放置，编号自动递增）
+    case text      // 文字标注（单击放置后原地输入）
     case spotlight
 
     static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
@@ -323,7 +384,7 @@ enum DrawingTool: Equatable {
         case (.arrow, .arrow), (.rectangle, .rectangle),
              (.roundedRectangle, .roundedRectangle),
              (.circle, .circle), (.ellipse, .ellipse),
-             (.step, .step), (.spotlight, .spotlight):
+             (.step, .step), (.text, .text), (.spotlight, .spotlight):
             return true
         case (.stamp, .stamp):
             return true  // 所有 stamp 视为同类工具
@@ -751,21 +812,9 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
 
     /// 周长参数 (0...1) → 对应的周长上的世界坐标点
     func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        let hw = width / 2, hh = height / 2
-        let perimeter = 2 * (width + height)
-        let d = parameter * perimeter
-        var local: CGPoint
-        if d < width {
-            local = CGPoint(x: -hw + d, y: -hh)
-        } else if d < width + height {
-            local = CGPoint(x: hw, y: -hh + (d - width))
-        } else if d < 2 * width + height {
-            local = CGPoint(x: hw - (d - width - height), y: hh)
-        } else {
-            local = CGPoint(x: -hw, y: hh - (d - 2 * width - height))
-        }
-        return rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
-                           around: center, by: rotation)
+        RectPerimeter.point(at: parameter, center: center,
+                            size: CGSize(width: width, height: height),
+                            rotation: rotation)
     }
 
     // MARK: Transform
@@ -1072,21 +1121,10 @@ class StampObject: AnnotationObject {
 
     /// 周长参数 (0...1) → 正方形包围盒周长上的世界坐标点
     func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        let half = size / 2
-        let perimeter = size * 4
-        let d = parameter * perimeter
-        var local: CGPoint
-        if d < size {
-            local = CGPoint(x: -half + d, y: -half)
-        } else if d < 2 * size {
-            local = CGPoint(x: half, y: -half + (d - size))
-        } else if d < 3 * size {
-            local = CGPoint(x: half - (d - 2 * size), y: half)
-        } else {
-            local = CGPoint(x: -half, y: half - (d - 3 * size))
-        }
-        return rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
-                           around: center, by: rotation)
+        // 正方形 → 尺寸就是边长；与「点 → 参数」共用 RectPerimeter 的同一套分段
+        RectPerimeter.point(at: parameter, center: center,
+                            size: CGSize(width: size, height: size),
+                            rotation: rotation)
     }
 
     // MARK: Transform
@@ -1234,6 +1272,157 @@ class StepBadge: AnnotationObject {
 
     func scale(by factor: CGFloat) {
         radius = max(radius * abs(factor), 6)
+    }
+}
+
+// MARK: - TextShape
+
+/// 文字标注。
+///
+/// **尺寸由文字内容与字号推导，不单独存宽高**：改字号、改文字之后，
+/// 包围盒 / 命中区 / 选择手柄会自动跟着变。若额外存一份宽高，就得在
+/// 「改文字」「改字号」「缩放」三处都记得同步，漏一处就出 bug。
+final class TextShape: AnnotationObject {
+    let id: UUID
+    let hitTestColorKey: UInt32
+    var center: CGPoint
+    var text: String
+    var fontSize: CGFloat
+    var rotation: CGFloat
+    var color: NSColor
+
+    /// 文字四周的留白（点）。给一点留白，免得命中区紧贴字边难点击。
+    static let padding: CGFloat = 4
+
+    init(center: CGPoint, text: String, fontSize: CGFloat = 20,
+         color: NSColor = .systemRed, rotation: CGFloat = 0,
+         hitTestColorKey: UInt32) {
+        self.id = UUID()
+        self.hitTestColorKey = hitTestColorKey
+        self.center = center
+        self.text = text
+        self.fontSize = fontSize
+        self.rotation = rotation
+        self.color = color
+    }
+
+    var font: NSFont { NSFont.systemFont(ofSize: fontSize, weight: .semibold) }
+
+    /// 绘制与测量共用同一份属性 —— 这是「量出来的框」和「画出来的字」能对齐的前提。
+    /// 两边各写一份字体/段落设置，迟早会漂移。
+    var attributes: [NSAttributedString.Key: Any] {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        paragraph.lineBreakMode = .byWordWrapping
+        return [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
+    }
+
+    /// 内容尺寸（含留白）。多行文字由 NSString 的 size(withAttributes:) 自动计入行数。
+    var contentSize: CGSize {
+        let raw = (text as NSString).size(withAttributes: attributes)
+        return CGSize(width: ceil(raw.width) + Self.padding * 2,
+                      height: ceil(raw.height) + Self.padding * 2)
+    }
+
+    var boundingBox: CGRect {
+        let corners = selectionHandlePoints()
+        let xs = corners.map(\.x)
+        let ys = corners.map(\.y)
+        guard let minX = xs.min(), let maxX = xs.max(),
+              let minY = ys.min(), let maxY = ys.max() else {
+            let size = contentSize
+            return CGRect(x: center.x - size.width / 2, y: center.y - size.height / 2,
+                          width: size.width, height: size.height)
+        }
+        // 旋转后取外接矩形，避免手柄跑到框外
+        return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    // MARK: Drawing
+
+    func draw(in ctx: CGContext) {
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+
+        let size = contentSize
+        let rect = CGRect(x: -size.width / 2, y: -size.height / 2,
+                          width: size.width, height: size.height)
+        // 用 draw(in:) 而不是 draw(at:)：前者能正确处理多行与居中，
+        // 且在非翻转坐标系下的位置也是对的
+        (text as NSString).draw(in: rect.insetBy(dx: Self.padding, dy: Self.padding),
+                                withAttributes: attributes)
+
+        ctx.restoreGState()
+    }
+
+    func drawHitTest(in ctx: CGContext, color: NSColor) {
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+        let size = contentSize
+        ctx.setFillColor(color.cgColor)
+        // 外扩 6 点：文字笔画细，紧贴字边很难点中
+        ctx.fill(CGRect(x: -size.width / 2 - 6, y: -size.height / 2 - 6,
+                        width: size.width + 12, height: size.height + 12))
+        ctx.restoreGState()
+    }
+
+    // MARK: Selection & Snap
+
+    func selectionHandlePoints() -> [CGPoint] {
+        let size = contentSize
+        let hw = size.width / 2, hh = size.height / 2
+        let locals = [
+            CGPoint(x: -hw, y: -hh), CGPoint(x: hw, y: -hh),
+            CGPoint(x: hw, y: hh), CGPoint(x: -hw, y: hh),
+        ]
+        return locals.map { local in
+            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
+                        around: center, by: rotation)
+        }
+    }
+
+    func snapPoints() -> [SnapPoint] {
+        var points = [SnapPoint(point: center, type: .center)]
+        for handle in selectionHandlePoints() {
+            points.append(SnapPoint(point: handle, type: .corner))
+        }
+        return points
+    }
+
+    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
+        let local = rotatePoint(point, around: center, by: -rotation)
+        let size = contentSize
+        let hw = size.width / 2, hh = size.height / 2
+        let clamped = CGPoint(x: min(max(local.x, center.x - hw), center.x + hw),
+                              y: min(max(local.y, center.y - hh), center.y + hh))
+        return rotatePoint(clamped, around: center, by: rotation)
+    }
+
+    /// 周长参数 (0...1) → 矩形边界上的世界坐标点。
+    ///
+    /// 与「点 → 参数」共用 `RectPerimeter` 的同一套分段 —— 两者是互逆的一对，
+    /// 各写一份会让箭头吸附到错的位置。
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        RectPerimeter.point(at: parameter, center: center,
+                            size: contentSize, rotation: rotation)
+    }
+
+    // MARK: Transform
+
+    func move(by delta: CGVector) {
+        center.x += delta.dx
+        center.y += delta.dy
+    }
+
+    func rotate(by angle: CGFloat) {
+        rotation += angle
+    }
+
+    /// 缩放作用在**字号**上 —— 文字的「大小」就是字号，改宽高没有意义
+    func scale(by factor: CGFloat) {
+        fontSize = min(max(fontSize * abs(factor), 8), 300)
     }
 }
 
