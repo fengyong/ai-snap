@@ -217,13 +217,14 @@ enum DrawingTool: Equatable {
     case circle    // 正圆（radiusX == radiusY）
     case ellipse   // 椭圆（独立 radiusX / radiusY）
     case stamp(StampType)
+    case step      // 序号标注（单击放置，编号自动递增）
     case spotlight
 
     static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
         switch (lhs, rhs) {
         case (.arrow, .arrow), (.rectangle, .rectangle),
              (.circle, .circle), (.ellipse, .ellipse),
-             (.spotlight, .spotlight):
+             (.step, .step), (.spotlight, .spotlight):
             return true
         case (.stamp, .stamp):
             return true  // 所有 stamp 视为同类工具
@@ -965,6 +966,138 @@ class StampObject: AnnotationObject {
 
     func scale(by factor: CGFloat) {
         size *= abs(factor)
+    }
+}
+
+// MARK: - StepBadge
+
+/// 序号标注：圆形底 + 居中数字，用于步骤说明（Step 1 / 2 / 3）。
+///
+/// 因为命中检测走 Layer B 的像素读取，本类只需正确实现 `drawHitTest`，
+/// 选中 / 移动 / 旋转 / 缩放 / 撤销重做会全部自动继承，无额外代码。
+class StepBadge: AnnotationObject {
+    let id: UUID
+    let hitTestColorKey: UInt32
+    var center: CGPoint
+    var radius: CGFloat
+    var rotation: CGFloat
+    var color: NSColor
+    /// 显示的数字。由调用方（AnnotationView）在创建时分配
+    var number: Int
+
+    init(center: CGPoint, number: Int, radius: CGFloat = 18,
+         color: NSColor = .systemRed, rotation: CGFloat = 0,
+         hitTestColorKey: UInt32) {
+        self.id = UUID()
+        self.center = center
+        self.number = number
+        self.radius = radius
+        self.rotation = rotation
+        self.color = color
+        self.hitTestColorKey = hitTestColorKey
+    }
+
+    var boundingBox: CGRect {
+        let half = radius + 2
+        return CGRect(x: center.x - half, y: center.y - half,
+                      width: half * 2, height: half * 2)
+    }
+
+    // MARK: Drawing
+
+    func draw(in ctx: CGContext) {
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+
+        // 圆形底
+        let rect = CGRect(x: -radius, y: -radius, width: radius * 2, height: radius * 2)
+        ctx.setFillColor(color.cgColor)
+        ctx.fillEllipse(in: rect)
+
+        // 居中数字（沿用 StampObject.drawEmoji 的文本绘制方式）
+        let font = NSFont.systemFont(ofSize: radius * 1.25, weight: .bold)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.white,
+        ]
+        let text = "\(number)" as NSString
+        let textSize = text.size(withAttributes: attrs)
+        text.draw(at: CGPoint(x: -textSize.width / 2, y: -textSize.height / 2),
+                  withAttributes: attrs)
+
+        ctx.restoreGState()
+    }
+
+    func drawHitTest(in ctx: CGContext, color: NSColor) {
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+        // 用外接正方形填充，比圆形更容易点中
+        let half = radius + 6
+        ctx.setFillColor(color.cgColor)
+        ctx.fill(CGRect(x: -half, y: -half, width: half * 2, height: half * 2))
+        ctx.restoreGState()
+    }
+
+    // MARK: Selection & Snap
+
+    func selectionHandlePoints() -> [CGPoint] {
+        let half = radius
+        let locals = [
+            CGPoint(x: -half, y: -half), CGPoint(x: half, y: -half),
+            CGPoint(x: half, y: half), CGPoint(x: -half, y: half),
+        ]
+        return locals.map { local in
+            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
+                        around: center, by: rotation)
+        }
+    }
+
+    func snapPoints() -> [SnapPoint] {
+        var points = [SnapPoint(point: center, type: .center)]
+        for handle in selectionHandlePoints() {
+            points.append(SnapPoint(point: handle, type: .corner))
+        }
+        return points
+    }
+
+    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
+        let localPt = rotatePoint(point, around: center, by: -rotation)
+        let lx = localPt.x - center.x
+        let ly = localPt.y - center.y
+        let r = radius
+        let distance = hypot(lx, ly)
+        guard distance > 0 else {
+            return rotatePoint(CGPoint(x: center.x + r, y: center.y),
+                               around: center, by: rotation)
+        }
+        let nearest = CGPoint(x: center.x + r * lx / distance,
+                              y: center.y + r * ly / distance)
+        return rotatePoint(nearest, around: center, by: rotation)
+    }
+
+    /// 周长参数 (0...1) → 圆周上的世界坐标点
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        let angle = parameter * 2 * .pi - .pi / 2
+        let local = CGPoint(x: center.x + radius * cos(angle),
+                            y: center.y + radius * sin(angle))
+        return rotatePoint(local, around: center, by: rotation)
+    }
+
+    // MARK: Transform
+
+    func move(by delta: CGVector) {
+        center.x += delta.dx
+        center.y += delta.dy
+    }
+
+    func rotate(by angle: CGFloat) {
+        rotation += angle
+    }
+
+    func scale(by factor: CGFloat) {
+        radius = max(radius * abs(factor), 6)
     }
 }
 

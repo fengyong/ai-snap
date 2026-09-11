@@ -160,13 +160,14 @@ class AnnotationWindow: NSWindow {
         var xOffset: CGFloat = 8
 
         // ── 绘图工具（带文字标签）──
-        addGroupLabel("绘图工具", to: toolbar, at: xOffset, width: 190)
+        addGroupLabel("绘图工具", to: toolbar, at: xOffset, width: 232)
         let tools: [(String, String)] = [
             ("箭头", "绘制箭头标注"),
             ("矩形", "绘制矩形框"),
             ("圆形", "拖拽绘制正圆"),
             ("椭圆", "拖拽绘制椭圆"),
             ("聚光", "聚光灯高亮区域"),
+            ("序号", "单击放置序号标注（编号自动递增）"),
         ]
         for (i, (title, tip)) in tools.enumerated() {
             let btn = makeToolbarButton(title: title, tooltip: tip, at: xOffset, tag: i,
@@ -371,7 +372,7 @@ class AnnotationWindow: NSWindow {
     }
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
-        let tools: [DrawingTool] = [.arrow, .rectangle, .circle, .ellipse, .spotlight]
+        let tools: [DrawingTool] = [.arrow, .rectangle, .circle, .ellipse, .spotlight, .step]
         if sender.tag >= 0 && sender.tag < tools.count {
             annotationView.currentTool = tools[sender.tag]
             updateToolButtonStates(selectedIndex: sender.tag)
@@ -516,6 +517,7 @@ class AnnotationWindow: NSWindow {
         - 圆形：拖拽绘制正圆（取宽高较大值为直径）
         - 椭圆：拖拽绘制椭圆（宽高独立）
         - 聚光：拖拽框选高亮区域，其余区域变暗
+        - 序号：单击放置带数字的圆形标记，编号自动递增（1、2、3…）
 
         【端点捕捉】
         鼠标悬停在已有对象的中心、边角、象限点附近时
