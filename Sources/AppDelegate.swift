@@ -13,6 +13,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         setupHotkeys()
         // 首次启动时请求屏幕录制权限
         requestScreenCapturePermission()
+        // 自动检查更新默认关闭；开着但没配地址时也直接跳过（不打扰）
+        if Preferences.shared.automaticallyChecksForUpdates {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                self?.runUpdateCheck(triggeredByUser: false)
+            }
+        }
     }
 
     // MARK: - Hotkeys
@@ -71,9 +77,81 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                     windowHandler: { [weak self] in self?.startWindowCapture() }
                 )
             }
+            controller.onCheckForUpdates = { [weak self] in
+                self?.runUpdateCheck(triggeredByUser: true)
+            }
             settingsWindowController = controller
         }
         settingsWindowController?.present()
+    }
+
+    // MARK: - 更新
+
+    @objc private func checkForUpdatesManually() {
+        runUpdateCheck(triggeredByUser: true)
+    }
+
+    /// 检查更新。
+    ///
+    /// `triggeredByUser` 决定"没配置 / 失败"要不要出声：手动点的时候必须说明原因，
+    /// 而启动时自动检查失败应该**完全静默** —— 一个截图工具因为后台联网失败弹窗，
+    /// 是纯粹的打扰。
+    private func runUpdateCheck(triggeredByUser: Bool) {
+        guard let feedURL = UpdateChecker.configuredFeedURL else {
+            guard triggeredByUser else { return }
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.messageText = "还没有配置更新地址"
+            alert.informativeText = "在「偏好设置 → 更新」里填入更新清单（appcast）的地址后即可检查。\n\n"
+                + "清单是一个 JSON 文件，例如：\n"
+                + "{\"version\": \"1.2.0\", \"downloadURL\": \"https://…\", \"notes\": \"修复了…\"}"
+            alert.addButton(withTitle: "打开偏好设置")
+            alert.addButton(withTitle: "好")
+            if alert.runModal() == .alertFirstButtonReturn { showPreferences() }
+            return
+        }
+
+        UpdateChecker.check(currentVersion: AppInfo.currentVersion,
+                            feedURL: feedURL) { [weak self] result in
+            guard let self = self else { return }
+            switch result {
+            case .upToDate(let current):
+                guard triggeredByUser else { return }
+                self.presentUpdateAlert(
+                    title: "已是最新版本",
+                    text: "当前版本 \(current)。",
+                    downloadURL: nil)
+
+            case .updateAvailable(let current, let version, let downloadURL, let notes):
+                self.presentUpdateAlert(
+                    title: "有新版本 \(version)",
+                    text: "当前版本 \(current)。" + (notes.map { "\n\n\($0)" } ?? ""),
+                    downloadURL: URL(string: downloadURL))
+
+            case .failed(let reason):
+                guard triggeredByUser else { return }
+                self.presentUpdateAlert(title: "检查更新失败", text: reason,
+                                        downloadURL: nil)
+            }
+        }
+    }
+
+    private func presentUpdateAlert(title: String, text: String, downloadURL: URL?) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = text
+        alert.alertStyle = .informational
+        if let downloadURL = downloadURL {
+            alert.addButton(withTitle: "前往下载")
+            alert.addButton(withTitle: "稍后")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(downloadURL)
+            }
+        } else {
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+        }
     }
 
     // MARK: - Screen Recording Permission
@@ -124,6 +202,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(NSMenuItem(title: "窗口截图", action: #selector(startWindowCapture), keyEquivalent: "2"))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "截图历史…", action: #selector(showHistory), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "检查更新…", action: #selector(checkForUpdatesManually), keyEquivalent: ""))
         // 不给 keyEquivalent：状态栏菜单只在菜单展开时响应按键，
         // 标上 ⌘, 会让人以为随时可用，不如不标。
         menu.addItem(NSMenuItem(title: "偏好设置…", action: #selector(showPreferences), keyEquivalent: ""))

@@ -36,6 +36,8 @@ final class Preferences {
         case watermarkText
         case hotkeyRegion
         case hotkeyWindow
+        case updateFeedURL
+        case autoCheckUpdates
     }
 
     /// 缺省值集中在这里。改动这一处即同时改变「新用户初值」与「老用户缺键回退值」。
@@ -184,13 +186,33 @@ final class Preferences {
         defaults.set("\(config.keyCode):\(config.carbonModifiers)", forKey: key.rawValue)
     }
 
+    // MARK: - 更新
+
+    /// 更新清单（appcast）地址。留空表示"还没有发布渠道"，此时只保留手动检查入口。
+    ///
+    /// 做成可配置而不是写死在代码里：这个地址在应用发布之前是不存在的，
+    /// 写死一个占位地址只会制造"检查更新永远失败"的假象。
+    var updateFeedURL: String {
+        get { defaults.string(forKey: Key.updateFeedURL.rawValue) ?? "" }
+        set { defaults.set(newValue, forKey: Key.updateFeedURL.rawValue) }
+    }
+
+    /// 启动时自动检查更新。**默认关闭** —— 一个截图工具在用户没要求的情况下
+    /// 每次启动都去联网，是很不礼貌的行为。
+    var automaticallyChecksForUpdates: Bool {
+        get {
+            defaults.object(forKey: Key.autoCheckUpdates.rawValue) as? Bool ?? false
+        }
+        set { defaults.set(newValue, forKey: Key.autoCheckUpdates.rawValue) }
+    }
+
     // MARK: - 恢复默认
 
     /// 清空所有已存偏好，回到 `Defaults`。
     func resetToDefaults() {
         for key in [Key.lineWidth, Key.lineStyle, Key.colorHex, Key.arrowStyleIndex,
                     Key.paletteIndex, Key.lastToolTag, Key.watermarkEnabled, Key.watermarkText,
-                    Key.hotkeyRegion, Key.hotkeyWindow] {
+                    Key.hotkeyRegion, Key.hotkeyWindow, Key.updateFeedURL, Key.autoCheckUpdates] {
             defaults.removeObject(forKey: key.rawValue)
         }
     }
