@@ -2,14 +2,17 @@ import Cocoa
 
 /// 标注画布 — 支持多形状类型的双图层 Color Picking 方案
 class AnnotationView: NSView {
-    // Layer O: 原始截图
-    private let baseImage: NSImage
+    // Layer O: 原始截图。非 private：吸附与渲染的扩展文件要用
+    let baseImage: NSImage
     // Map<唯一颜色Key, AnnotationObject>
-    private var objects: [UInt32: any AnnotationObject] = [:]
-    // Z 序：从底到顶的 colorKey 数组
-    private var zOrder: [UInt32] = []
-    // Layer B: 隐藏的 hit test 缓冲区
-    private var hitTestBuffer: HitTestBuffer
+    /// 画布上的全部标注对象。**非 private**：拆分到其它文件的扩展要用
+    /// （附着、吸附、撤销重做各在独立文件里）。Swift 没有比 internal 更细的
+    /// 同模块访问级别，所以拆文件必然要放宽这一层。
+    var objects: [UInt32: any AnnotationObject] = [:]
+    // Z 序：从底到顶的 colorKey 数组。非 private，同上（扩展文件要用）
+    var zOrder: [UInt32] = []
+    // Layer B: 隐藏的 hit test 缓冲区。非 private，同上
+    var hitTestBuffer: HitTestBuffer
 
     private var state: CanvasState = .idle
     private var currentDrawEnd: CGPoint?
@@ -66,18 +69,19 @@ class AnnotationView: NSView {
         }
     }
 
-    // 当前被选中的对象 key
-    private(set) var selectedKey: UInt32?
+    // 当前被选中的对象 key。非 private：撤销/重做扩展会清空它
+    var selectedKey: UInt32?
 
     // 点捕捉：当前活跃的吸附点（用于可视化）
-    private var activeSnapPoint: CGPoint?
-    private let snapThreshold: CGFloat = 12.0
+    // 非 private：吸附扩展文件要用
+    var activeSnapPoint: CGPoint?
+    let snapThreshold: CGFloat = 12.0
     // 起始点是否吸附到了 snap point → 以该点为中心绘制
     private var drawingFromCenter: Bool = false
 
-    // Undo/Redo 栈
-    private var undoStack: [UndoAction] = []
-    private var redoStack: [UndoAction] = []
+    // Undo/Redo 栈。非 private：撤销/重做已拆到 AnnotationView+UndoRedo.swift
+    var undoStack: [UndoAction] = []
+    var redoStack: [UndoAction] = []
     // 拖拽操作前的起始中心，用于计算总 delta
     private var dragStartCenter: CGPoint?
     private var rotateStartAngle: CGFloat = 0
@@ -464,112 +468,7 @@ class AnnotationView: NSView {
 
     // MARK: - Undo / Redo
 
-    func performUndo() {
-        guard let action = undoStack.popLast() else { return }
-        selectedKey = nil
-
-        switch action {
-        case .add(let colorKey):
-            // 撤销添加 = 删除该对象
-            // 保存当前 zOrder（含该对象）供 redo 恢复用
-            if let obj = objects[colorKey] {
-                redoStack.append(.delete(objects: [(colorKey, obj)], zOrderSnapshot: zOrder))
-            }
-            objects.removeValue(forKey: colorKey)
-            zOrder.removeAll { $0 == colorKey }
-
-        case .delete(let deletedObjects, let zOrderSnapshot):
-            // 撤销删除 = 恢复所有被删除的对象和 z-order
-            // 保存当前 zOrder（不含已删除对象）供 redo 重新删除用
-            let zOrderWithout = zOrder
-            for (key, obj) in deletedObjects {
-                objects[key] = obj
-            }
-            zOrder = zOrderSnapshot
-            redoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderWithout))
-
-        case .move(let colorKey, let delta):
-            if let obj = objects[colorKey] {
-                let reverseDelta = CGVector(dx: -delta.dx, dy: -delta.dy)
-                obj.move(by: reverseDelta)
-                updateAttachedArrows(forParent: colorKey)
-                redoStack.append(.move(colorKey: colorKey, delta: delta))
-            }
-
-        case .rotate(let colorKey, let angle):
-            if let obj = objects[colorKey] {
-                obj.rotate(by: -angle)
-                updateAttachedArrows(forParent: colorKey)
-                redoStack.append(.rotate(colorKey: colorKey, angle: angle))
-            }
-
-        case .scale(let colorKey, let factor):
-            if let obj = objects[colorKey] {
-                obj.scale(by: 1.0 / factor)
-                updateAttachedArrows(forParent: colorKey)
-                redoStack.append(.scale(colorKey: colorKey, factor: factor))
-            }
-        }
-
-        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
-        refreshDebugView()
-        needsDisplay = true
-    }
-
-    func performRedo() {
-        guard let action = redoStack.popLast() else { return }
-        selectedKey = nil
-
-        switch action {
-        case .add:
-            // .add 不再出现在 redo 栈中，保留以保证 switch 完整
-            break
-
-        case .delete(let savedObjects, let savedZOrder):
-            // 通过检查对象是否存在判断操作方向
-            let firstKey = savedObjects[0].0
-            if objects[firstKey] != nil {
-                // 对象存在 → 重做删除（从 undo .delete 推入）
-                undoStack.append(.delete(objects: savedObjects, zOrderSnapshot: zOrder))
-                for (key, _) in savedObjects {
-                    objects.removeValue(forKey: key)
-                }
-                zOrder = savedZOrder
-            } else {
-                // 对象不存在 → 重做添加（从 undo .add 推入）
-                for (key, obj) in savedObjects {
-                    objects[key] = obj
-                }
-                zOrder = savedZOrder
-                undoStack.append(.add(colorKey: firstKey))
-            }
-
-        case .move(let colorKey, let delta):
-            if let obj = objects[colorKey] {
-                obj.move(by: delta)
-                updateAttachedArrows(forParent: colorKey)
-                undoStack.append(.move(colorKey: colorKey, delta: delta))
-            }
-
-        case .rotate(let colorKey, let angle):
-            if let obj = objects[colorKey] {
-                obj.rotate(by: angle)
-                updateAttachedArrows(forParent: colorKey)
-                undoStack.append(.rotate(colorKey: colorKey, angle: angle))
-            }
-
-        case .scale(let colorKey, let factor):
-            if let obj = objects[colorKey] {
-                obj.scale(by: factor)
-                updateAttachedArrows(forParent: colorKey)
-                undoStack.append(.scale(colorKey: colorKey, factor: factor))
-            }
-        }
-
-        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
-        refreshDebugView()
-        needsDisplay = true
-    }
+    // performUndo / performRedo 已拆到 AnnotationView+UndoRedo.swift
 
     // MARK: - 序号标注
 
@@ -589,6 +488,9 @@ class AnnotationView: NSView {
 
     // MARK: - Drawing (Layer A)
 
+    // `draw(_:)` 是 NSView 的 override，而 Swift 不允许在 extension 里写 override，
+    // 所以它必须留在类体内当渲染入口；它调用的绘制细节
+    // （drawSelectionHandles / drawPreview）在 AnnotationView+Rendering.swift。
     override func draw(_ dirtyRect: NSRect) {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
@@ -621,74 +523,14 @@ class AnnotationView: NSView {
         }
     }
 
-    private func drawSelectionHandles(for obj: any AnnotationObject, in ctx: CGContext) {
-        let box = obj.boundingBox
-        let padding: CGFloat = 4
-
-        // 1. 发光选中框（蓝色阴影 + 虚线边框）
-        ctx.saveGState()
-        let selRect = box.insetBy(dx: -padding, dy: -padding)
-        ctx.setShadow(offset: .zero, blur: 8, color: NSColor.systemBlue.withAlphaComponent(0.6).cgColor)
-        ctx.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.7).cgColor)
-        ctx.setLineWidth(1.5)
-        ctx.setLineDash(phase: 0, lengths: [5, 3])
-        let selPath = CGPath(roundedRect: selRect, cornerWidth: 3, cornerHeight: 3, transform: nil)
-        ctx.addPath(selPath)
-        ctx.strokePath()
-        ctx.restoreGState()
-
-        // 2. 四角手柄点
-        let handleSize: CGFloat = 6
-        ctx.setFillColor(NSColor.white.cgColor)
-        ctx.setStrokeColor(NSColor.systemBlue.cgColor)
-        ctx.setLineWidth(1.5)
-        ctx.setLineDash(phase: 0, lengths: [])
-
-        for point in obj.selectionHandlePoints() {
-            let handleRect = CGRect(
-                x: point.x - handleSize / 2,
-                y: point.y - handleSize / 2,
-                width: handleSize,
-                height: handleSize
-            )
-            ctx.fillEllipse(in: handleRect)
-            ctx.strokeEllipse(in: handleRect)
-        }
-
-        // 3. 右上角删除叉号按钮
-        let deleteSize: CGFloat = 16
-        let deleteCenter = CGPoint(x: selRect.maxX + deleteSize * 0.3,
-                                    y: selRect.maxY + deleteSize * 0.3)
-        // 红色圆底
-        ctx.saveGState()
-        ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 3, color: NSColor.black.withAlphaComponent(0.3).cgColor)
-        let deleteRect = CGRect(x: deleteCenter.x - deleteSize / 2,
-                                y: deleteCenter.y - deleteSize / 2,
-                                width: deleteSize, height: deleteSize)
-        ctx.setFillColor(NSColor.systemRed.cgColor)
-        ctx.fillEllipse(in: deleteRect)
-        ctx.restoreGState()
-
-        // 白色叉号
-        let crossSize: CGFloat = 4
-        ctx.setStrokeColor(NSColor.white.cgColor)
-        ctx.setLineWidth(2)
-        ctx.setLineCap(.round)
-        ctx.move(to: CGPoint(x: deleteCenter.x - crossSize, y: deleteCenter.y - crossSize))
-        ctx.addLine(to: CGPoint(x: deleteCenter.x + crossSize, y: deleteCenter.y + crossSize))
-        ctx.strokePath()
-        ctx.move(to: CGPoint(x: deleteCenter.x - crossSize, y: deleteCenter.y + crossSize))
-        ctx.addLine(to: CGPoint(x: deleteCenter.x + crossSize, y: deleteCenter.y - crossSize))
-        ctx.strokePath()
-    }
-
     // MARK: - 工具上下文与对象登记
 
     /// 把画布的当前设置打包给工具 handler。
     ///
     /// 两个闭包是必要的妥协：端点吸附与序号编号都需要访问画布上的对象表，
     /// 而 handler 不该持有画布引用（否则拆分就白做了）。
-    private func toolContext(colorKey: UInt32) -> ToolContext {
+    /// 非 private：AnnotationView+Rendering.swift 的拖拽预览要用。
+    func toolContext(colorKey: UInt32) -> ToolContext {
         ToolContext(
             color: currentColor,
             lineWidth: currentLineWidth,
@@ -743,258 +585,20 @@ class AnnotationView: NSView {
         return true
     }
 
-    private func drawPreview(tool: DrawingTool, start: CGPoint, end: CGPoint, in ctx: CGContext) {
-        // 预览的具体画法同样交给工具自己的 handler：画布不再为每个工具维护一个分支。
-        ToolRegistry.handler(for: tool)?
-            .drawPreview(from: start, to: end, tool: tool, in: ctx,
-                         context: toolContext(colorKey: 0))
-    }
+    // drawPreview 已移到 AnnotationView+Rendering.swift
 
     // MARK: - Object Snap
 
-    /// 查找距离 cursor 最近的吸附点（排除指定对象自身）
-    private func findNearestSnapPoint(to cursor: CGPoint, excludeKey: UInt32?) -> SnapPoint? {
-        var bestDist: CGFloat = snapThreshold
-        var bestSnap: SnapPoint?
+    // 吸附查询与两个叠加层（吸附指示器、聚光灯遮罩）已拆到 AnnotationView+Snapping.swift
 
-        for (key, obj) in objects {
-            if key == excludeKey { continue }
-            for snap in obj.snapPoints() {
-                let dist = hypot(cursor.x - snap.point.x, cursor.y - snap.point.y)
-                if dist < bestDist {
-                    bestDist = dist
-                    bestSnap = snap
-                }
-            }
-        }
-        return bestSnap
-    }
+    // MARK: - 附着
 
-    /// 对一个点应用吸附，返回吸附后的点
-    private func applySnap(to point: CGPoint, excludeKey: UInt32?) -> CGPoint {
-        if let snap = findNearestSnapPoint(to: point, excludeKey: excludeKey) {
-            activeSnapPoint = snap.point
-            return snap.point
-        }
-        activeSnapPoint = nil
-        return point
-    }
-
-    /// 绘制吸附指示器
-    private func drawSnapIndicator(at point: CGPoint, in ctx: CGContext) {
-        let size: CGFloat = 8
-        ctx.setStrokeColor(NSColor.systemCyan.cgColor)
-        ctx.setLineWidth(1.5)
-
-        // 十字线
-        ctx.move(to: CGPoint(x: point.x - size, y: point.y))
-        ctx.addLine(to: CGPoint(x: point.x + size, y: point.y))
-        ctx.strokePath()
-        ctx.move(to: CGPoint(x: point.x, y: point.y - size))
-        ctx.addLine(to: CGPoint(x: point.x, y: point.y + size))
-        ctx.strokePath()
-
-        // 菱形
-        ctx.move(to: CGPoint(x: point.x, y: point.y - size * 0.6))
-        ctx.addLine(to: CGPoint(x: point.x + size * 0.6, y: point.y))
-        ctx.addLine(to: CGPoint(x: point.x, y: point.y + size * 0.6))
-        ctx.addLine(to: CGPoint(x: point.x - size * 0.6, y: point.y))
-        ctx.closePath()
-        ctx.strokePath()
-    }
-
-    /// 绘制 Spotlight 遮罩：全图半透明遮盖，挖空所有 SpotlightShape 区域
-    private func drawSpotlightOverlay(in ctx: CGContext) {
-        var spotlights: [SpotlightShape] = []
-        for key in zOrder {
-            if let spot = objects[key] as? SpotlightShape {
-                spotlights.append(spot)
-            }
-        }
-        guard !spotlights.isEmpty else { return }
-
-        let imageRect = CGRect(origin: .zero, size: baseImage.size)
-
-        // 1. 周围区域变暗（even-odd 挖空高亮区域）
-        ctx.saveGState()
-        let fullPath = CGMutablePath()
-        fullPath.addRect(imageRect)
-        for spot in spotlights {
-            var transform = CGAffineTransform.identity
-                .translatedBy(x: spot.center.x, y: spot.center.y)
-                .rotated(by: spot.rotation)
-            let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
-                                   width: spot.width, height: spot.height)
-            let roundedPath = CGPath(roundedRect: localRect,
-                                     cornerWidth: spot.cornerRadius,
-                                     cornerHeight: spot.cornerRadius,
-                                     transform: &transform)
-            fullPath.addPath(roundedPath)
-        }
-        ctx.addPath(fullPath)
-        ctx.clip(using: .evenOdd)
-        ctx.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
-        ctx.fill(imageRect)
-        ctx.restoreGState()
-
-        // 2. 中心高亮区域提亮（白色半透明叠加）
-        for spot in spotlights {
-            ctx.saveGState()
-            var transform = CGAffineTransform.identity
-                .translatedBy(x: spot.center.x, y: spot.center.y)
-                .rotated(by: spot.rotation)
-            let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
-                                   width: spot.width, height: spot.height)
-            let roundedPath = CGPath(roundedRect: localRect,
-                                     cornerWidth: spot.cornerRadius,
-                                     cornerHeight: spot.cornerRadius,
-                                     transform: &transform)
-            ctx.addPath(roundedPath)
-            ctx.clip()
-            ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
-            ctx.fill(imageRect)
-            ctx.restoreGState()
-        }
-    }
-
-    // MARK: - Object Attachment
-
-    private let attachThreshold: CGFloat = 15.0
-
-    /// 检测一个点附近是否有可附着的形状，返回 Attachment 或 nil
-    private func detectAttachment(at point: CGPoint, excludeKey: UInt32?) -> Attachment? {
-        var bestDist: CGFloat = attachThreshold
-        var bestAttachment: Attachment?
-
-        for (key, obj) in objects {
-            if key == excludeKey { continue }
-            // 箭头不作为父对象
-            if obj is Arrow { continue }
-
-            // 先检查 snap points
-            for (index, snap) in obj.snapPoints().enumerated() {
-                let dist = hypot(point.x - snap.point.x, point.y - snap.point.y)
-                if dist < bestDist {
-                    bestDist = dist
-                    bestAttachment = Attachment(parentKey: key, anchorType: .snapPoint(index: index))
-                }
-            }
-
-            // 检查周长最近点
-            let nearest = obj.nearestPerimeterPoint(to: point)
-            let dist = hypot(point.x - nearest.x, point.y - nearest.y)
-            if dist < bestDist {
-                bestDist = dist
-                // 计算周长参数
-                let param = computePerimeterParameter(for: obj, at: nearest)
-                bestAttachment = Attachment(parentKey: key, anchorType: .perimeter(parameter: param))
-            }
-        }
-        return bestAttachment
-    }
-
-    /// 计算点在对象周长上的参数 (0...1)
-    private func computePerimeterParameter(for obj: any AnnotationObject, at point: CGPoint) -> CGFloat {
-        if let circle = obj as? CircleShape {
-            let local = rotatePoint(point, around: circle.center, by: -circle.rotation)
-            let dx = local.x - circle.center.x
-            let dy = local.y - circle.center.y
-            var angle = atan2(dy / circle.radiusY, dx / circle.radiusX)
-            if angle < 0 { angle += 2 * .pi }
-            return angle / (2 * .pi)
-        }
-        if let rect = obj as? RectangleShape {
-            // 转换到局部坐标
-            let local = rotatePoint(point, around: rect.center, by: -rect.rotation)
-            let lx = local.x - rect.center.x
-            let ly = local.y - rect.center.y
-            let hw = rect.width / 2, hh = rect.height / 2
-            let perimeter = 2 * (rect.width + rect.height)
-            // 沿周长测量距离
-            var d: CGFloat = 0
-            if ly <= -hh + 0.1 { d = lx + hw }                                  // bottom
-            else if lx >= hw - 0.1 { d = rect.width + (ly + hh) }               // right
-            else if ly >= hh - 0.1 { d = rect.width + rect.height + (hw - lx) } // top
-            else { d = 2 * rect.width + rect.height + (hh - ly) }               // left
-            return max(0, min(1, d / perimeter))
-        }
-        if let stamp = obj as? StampObject {
-            let local = rotatePoint(point, around: stamp.center, by: -stamp.rotation)
-            let lx = local.x - stamp.center.x
-            let ly = local.y - stamp.center.y
-            let half = stamp.size / 2
-            let perimeter = stamp.size * 4
-            var d: CGFloat = 0
-            if ly <= -half + 0.1 { d = lx + half }
-            else if lx >= half - 0.1 { d = stamp.size + (ly + half) }
-            else if ly >= half - 0.1 { d = 2 * stamp.size + (half - lx) }
-            else { d = 3 * stamp.size + (half - ly) }
-            return max(0, min(1, d / perimeter))
-        }
-        return 0
-    }
-
-    /// 解析附着点的当前世界坐标
-    private func resolveAttachmentPosition(_ attachment: Attachment) -> CGPoint? {
-        guard let parent = objects[attachment.parentKey] else { return nil }
-
-        switch attachment.anchorType {
-        case .snapPoint(let index):
-            let snaps = parent.snapPoints()
-            guard index < snaps.count else { return nil }
-            return snaps[index].point
-
-        case .perimeter(let parameter):
-            if let circle = parent as? CircleShape {
-                return circle.pointOnPerimeter(at: parameter)
-            }
-            if let rect = parent as? RectangleShape {
-                return rect.pointOnPerimeter(at: parameter)
-            }
-            if let stamp = parent as? StampObject {
-                return stamp.pointOnPerimeter(at: parameter)
-            }
-            return nil
-        }
-    }
-
-    /// 更新所有附着到指定父对象的箭头端点
-    private func updateAttachedArrows(forParent parentKey: UInt32) {
-        for (_, obj) in objects {
-            guard let arrow = obj as? Arrow else { continue }
-            if let att = arrow.startAttachment, att.parentKey == parentKey {
-                if let pos = resolveAttachmentPosition(att) {
-                    arrow.startPoint = pos
-                }
-            }
-            if let att = arrow.endAttachment, att.parentKey == parentKey {
-                if let pos = resolveAttachmentPosition(att) {
-                    arrow.endPoint = pos
-                }
-            }
-        }
-    }
-
-    /// 级联删除：删除所有附着到指定父对象的箭头
-    private func cascadeDelete(parentKey: UInt32) {
-        var toDelete: [UInt32] = []
-        for (key, obj) in objects {
-            guard let arrow = obj as? Arrow else { continue }
-            if (arrow.startAttachment?.parentKey == parentKey) ||
-               (arrow.endAttachment?.parentKey == parentKey) {
-                toDelete.append(key)
-            }
-        }
-        for key in toDelete {
-            objects.removeValue(forKey: key)
-            zOrder.removeAll { $0 == key }
-        }
-    }
+    // 附着相关的方法已拆到 AnnotationView+Attachments.swift
 
     // MARK: - Debug Visualization
 
-    /// 刷新右侧的 Layer B 调试面板
-    private func refreshDebugView() {
+    /// 刷新右侧的 Layer B 调试面板。非 private：撤销/重做扩展要用
+    func refreshDebugView() {
         guard let imageView = debugImageView else { return }
         let debugImage = hitTestBuffer.debugVisualization(objects: objects, zOrder: zOrder)
         imageView.image = debugImage
