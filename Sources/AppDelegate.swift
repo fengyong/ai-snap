@@ -29,10 +29,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// 展示屏幕录制权限引导。
+    ///
+    /// 文案以 `ScreenCaptureError.userMessage` 为单一来源 —— 错误类型本身就携带了
+    /// 「该怎么解决」的说明，避免这里再抄一份、日后两处漂移。
     private func showPermissionAlert() {
         let alert = NSAlert()
         alert.messageText = "需要屏幕录制权限"
-        alert.informativeText = "AISnap 需要屏幕录制权限才能截图。\n\n请前往 系统设置 → 隐私与安全性 → 屏幕录制，启用 AISnap 后重试。"
+        alert.informativeText = ScreenCaptureError.permissionDenied.userMessage ?? ""
         alert.alertStyle = .warning
         alert.addButton(withTitle: "打开系统设置")
         alert.addButton(withTitle: "取消")
@@ -104,7 +108,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     // 旧实现此处只会静默返回 nil，用户点了没反应；现在给出正确引导
                     self.showPermissionAlert()
                 } catch {
-                    // 鼠标下方没有可捕获的窗口（例如点到了桌面），与旧行为一致地静默忽略
+                    // 鼠标下方没有可捕获的窗口（例如点到了桌面）。
+                    // 旧实现在这里是彻底静默（返回 nil，用户点了没任何反馈）；
+                    // 现在至少给一声提示音，让用户知道操作被响应了。
                     NSSound.beep()
                 }
             }
