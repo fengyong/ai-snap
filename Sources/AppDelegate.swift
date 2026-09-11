@@ -133,6 +133,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
         // 让本应用已有的窗口先离开屏幕 —— 否则会被冻结进底图
         annotationWindow?.orderOut(nil)
+        // 上一次截图若还留着冻结覆盖层（标注窗口被 orderOut 而非 close，
+        // onClose 没触发），这里补收一次
+        regionSelectionWindow?.hideOverlays()
+        regionSelectionWindow = nil
 
         // 等窗口服务器完成合成，再去冻结屏幕。
         // 这是**一次性**等待，不是每次截图都要付：冻结之后覆盖层显示的是静止画面，
@@ -143,11 +147,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentRegionSelection() {
-        let window = RegionSelectionWindow { [weak self] image in
-            self?.regionSelectionWindow = nil
-            if let image = image {
-                self?.openAnnotationWindow(with: image)
+        let window = RegionSelectionWindow { [weak self] image, anchor in
+            guard let self = self else { return }
+
+            guard let image = image, let anchor = anchor else {
+                // 取消或失败：收掉覆盖层
+                self.regionSelectionWindow?.hideOverlays()
+                self.regionSelectionWindow = nil
+                return
             }
+            // 就地编辑：覆盖层先留着当背景（选区四周维持变暗），
+            // 等标注窗口关闭时再由 onClose 收掉
+            self.openAnnotationWindow(with: image, anchoredAt: anchor)
         }
         regionSelectionWindow = window
 
@@ -225,14 +236,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Annotation
 
-    private func openAnnotationWindow(with image: CGImage) {
+    private func openAnnotationWindow(with image: CGImage, anchoredAt anchor: NSRect? = nil) {
         // 用屏幕 backingScaleFactor 将像素尺寸换算为逻辑点尺寸
         let scaleFactor = NSScreen.main?.backingScaleFactor ?? 2.0
         let logicalSize = NSSize(width: CGFloat(image.width) / scaleFactor,
                                  height: CGFloat(image.height) / scaleFactor)
         let nsImage = NSImage(cgImage: image, size: logicalSize)
-        annotationWindow = AnnotationWindow(image: nsImage)
-        annotationWindow?.makeKeyAndOrderFront(nil)
+
+        let window = AnnotationWindow(image: nsImage, anchor: anchor)
+        if anchor != nil {
+            // 标注窗口关闭时收掉冻结覆盖层 —— 覆盖层的所有权在 regionSelectionWindow 手上，
+            // 标注窗口只负责通知
+            window.onClose = { [weak self] in
+                self?.regionSelectionWindow?.hideOverlays()
+                self?.regionSelectionWindow = nil
+            }
+        }
+
+        annotationWindow = window
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }
