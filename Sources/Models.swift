@@ -281,6 +281,31 @@ enum UndoAction {
     case scale(colorKey: UInt32, factor: CGFloat)
 }
 
+// MARK: - Cyclic Index
+
+/// 在长度为 `count` 的列表里循环步进下标。
+///
+/// 抽成独立纯函数是为了**能离屏测试**：环绕边界（首尾相接、反向跨零、`current` 为 nil）
+/// 是最容易写错的一类算术，而它原本藏在 `AnnotationWindow` 里 ——
+/// 那是个需要真实窗口才能实例化的 UI 类，测不到。
+///
+/// 注意负数取模：Swift 的 `%` 对负数返回负数（`-1 % 7 == -1`），
+/// 所以反向步进必须再加一次 `count` 再取模。
+enum CyclicIndex {
+    /// - Parameter current: 当前下标；`nil` 表示当前项不在列表里。
+    /// - Returns: 步进后的下标。`count <= 0` 时返回 0。
+    static func step(_ current: Int?, count: Int, reverse: Bool = false) -> Int {
+        guard count > 0 else { return 0 }
+        guard let current = current else {
+            // 当前项不在列表里：正向从头开始，反向从尾开始
+            return reverse ? count - 1 : 0
+        }
+        let delta = reverse ? -1 : 1
+        let raw = current + delta
+        return ((raw % count) + count) % count
+    }
+}
+
 // MARK: - Drawing Tool & Canvas State
 
 enum DrawingTool: Equatable {

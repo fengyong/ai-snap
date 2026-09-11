@@ -478,48 +478,104 @@ class AnnotationView: NSView {
     }    // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
-        // Cmd+Z = Undo, Cmd+Shift+Z = Redo
-        if event.modifierFlags.contains(.command) {
-            if event.charactersIgnoringModifiers == "z" {
-                if event.modifierFlags.contains(.shift) {
-                    performRedo()
-                } else {
-                    performUndo()
-                }
-                return
-            }
-        }
+        if handleCommandKey(event) { return }
+        if handlePlainKey(event) { return }
+        // 不认识的键交回 super，保留系统默认行为（例如未处理键的提示音）
+        super.keyDown(with: event)
+    }
 
-        if event.keyCode == 53 { // ESC → 取消选中，回到绘制模式
+    /// ⌘ 组合键。返回是否已处理。
+    private func handleCommandKey(_ event: NSEvent) -> Bool {
+        guard event.modifierFlags.contains(.command) else { return false }
+
+        // 必须先 lowercased() 再比对：`charactersIgnoringModifiers` 会**保留 Shift 的影响**，
+        // ⌘⇧Z 拿到的是 "Z" 而不是 "z"。原实现直接与 "z" 比较，于是「重做」那一支
+        // 永远不会触发 —— 只有当菜单的 ⌘⇧Z 生效时才碰巧能用。
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "z":
+            if event.modifierFlags.contains(.shift) {
+                performRedo()
+            } else {
+                performUndo()
+            }
+            return true
+        case "s":
+            (window as? AnnotationWindow)?.saveImage()
+            return true
+        case "c":
+            (window as? AnnotationWindow)?.copyImage()
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 无修饰键的按键。返回是否已处理。
+    private func handlePlainKey(_ event: NSEvent) -> Bool {
+        // 带任何修饰键时都不抢：⌘/⌃/⌥ 组合留给菜单或系统
+        let hasModifier = !event.modifierFlags
+            .intersection([.command, .control, .option]).isEmpty
+        if hasModifier { return false }
+
+        switch event.keyCode {
+        case 53: // Esc → 取消选中，回到绘制模式
             selectedKey = nil
             state = .idle
             needsDisplay = true
-            return
+            return true
+
+        case 51, 117: // Delete / Forward Delete
+            deleteSelectedObject()
+            return true
+
+        case 36, 76: // Return / 小键盘 Enter → 复制并关闭
+            (window as? AnnotationWindow)?.copyAndClose()
+            return true
+
+        case 48: // Tab / ⇧Tab → 循环切换绘图工具
+            (window as? AnnotationWindow)?
+                .cycleTool(reverse: event.modifierFlags.contains(.shift))
+            return true
+
+        default:
+            break
         }
 
-        if event.keyCode == 51 || event.keyCode == 117 { // Delete / Forward Delete
-            if let key = selectedKey {
-                let zOrderBefore = zOrder
-                var deletedObjects: [(UInt32, any AnnotationObject)] = []
-                if let obj = objects[key] { deletedObjects.append((key, obj)) }
-                for (k, o) in objects {
-                    if let arrow = o as? Arrow,
-                       (arrow.startAttachment?.parentKey == key || arrow.endAttachment?.parentKey == key) {
-                        deletedObjects.append((k, o))
-                    }
-                }
-                undoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderBefore))
-                redoStack.removeAll()
+        // 数字键 1..9 → 直接选中第 N 个绘图工具
+        if let chars = event.charactersIgnoringModifiers,
+           let digit = Int(chars), digit >= 1, digit <= 9 {
+            (window as? AnnotationWindow)?.selectTool(atIndex: digit - 1)
+            return true
+        }
 
-                cascadeDelete(parentKey: key)
-                objects.removeValue(forKey: key)
-                zOrder.removeAll { $0 == key }
-                selectedKey = nil
-                hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
-                refreshDebugView()
-                needsDisplay = true
+        return false
+    }
+
+    /// 删除当前选中的对象（含挂在它上面的箭头），并记录一步撤销。
+    ///
+    /// 抽成方法是因为它有多个入口：这里的 Delete 键，以及菜单的「删除选中」。
+    func deleteSelectedObject() {
+        guard let key = selectedKey else { return }
+
+        let zOrderBefore = zOrder
+        var deletedObjects: [(UInt32, any AnnotationObject)] = []
+        if let obj = objects[key] { deletedObjects.append((key, obj)) }
+        for (k, o) in objects {
+            if let arrow = o as? Arrow,
+               (arrow.startAttachment?.parentKey == key || arrow.endAttachment?.parentKey == key) {
+                deletedObjects.append((k, o))
             }
         }
+        undoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderBefore))
+        redoStack.removeAll()
+
+        cascadeDelete(parentKey: key)
+        objects.removeValue(forKey: key)
+        zOrder.removeAll { $0 == key }
+        selectedKey = nil
+        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+        refreshDebugView()
+        needsDisplay = true
     }
 
     // MARK: - Undo / Redo
