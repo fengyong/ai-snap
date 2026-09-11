@@ -32,6 +32,10 @@ enum CaptureProviderSCK {
     static func captureRegionViaFilter(_ rect: CGRect) async throws -> CGImage {
         let content = try await shareableContent()
 
+        // ⚠️ 已知限制：跨屏矩形只取「第一个相交的显示器」，因此 sourceRect 会越界。
+        //    当前区域选择只在单屏（主屏）交互，不会触发；将来做多屏交互时，
+        //    需要按屏拆分矩形、分别捕获后再拼接（`captureImage(in:)` 在 macOS 15.2+
+        //    虽然宣称支持多屏，但实测跨屏时会降级到 1x 分辨率，同样不可直接使用）。
         guard let display = content.displays.first(where: { $0.frame.intersects(rect) }) else {
             throw ScreenCaptureError.noDisplayForRect(rect)
         }
