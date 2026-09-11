@@ -381,6 +381,7 @@ enum DrawingTool: Equatable {
     case mosaic    // 马赛克打码（拖拽框选）
     case blur      // 高斯模糊打码（拖拽框选）
     case eraser    // 橡皮擦：拖拽抹掉经过的对象，本身不产生对象
+    case picker    // 取色器：从截图上取色，本身不产生对象
 
     static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
         switch (lhs, rhs) {
@@ -388,7 +389,8 @@ enum DrawingTool: Equatable {
              (.roundedRectangle, .roundedRectangle),
              (.circle, .circle), (.ellipse, .ellipse),
              (.step, .step), (.text, .text), (.spotlight, .spotlight),
-             (.mosaic, .mosaic), (.blur, .blur), (.eraser, .eraser):
+             (.mosaic, .mosaic), (.blur, .blur), (.eraser, .eraser),
+             (.picker, .picker):
             return true
         case (.stamp, .stamp):
             return true  // 所有 stamp 视为同类工具
@@ -408,6 +410,8 @@ enum CanvasState {
     /// 整条拖拽路径上的删除最后合成**一步撤销**（否则按一次 ⌘Z 只撤销掉抹掉的一个对象，
     /// 想退回原状得按十几次）。
     case erasing
+    /// 取色器拖拽中。与橡皮擦同理：它也不产生对象，而是持续读取光标处的像素。
+    case picking
 }
 
 // MARK: - AnnotationObject Protocol

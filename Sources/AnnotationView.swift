@@ -29,6 +29,12 @@ class AnnotationView: NSView {
                 eraseCursor = nil
                 needsDisplay = true
             }
+            // 取色器同理：切走后放大镜要消失
+            if currentTool != .picker {
+                pickerPoint = nil
+                pickerPreview = nil
+                needsDisplay = true
+            }
         }
     }
 
@@ -113,6 +119,17 @@ class AnnotationView: NSView {
     /// 笔刷圆环的位置（鼠标当前点）
     private var eraseCursor: CGPoint?
 
+    // MARK: 取色器状态
+    //
+    // 与橡皮擦同类：不产生对象，而是持续读取光标处的像素。放大镜要读一小片区域，
+    // 所以还需要一个像素采样器（首次使用时才把整幅图铺成可随机访问的字节）。
+    /// 放大镜的位置（鼠标当前点）
+    private var pickerPoint: CGPoint?
+    /// 光标处的颜色（拖拽中实时更新）。**只在 mouseUp 时才写回 `currentColor`** ——
+    /// 属性观察器会把每次写入都落到 UserDefaults，拖拽中每帧写一次纯属浪费。
+    private var pickerPreview: NSColor?
+    private lazy var pixelSampler = baseCGImage.flatMap { ImagePixelSampler(image: $0) }
+
     // MARK: 文字标注的行内编辑
     //
     // 这三个必须存在类里而不是扩展文件里（extension 不能加实例存储属性），
@@ -192,6 +209,13 @@ class AnnotationView: NSView {
             return
         }
 
+        // 取色器：跟随鼠标显示放大镜与当前色值
+        if currentTool == .picker {
+            updatePicker(at: point)
+            needsDisplay = true
+            return
+        }
+
         // 仅在空闲状态下进行被动端点捕捉检测
         if case .idle = state {
             if let snap = findNearestSnapPoint(to: point, excludeKey: nil) {
@@ -215,6 +239,15 @@ class AnnotationView: NSView {
         // 否则会变成「选了橡皮擦，一拖却在转对象」。
         if currentTool == .eraser {
             beginEraseStroke(at: point)
+            return
+        }
+
+        // 取色器同理：在画布上点击就是取色，不选中、不移动任何对象
+        if currentTool == .picker {
+            pickerPoint = point
+            updatePicker(at: point)
+            state = .picking
+            needsDisplay = true
             return
         }
 
@@ -357,6 +390,11 @@ class AnnotationView: NSView {
             eraseCursor = point
             continueEraseStroke(to: point)
 
+        case .picking:
+            pickerPoint = point
+            updatePicker(at: point)
+            needsDisplay = true
+
         case .idle:
             break
         }
@@ -422,6 +460,17 @@ class AnnotationView: NSView {
             eraseDeleted = []
             eraseZOrderBefore = []
             lastErasePoint = nil
+
+        case .picking:
+            // 到这里才把取到的颜色写回当前颜色（一次 UserDefaults 写入），
+            // 并交给窗口去做「复制 HEX + 提示」—— 画布不该管剪贴板。
+            // 先按松手位置再取一次：拖到最后那一小段可能没有 mouseDragged 事件。
+            updatePicker(at: point)
+            if let color = pickerPreview, let rgb = rgbAtCanvasPoint(point) {
+                currentColor = color
+                (window as? AnnotationWindow)?.didPickColor(
+                    hex: ImagePixelSampler.hex(r: rgb.r, g: rgb.g, b: rgb.b))
+            }
 
         case .idle:
             break
@@ -631,6 +680,148 @@ class AnnotationView: NSView {
         ctx.restoreGState()
     }
 
+    // MARK: - 取色器
+
+    /// 读取光标处的颜色，并刷新放大镜预览。
+    ///
+    /// 取色只取自**原始截图**，不包含已经画上去的标注。这样"这个位置是什么颜色"
+    /// 有确定答案，不会随你先前画了什么而变。代价是：想要自己画的那个红色，
+    /// 得从调色板里选 —— 这个取舍写在帮助里。
+    private func updatePicker(at point: CGPoint) {
+        pickerPoint = point
+        guard let rgb = rgbAtCanvasPoint(point) else {
+            pickerPreview = nil
+            return
+        }
+        pickerPreview = NSColor(srgbRed: CGFloat(rgb.r) / 255,
+                                green: CGFloat(rgb.g) / 255,
+                                blue: CGFloat(rgb.b) / 255,
+                                alpha: 1)
+    }
+
+    /// 画布坐标 → 底图像素 → RGB。换算交给 `ImagePixelSampler.pixelCoordinate`，
+    /// 画布这边不重复实现一遍 Y 翻转。
+    private func rgbAtCanvasPoint(_ point: CGPoint) -> (r: Int, g: Int, b: Int)? {
+        guard let sampler = pixelSampler,
+              let px = ImagePixelSampler.pixelCoordinate(
+                canvasPoint: point,
+                canvasSize: baseImage.size,
+                pixelSize: CGSize(width: sampler.pixelWidth,
+                                  height: sampler.pixelHeight)) else { return nil }
+        return sampler.rgb(atPixelX: px.x, y: px.y)
+    }
+
+    /// 取色放大镜 + 色值标签。
+    private func drawPickerLoupe(in ctx: CGContext) {
+        guard let cursor = pickerPoint, let sampler = pixelSampler else { return }
+
+        let side = 11                       // 奇数 → 被取的那一格正好落在正中间
+        let magnified: CGFloat = 132
+        let cell = magnified / CGFloat(side)
+        let radius = magnified / 2
+        let margin: CGFloat = 8
+
+        // 放大镜默认在光标右上；贴近画布边缘时翻到另一侧，避免被裁掉一半
+        var center = CGPoint(x: cursor.x + radius + 24, y: cursor.y + radius + 24)
+        if center.x + radius > baseImage.size.width - margin {
+            center.x = cursor.x - radius - 24
+        }
+        if center.y + radius > baseImage.size.height - margin {
+            center.y = cursor.y - radius - 24
+        }
+        center.x = max(radius + margin,
+                       min(baseImage.size.width - radius - margin, center.x))
+        center.y = max(radius + margin,
+                       min(baseImage.size.height - radius - margin, center.y))
+
+        let box = CGRect(x: center.x - radius, y: center.y - radius,
+                         width: magnified, height: magnified)
+        let circle = CGPath(ellipseIn: box, transform: nil)
+
+        // 1. 放大的像素片（最近邻：放大镜里必须是硬边像素格，否则等于什么都没放大）
+        ctx.saveGState()
+        ctx.addPath(circle)
+        ctx.clip()
+        if let px = ImagePixelSampler.pixelCoordinate(
+            canvasPoint: cursor,
+            canvasSize: baseImage.size,
+            pixelSize: CGSize(width: sampler.pixelWidth, height: sampler.pixelHeight)),
+           let tile = sampler.smallImage(centeredAtPixelX: px.x, y: px.y, side: side) {
+            ctx.interpolationQuality = .none
+            ctx.draw(tile, in: box)
+        } else {
+            ctx.setFillColor(NSColor.darkGray.cgColor)
+            ctx.fill(box)
+        }
+        ctx.restoreGState()
+
+        // 2. 外圈（白+黑双层，深浅背景上都看得清）与中心十字
+        ctx.saveGState()
+        ctx.addPath(circle)
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.95).cgColor)
+        ctx.setLineWidth(3)
+        ctx.strokePath()
+        ctx.addPath(circle)
+        ctx.setStrokeColor(NSColor.black.withAlphaComponent(0.5).cgColor)
+        ctx.setLineWidth(1)
+        ctx.strokePath()
+
+        ctx.setStrokeColor(NSColor.systemRed.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.move(to: CGPoint(x: center.x - cell / 2, y: center.y))
+        ctx.addLine(to: CGPoint(x: center.x + cell / 2, y: center.y))
+        ctx.strokePath()
+        ctx.move(to: CGPoint(x: center.x, y: center.y - cell / 2))
+        ctx.addLine(to: CGPoint(x: center.x, y: center.y + cell / 2))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        // 3. 色值标签（HEX 与十进制都给出，方便贴到聊天里或设计稿里）
+        guard let rgb = rgbAtCanvasPoint(cursor) else { return }
+        let text = "\(ImagePixelSampler.hex(r: rgb.r, g: rgb.g, b: rgb.b))   "
+            + ImagePixelSampler.rgbText(r: rgb.r, g: rgb.g, b: rgb.b)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        let nsText = text as NSString
+        let textSize = nsText.size(withAttributes: attrs)
+        let swatch: CGFloat = textSize.height - 2
+
+        var label = CGRect(x: 0, y: 0,
+                           width: textSize.width + swatch + 20,
+                           height: textSize.height + 8)
+        label.origin = CGPoint(x: center.x - label.width / 2,
+                               y: box.minY - label.height - 8)
+        if label.minY < 4 {
+            label.origin.y = box.maxY + 8          // 贴近底边时改画到上方
+        }
+
+        ctx.saveGState()
+        ctx.addPath(CGPath(roundedRect: label, cornerWidth: 6, cornerHeight: 6,
+                           transform: nil))
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.76).cgColor)
+        ctx.fillPath()
+        ctx.restoreGState()
+
+        let swatchRect = CGRect(x: label.minX + 6, y: label.midY - swatch / 2,
+                                width: swatch, height: swatch)
+        ctx.saveGState()
+        ctx.addPath(CGPath(roundedRect: swatchRect, cornerWidth: 3, cornerHeight: 3,
+                           transform: nil))
+        ctx.setFillColor((pickerPreview ?? .black).cgColor)
+        ctx.fillPath()
+        ctx.setStrokeColor(NSColor.white.withAlphaComponent(0.45).cgColor)
+        ctx.setLineWidth(1)
+        ctx.addPath(CGPath(roundedRect: swatchRect, cornerWidth: 3, cornerHeight: 3,
+                           transform: nil))
+        ctx.strokePath()
+        ctx.restoreGState()
+
+        nsText.draw(at: CGPoint(x: swatchRect.maxX + 6, y: label.minY + 4),
+                    withAttributes: attrs)
+    }
+
     // MARK: - Undo / Redo
 
     // performUndo / performRedo 已拆到 AnnotationView+UndoRedo.swift
@@ -690,6 +881,11 @@ class AnnotationView: NSView {
         // 6. 橡皮擦的笔刷圆环（悬停时也显示，让用户先看清作用范围再下笔）
         if currentTool == .eraser {
             drawEraseCursor(in: ctx)
+        }
+
+        // 7. 取色放大镜（同样在悬停时就显示，边移动边看色值）
+        if currentTool == .picker {
+            drawPickerLoupe(in: ctx)
         }
     }
 
