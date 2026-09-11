@@ -3,19 +3,25 @@ import Carbon.HIToolbox
 
 /// 偏好设置窗口。
 ///
-/// 目前只有「全局快捷键」一组设置 —— 线宽、颜色、线型、箭头样式、水印都已经在
+/// 只有「全局快捷键」与「更新」两组设置 —— 线宽、颜色、线型、箭头样式、水印都已经在
 /// 标注窗口的工具栏里，**再放一份到这里只会造出两个能改同一份数据的地方**
-/// （改了一处另一处不刷新，用户看到的状态就自相矛盾）。快捷键没有别的入口，
-/// 所以只有它需要这个窗口。
+/// （改了一处另一处不刷新，用户看到的状态就自相矛盾）。
+/// 这两组都没有别的入口，所以只有它们需要这个窗口。
 final class SettingsWindowController: NSWindowController {
 
     /// 快捷键改动后由外部（AppDelegate）重新注册，并把问题反馈回来。
     /// 用闭包而不是让设置窗口去调 AppDelegate，避免两边互相持有。
     var onHotkeysChanged: (() -> [String])?
 
+    /// 「立即检查更新」交给 AppDelegate 去执行 —— 检查完要弹窗、还要打开浏览器，
+    /// 那是应用级的事情，不是设置窗口的职责。
+    var onCheckForUpdates: (() -> Void)?
+
     private var regionButton: NSButton!
     private var windowButton: NSButton!
     private var statusLabel: NSTextField!
+    private var feedURLField: NSTextField!
+    private var autoCheckBox: NSButton!
     private var keyMonitor: Any?
     /// 正在录制的目标：nil 表示没有在录制
     private var recordingTarget: RecordingTarget?
@@ -83,6 +89,50 @@ final class SettingsWindowController: NSWindowController {
         separator.boxType = .separator
         root.addArrangedSubview(separator)
 
+        // ── 更新 ──
+        let updateTitle = NSTextField(labelWithString: "更新")
+        updateTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        root.addArrangedSubview(updateTitle)
+
+        let urlRow = NSStackView()
+        urlRow.orientation = .horizontal
+        urlRow.spacing = 12
+        let urlLabel = NSTextField(labelWithString: "清单地址")
+        urlLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        urlRow.addArrangedSubview(urlLabel)
+
+        feedURLField = NSTextField(string: "")
+        feedURLField.placeholderString = "https://…/latest.json（留空则不检查）"
+        feedURLField.font = NSFont.systemFont(ofSize: 12)
+        feedURLField.widthAnchor.constraint(equalToConstant: 320).isActive = true
+        feedURLField.target = self
+        feedURLField.action = #selector(feedURLChanged(_:))
+        urlRow.addArrangedSubview(feedURLField)
+        root.addArrangedSubview(urlRow)
+
+        autoCheckBox = NSButton(checkboxWithTitle: "启动时自动检查更新",
+                                target: self, action: #selector(autoCheckToggled(_:)))
+        root.addArrangedSubview(autoCheckBox)
+
+        let updateHint = NSTextField(wrappingLabelWithString:
+            "清单是一个 JSON 文件：{\"version\":\"1.2.0\", \"downloadURL\":\"https://…\", \"notes\":\"…\"}。\n"
+            + "目前只会提示并跳到下载页，不会自动替换应用本身 —— 那需要先做代码签名与公证。")
+        updateHint.font = NSFont.systemFont(ofSize: 11)
+        updateHint.textColor = .secondaryLabelColor
+        updateHint.preferredMaxLayoutWidth = 420
+        root.addArrangedSubview(updateHint)
+
+        let checkRow = NSStackView()
+        checkRow.orientation = .horizontal
+        checkRow.spacing = 8
+        checkRow.addArrangedSubview(NSButton(title: "立即检查更新",
+                                             target: self, action: #selector(checkNow)))
+        root.addArrangedSubview(checkRow)
+
+        let separator2 = NSBox()
+        separator2.boxType = .separator
+        root.addArrangedSubview(separator2)
+
         let buttonRow = NSStackView()
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
@@ -131,6 +181,26 @@ final class SettingsWindowController: NSWindowController {
     private func refreshFromPreferences() {
         regionButton.title = Preferences.shared.regionCaptureHotkey.displayString
         windowButton.title = Preferences.shared.windowCaptureHotkey.displayString
+        feedURLField.stringValue = Preferences.shared.updateFeedURL
+        autoCheckBox.state = Preferences.shared.automaticallyChecksForUpdates ? .on : .off
+    }
+
+    // MARK: - 更新设置
+
+    @objc private func feedURLChanged(_ sender: NSTextField) {
+        Preferences.shared.updateFeedURL =
+            sender.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    @objc private func autoCheckToggled(_ sender: NSButton) {
+        Preferences.shared.automaticallyChecksForUpdates = (sender.state == .on)
+    }
+
+    @objc private func checkNow() {
+        // 先落盘再检查：用户可能刚改完地址就直接点检查，不等焦点离开输入框
+        Preferences.shared.updateFeedURL =
+            feedURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        onCheckForUpdates?()
     }
 
     private func showProblems(_ problems: [String]) {
@@ -148,7 +218,7 @@ final class SettingsWindowController: NSWindowController {
     @objc private func recordWindow() { startRecording(.window) }
 
     private func startRecording(_ target: RecordingTarget) {
-        stopRecording()                     // 防止重复点击装出多个监��器
+        stopRecording()                     // 防止重复点击装出多个键盘监视器
         recordingTarget = target
         statusLabel.isHidden = true
 
