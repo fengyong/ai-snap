@@ -143,14 +143,43 @@ echo "已写入 Info.plist（${VERSION} / ${BUILD_NUMBER}）"
 # 这不是"正式签名"，但比完全不签强：
 #   · 系统会把应用当成一个有身份的包，而不是"来历不明的可执行文件"
 #   · 屏幕录制权限的授权对象是 AISnap 自己，而不是启动它的终端
-# ⚠️ ad-hoc 签名基于二进制哈希：**每次重新编译安装，屏幕录制权限可能需要重新勾一次**。
-#    要让它长期稳定，需要一张自签名的代码签名证书（也是 M5-1 的第一步）。
-step "签名（ad-hoc）"
+# ⚠️ 没有证书时回退 ad-hoc：TCC 按 cdhash 认应用，**每次重新编译安装，
+#    屏幕录制权限都要重新勾一次**。配一张自签名证书即可根治（见下方说明）。
+# 两种签名方式的区别，直接决定「屏幕录制权限会不会反复失效」：
+#
+#   ad-hoc（--sign -）
+#     没有证书标识，TCC 只能按 **cdhash** 关联授权 —— 而 cdhash 是二进制内容的
+#     哈希，于是**每重新编译一次，授权就失效一次**，用户得再去系统设置里勾一遍。
+#
+#   自签名证书
+#     有稳定的签名标识，TCC 按 **证书 + bundle ID** 关联，
+#     重新编译、重新安装都不会让授权失效。
+#
+# 所以优先用证书；没有证书才回退 ad-hoc，并把代价明确说出来。
+SIGN_IDENTITY="${SIGN_IDENTITY:-AISnap Local Signing}"
+step "签名"
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
-codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
-codesign --verify --strict --verbose=1 "$APP_BUNDLE"
+
+if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
+  codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+  codesign --verify --strict --verbose=1 "$APP_BUNDLE"
+  echo "✅ 用自签名证书「${SIGN_IDENTITY}」签名"
+  echo "   重新编译不会让屏幕录制权限失效"
+else
+  codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+  codesign --verify --strict --verbose=1 "$APP_BUNDLE"
+  cat <<EOF
+⚠️  未找到代码签名证书「${SIGN_IDENTITY}」，已回退 ad-hoc 签名。
+
+    ad-hoc 下 TCC 按 cdhash 认应用，而 cdhash 随二进制变化 ——
+    每重新编译安装一次，屏幕录制权限就要在系统设置里**重新勾一次**。
+
+    配置一张自签名证书即可根治（不需要 Apple Developer 账号），
+    见 README「关于屏幕录制权限反复失效」一节。配好后本脚本会自动改用它。
+EOF
+fi
 echo "签名校验通过"
-codesign -dv "$APP_BUNDLE" 2>&1 | grep -E "Identifier|Signature|Format" | sed 's/^/   /'
+codesign -dv "$APP_BUNDLE" 2>&1 | grep -E "Identifier|Signature|Authority|TeamIdentifier" | sed 's/^/   /'
 
 if [ "$SKIP_DMG" = "1" ]; then
   step "完成（已跳过 DMG）"
