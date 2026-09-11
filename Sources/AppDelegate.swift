@@ -94,9 +94,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         annotationWindow = nil
 
         // 给用户一点时间切换到目标窗口
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if let image = ScreenCapture.captureWindowUnderMouse() {
-                self.openAnnotationWindow(with: image)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                do {
+                    let image = try await ScreenCapture.captureWindowUnderMouse()
+                    self.openAnnotationWindow(with: image)
+                } catch ScreenCaptureError.permissionDenied {
+                    // 旧实现此处只会静默返回 nil，用户点了没反应；现在给出正确引导
+                    self.showPermissionAlert()
+                } catch {
+                    // 鼠标下方没有可捕获的窗口（例如点到了桌面），与旧行为一致地静默忽略
+                    NSSound.beep()
+                }
             }
         }
     }

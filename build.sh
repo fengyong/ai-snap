@@ -39,7 +39,7 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << 'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>

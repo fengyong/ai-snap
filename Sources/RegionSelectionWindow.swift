@@ -65,7 +65,7 @@ class RegionSelectionWindow: NSWindow {
             overlay.orderOut(nil)
         }
 
-        // NSView 坐标 → 屏幕坐标 (左上角原点，给 CGWindowList 用)
+        // NSView 坐标 → 屏幕坐标（左上角原点，ScreenCaptureKit 与旧 CGWindowList 同语义）
         let screenFrame = NSScreen.main?.frame ?? .zero
         let captureRect = CGRect(
             x: rect.origin.x,
@@ -74,9 +74,11 @@ class RegionSelectionWindow: NSWindow {
             height: rect.height
         )
 
-        // 延迟确保覆盖窗口完全消失后再截图
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-            let image = ScreenCapture.captureRegion(captureRect)
+        Task { @MainActor [weak self] in
+            // 给窗口服务器一点合成时间，确保覆盖层不出现在截图里
+            // （旧实现用的是 200ms；这里降到 80ms，SCK 的就绪时机比旧 API 快）
+            try? await Task.sleep(for: .milliseconds(80))
+            let image = try? await ScreenCapture.captureRegion(captureRect)
             self?.completionHandler(image)
         }
     }
