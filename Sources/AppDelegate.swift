@@ -5,6 +5,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var regionSelectionWindow: RegionSelectionWindow?
     private var annotationWindow: AnnotationWindow?
     private var settingsWindowController: SettingsWindowController?
+    private var historyWindow: HistoryWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -43,6 +44,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         if alert.runModal() == .alertFirstButtonReturn {
             showPreferences()
         }
+    }
+
+    /// 截图历史窗口。没有记录时也照常打开 —— 窗口里会说明"还没有记录"，
+    /// 比点了菜单什么都不发生要好。
+    @objc private func showHistory() {
+        if historyWindow == nil {
+            let window = HistoryWindow()
+            window.onOpen = { [weak self] image in
+                self?.openAnnotationWindow(with: image)
+            }
+            historyWindow = window
+        }
+        historyWindow?.reload()
+        NSApp.activate(ignoringOtherApps: true)
+        historyWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func showPreferences() {
@@ -107,6 +123,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(NSMenuItem(title: "区域截图", action: #selector(startRegionCapture), keyEquivalent: "1"))
         menu.addItem(NSMenuItem(title: "窗口截图", action: #selector(startWindowCapture), keyEquivalent: "2"))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "截图历史…", action: #selector(showHistory), keyEquivalent: ""))
         // 不给 keyEquivalent：状态栏菜单只在菜单展开时响应按键，
         // 标上 ⌘, 会让人以为随时可用，不如不标。
         menu.addItem(NSMenuItem(title: "偏好设置…", action: #selector(showPreferences), keyEquivalent: ""))
@@ -158,6 +175,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             }
             // 就地编辑：覆盖层先留着当背景（选区四周维持变暗），
             // 等标注窗口关闭时再由 onClose 收掉
+            // 记一笔历史。存的是**刚截下来的原图**，不含此后画上去的标注 ——
+            // 这样"重新编辑"能从干净的一张图开始（在后台写盘，不挡开窗）
+            CaptureHistory.shared.record(image)
             self.openAnnotationWindow(with: image, anchoredAt: anchor)
         }
         regionSelectionWindow = window
@@ -202,6 +222,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             Task { @MainActor in
                 do {
                     let image = try await ScreenCapture.captureWindowUnderMouse()
+                    CaptureHistory.shared.record(image)
                     self.openAnnotationWindow(with: image)
                 } catch ScreenCaptureError.permissionDenied {
                     // 旧实现此处只会静默返回 nil，用户点了没反应；现在给出正确引导
