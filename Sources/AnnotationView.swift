@@ -18,6 +18,10 @@ class AnnotationView: NSView {
     var currentTool: DrawingTool = .arrow
     var currentColor: NSColor = .red
     var currentLineWidth: CGFloat = 15.0
+    /// 新建矩形/椭圆使用的描边线型。
+    /// 箭头的线型不走这里 —— 它由 `ArrowStyle` 预设携带（「箭头样式」里已有
+    /// 虚线、点菱等预设），两处各管一套就不会互相覆盖。
+    var currentLineStyle: LineStyle = .solid
     var currentArrowStyle: ArrowStyle = .default
 
     // 水印配置
@@ -370,6 +374,10 @@ class AnnotationView: NSView {
                                          hitTestColorKey: colorKey)
                 }
 
+                // 线型在这里统一写回，而不是让十几个构造点各自多传一个参数。
+                // 只有矩形/椭圆这类支持线型的对象会接住（见 LineStyleSupporting）。
+                applyCurrentStroke(to: obj)
+
                 objects[colorKey] = obj
                 zOrder.append(colorKey)
 
@@ -681,6 +689,14 @@ class AnnotationView: NSView {
         ctx.strokePath()
     }
 
+    /// 把「当前线型」应用到支持它的对象上。
+    ///
+    /// 新建对象与拖拽预览共用这一个入口，因此不必在十几个构造点各自传参 ——
+    /// 将来给形状加描边属性（比如圆角半径）时也只需改这里。
+    private func applyCurrentStroke(to obj: any AnnotationObject) {
+        (obj as? LineStyleSupporting)?.lineStyle = currentLineStyle
+    }
+
     private func drawPreview(tool: DrawingTool, start: CGPoint, end: CGPoint, in ctx: CGContext) {
         switch tool {
         case .arrow:
@@ -698,12 +714,14 @@ class AnnotationView: NSView {
                                               color: currentColor,
                                               lineWidth: currentLineWidth,
                                               hitTestColorKey: 0)
+                applyCurrentStroke(to: preview)
                 preview.draw(in: ctx)
             } else {
                 let preview = RectangleShape(from: start, to: end,
                                               color: currentColor,
                                               lineWidth: currentLineWidth,
                                               hitTestColorKey: 0)
+                applyCurrentStroke(to: preview)
                 preview.draw(in: ctx)
             }
 
@@ -715,6 +733,7 @@ class AnnotationView: NSView {
                                            color: currentColor,
                                            lineWidth: currentLineWidth,
                                            hitTestColorKey: 0)
+                applyCurrentStroke(to: preview)
                 preview.draw(in: ctx)
             } else {
                 let centerPt = CGPoint(x: (start.x + end.x) / 2,
@@ -725,6 +744,7 @@ class AnnotationView: NSView {
                                            color: currentColor,
                                            lineWidth: currentLineWidth,
                                            hitTestColorKey: 0)
+                applyCurrentStroke(to: preview)
                 preview.draw(in: ctx)
             }
 
@@ -737,6 +757,7 @@ class AnnotationView: NSView {
                                            color: currentColor,
                                            lineWidth: currentLineWidth,
                                            hitTestColorKey: 0)
+                applyCurrentStroke(to: preview)
                 preview.draw(in: ctx)
             } else {
                 let centerPt = CGPoint(x: (start.x + end.x) / 2,
@@ -748,6 +769,7 @@ class AnnotationView: NSView {
                                            color: currentColor,
                                            lineWidth: currentLineWidth,
                                            hitTestColorKey: 0)
+                applyCurrentStroke(to: preview)
                 preview.draw(in: ctx)
             }
 

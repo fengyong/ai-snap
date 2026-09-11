@@ -283,6 +283,22 @@ class AnnotationWindow: NSWindow {
 
         addSeparator(to: toolbar, at: &xOffset, height: height)
 
+        // ── 线型 ──
+        // 只作用于矩形/椭圆这类形状；箭头的线型由「箭头样式」预设携带，两处各管一套。
+        addGroupLabel("线型", to: toolbar, at: xOffset, width: 76)
+        let lineStylePopup = NSPopUpButton(
+            frame: NSRect(x: xOffset, y: 12, width: 76, height: 24), pullsDown: false)
+        lineStylePopup.font = NSFont.systemFont(ofSize: 11)
+        lineStylePopup.addItems(withTitles: LineStyle.allCases.map(\.displayName))
+        lineStylePopup.selectItem(at: 0)
+        lineStylePopup.toolTip = "新建矩形/椭圆使用的线型（箭头请用「箭头样式」）"
+        lineStylePopup.target = self
+        lineStylePopup.action = #selector(lineStyleSelected(_:))
+        toolbar.addSubview(lineStylePopup)
+        xOffset += 80
+
+        addSeparator(to: toolbar, at: &xOffset, height: height)
+
         // ── 贴纸 ──
         addGroupLabel("贴纸", to: toolbar, at: xOffset, width: 56)
         let stampPopup = NSPopUpButton(frame: NSRect(x: xOffset, y: 12, width: 56, height: 24), pullsDown: true)
@@ -453,6 +469,13 @@ class AnnotationWindow: NSWindow {
         annotationView.currentArrowStyle = ArrowStyle.allPresets[index]
     }
 
+    @objc private func lineStyleSelected(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        let styles = LineStyle.allCases
+        guard index >= 0 && index < styles.count else { return }
+        annotationView.currentLineStyle = styles[index]
+    }
+
     @objc private func colorButtonClicked(_ sender: NSButton) {
         let palette = ColorPalette.allPalettes[paletteIndex]
         if sender.tag >= 0 && sender.tag < palette.colors.count {
@@ -588,6 +611,13 @@ class AnnotationWindow: NSWindow {
         选中"箭头"工具后，用工具栏的「箭头样式」下拉切换：
         实心 / 开放 / 虚线 / 菱形 / 圆端 / 点菱 / 双向 / 双开放。
         其中「双向」「双开放」两端都有箭头。
+
+        【线型】
+        矩形与椭圆（含正圆）支持实线 / 虚线 / 点线，用工具栏的「线型」下拉切换，
+        选取后新建的形状即采用该线型。箭头的线型请用上面的「箭头样式」——
+        它的虚线、点菱等预设已包含线型。
+        注：虚线形状的空隙不影响点选 —— 命中检测始终按实线判定，
+        因此点到空隙上同样能选中该形状。
 
         【端点捕捉】
         鼠标悬停在已有对象的中心、边角、象限点附近时
