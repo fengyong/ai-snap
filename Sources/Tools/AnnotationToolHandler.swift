@@ -76,6 +76,7 @@ enum ToolRegistry {
         EllipseToolHandler(),
         SpotlightToolHandler(),
         ClickPlacementToolHandler(),
+        TextToolHandler(),
     ]
 
     static func handler(for tool: DrawingTool) -> AnnotationToolHandler? {

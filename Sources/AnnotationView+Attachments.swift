@@ -50,6 +50,13 @@ extension AnnotationView {
     }
 
     /// 计算点在对象周长上的参数 (0...1)
+    ///
+    /// 矩形类形状（矩形 / 贴纸 / 文字）统一走 `RectPerimeter.parameter` ——
+    /// 它与各形状自己的 `pointOnPerimeter` 共用同一套分段，两者天然互逆。
+    /// 圆是角度参数化，单独一支。
+    ///
+    /// （这一段原先三个形状各写一份几乎相同的分段判定，改动任何一处都得记得
+    /// 同步另外两处，而且不一致时症状只是"箭头偶尔吸到奇怪的位置"，很难查。）
     private func computePerimeterParameter(for obj: any AnnotationObject,
                                            at point: CGPoint) -> CGFloat {
         if let circle = obj as? CircleShape {
@@ -61,32 +68,19 @@ extension AnnotationView {
             return angle / (2 * .pi)
         }
         if let rect = obj as? RectangleShape {
-            // 转换到局部坐标
-            let local = rotatePoint(point, around: rect.center, by: -rect.rotation)
-            let lx = local.x - rect.center.x
-            let ly = local.y - rect.center.y
-            let hw = rect.width / 2, hh = rect.height / 2
-            let perimeter = 2 * (rect.width + rect.height)
-            // 沿周长测量距离
-            var d: CGFloat = 0
-            if ly <= -hh + 0.1 { d = lx + hw }                                  // bottom
-            else if lx >= hw - 0.1 { d = rect.width + (ly + hh) }               // right
-            else if ly >= hh - 0.1 { d = rect.width + rect.height + (hw - lx) } // top
-            else { d = 2 * rect.width + rect.height + (hh - ly) }               // left
-            return max(0, min(1, d / perimeter))
+            return RectPerimeter.parameter(for: point, center: rect.center,
+                                           size: CGSize(width: rect.width, height: rect.height),
+                                           rotation: rect.rotation)
         }
         if let stamp = obj as? StampObject {
-            let local = rotatePoint(point, around: stamp.center, by: -stamp.rotation)
-            let lx = local.x - stamp.center.x
-            let ly = local.y - stamp.center.y
-            let half = stamp.size / 2
-            let perimeter = stamp.size * 4
-            var d: CGFloat = 0
-            if ly <= -half + 0.1 { d = lx + half }
-            else if lx >= half - 0.1 { d = stamp.size + (ly + half) }
-            else if ly >= half - 0.1 { d = 2 * stamp.size + (half - lx) }
-            else { d = 3 * stamp.size + (half - ly) }
-            return max(0, min(1, d / perimeter))
+            return RectPerimeter.parameter(for: point, center: stamp.center,
+                                           size: CGSize(width: stamp.size, height: stamp.size),
+                                           rotation: stamp.rotation)
+        }
+        if let text = obj as? TextShape {
+            return RectPerimeter.parameter(for: point, center: text.center,
+                                           size: text.contentSize,
+                                           rotation: text.rotation)
         }
         return 0
     }
@@ -110,6 +104,9 @@ extension AnnotationView {
             }
             if let stamp = parent as? StampObject {
                 return stamp.pointOnPerimeter(at: parameter)
+            }
+            if let text = parent as? TextShape {
+                return text.pointOnPerimeter(at: parameter)
             }
             return nil
         }

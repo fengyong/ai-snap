@@ -90,6 +90,17 @@ class AnnotationView: NSView {
     // 调试面板：外部挂载的 NSImageView，用于实时显示 Layer B 可视化
     weak var debugImageView: NSImageView?
 
+    // MARK: 文字标注的行内编辑
+    //
+    // 这三个必须存在类里而不是扩展文件里（extension 不能加实例存储属性），
+    // 编辑逻辑本身在 AnnotationView+TextEditing.swift。
+    /// 正在编辑的输入框（nil = 没有在编辑）
+    var textEditingField: NSTextField?
+    /// 正在编辑的对象 key
+    var textEditingKey: UInt32?
+    /// 进入编辑前的原文，用于 Esc 取消与撤销
+    var textEditingOriginalText: String = ""
+
     init(image: NSImage) {
         self.baseImage = image
         let size = image.size
@@ -212,6 +223,13 @@ class AnnotationView: NSView {
         let colorKey = hitTestBuffer.pickColorKey(at: point)
 
         if colorKey != 0, let obj = objects[colorKey] {
+            // 双击文字 → 原地重新编辑（改错字不必删了重画）
+            if event.clickCount >= 2, let textShape = obj as? TextShape {
+                selectedKey = colorKey
+                beginEditingText(textShape, key: colorKey)
+                needsDisplay = true
+                return
+            }
             // 命中已有对象 → 进入移动模式
             let offset = CGVector(dx: point.x - obj.center.x,
                                   dy: point.y - obj.center.y)
@@ -582,6 +600,12 @@ class AnnotationView: NSView {
         }
         // 单击放置完就选中它，方便立刻调整位置
         registerNewObject(obj, colorKey: colorKey, selectAfterPlacing: true)
+
+        // 文字标注放完立刻进入输入状态 —— 否则落一个空文字在画布上，
+        // 用户还得再双击一次才能打字
+        if let textShape = obj as? TextShape {
+            beginEditingText(textShape, key: colorKey)
+        }
         return true
     }
 
