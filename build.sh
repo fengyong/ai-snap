@@ -160,22 +160,44 @@ SIGN_IDENTITY="${SIGN_IDENTITY:-AISnap Local Signing}"
 step "签名"
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
+# 三种状态必须分开报，否则会误导：
+#   ① 身份有效           → 用证书签名
+#   ② 证书在、但不受信任  → 用户会以为"没建成功"而重新生成一遍，其实只差设信任
+#   ③ 完全没有证书        → 让他去跑生成脚本
+# ②是实际踩到的：脚本跑完、证书进了钥匙串，但 security 报 CSSMERR_TP_NOT_TRUSTED，
+# `find-identity -v`（只列有效身份）看不到它，于是笼统地报"未找到"。
 if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
   codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$APP_BUNDLE"
   codesign --verify --strict --verbose=1 "$APP_BUNDLE"
   echo "✅ 用自签名证书「${SIGN_IDENTITY}」签名"
   echo "   重新编译不会让屏幕录制权限失效"
+elif security find-identity -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
+  codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+  codesign --verify --strict --verbose=1 "$APP_BUNDLE"
+  cat <<EOF
+⚠️  证书「${SIGN_IDENTITY}」**已经在钥匙串里了**，但还不受信任
+    （security 报 CSSMERR_TP_NOT_TRUSTED），所以 codesign 用不了它。
+    本次已回退 ad-hoc 签名。
+
+    设信任是一次性操作，约 30 秒：
+      1. 打开「钥匙串访问」→ 左侧选「登录」→ 选「我的证书」
+      2. 找到「${SIGN_IDENTITY}」，双击
+      3. 展开「信任」→ 把「代码签名」设为「始终信任」
+      4. 关闭窗口（会要求输入登录密码）
+
+    完成后重新运行 ./build.sh，就会自动改用它签名。
+EOF
 else
   codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
   codesign --verify --strict --verbose=1 "$APP_BUNDLE"
   cat <<EOF
-⚠️  未找到代码签名证书「${SIGN_IDENTITY}」，已回退 ad-hoc 签名。
+⚠️  没有找到代码签名证书「${SIGN_IDENTITY}」，已回退 ad-hoc 签名。
 
     ad-hoc 下 TCC 按 cdhash 认应用，而 cdhash 随二进制变化 ——
     每重新编译安装一次，屏幕录制权限就要在系统设置里**重新勾一次**。
 
-    配置一张自签名证书即可根治（不需要 Apple Developer 账号），
-    见 README「关于屏幕录制权限反复失效」一节。配好后本脚本会自动改用它。
+    一次性配置（不需要 Apple Developer 账号）：
+      ./scripts/make_signing_cert.sh
 EOF
 fi
 echo "签名校验通过"
