@@ -353,23 +353,23 @@ class Arrow: AnnotationObject {
     }
 
     func drawHitTest(in ctx: CGContext, color: NSColor) {
-        drawArrow(in: ctx, withColor: color, lw: lineWidth + 6)
+        // picking pass 必须画实线，不能继承视觉层的虚线样式。
+        // 否则虚线产生的空隙会让「点在空隙上」时选不中该箭头；
+        // 业界标准做法就是 picking pass 永远不继承 dash。
+        drawArrow(in: ctx, withColor: color, lw: lineWidth + 6, forceSolid: true)
     }
 
-    private func drawArrow(in ctx: CGContext, withColor drawColor: NSColor, lw: CGFloat) {
+    private func drawArrow(in ctx: CGContext, withColor drawColor: NSColor,
+                           lw: CGFloat, forceSolid: Bool = false) {
         ctx.setStrokeColor(drawColor.cgColor)
         ctx.setLineWidth(lw)
-        ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
 
-        // Line style
-        switch style.lineStyle {
-        case .solid:
+        if forceSolid {
+            ctx.setLineCap(.round)
             ctx.setLineDash(phase: 0, lengths: [])
-        case .dashed:
-            ctx.setLineDash(phase: 0, lengths: [8, 4])
-        case .dotted:
-            ctx.setLineDash(phase: 0, lengths: [2, 4])
+        } else {
+            applyLineStyle(style.lineStyle, lineWidth: lw, in: ctx)
         }
 
         // Shaft
@@ -377,8 +377,9 @@ class Arrow: AnnotationObject {
         ctx.addLine(to: endPoint)
         ctx.strokePath()
 
-        // Reset dash for head/tail
+        // 头部/尾部一律用实线 + 圆头（虚线只作用于箭身）
         ctx.setLineDash(phase: 0, lengths: [])
+        ctx.setLineCap(.round)
 
         let angle = atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x)
 
@@ -411,6 +412,31 @@ class Arrow: AnnotationObject {
                 drawHead(headType, at: startPoint, angle: angle + .pi,
                          in: ctx, color: drawColor)
             }
+        }
+    }
+
+    /// 按线型设置 dash 与线帽。
+    ///
+    /// **dash 长度必须随线宽缩放，且虚线要用平头（.butt）**，否则间隙会被线帽吞掉：
+    /// 圆头（.round）会让每段 dash 两端各外扩 `lineWidth / 2`，
+    /// 实际覆盖长度变成 `dash + lineWidth`。原实现固定用 `[8, 4]` + 圆头，
+    /// 当线宽 ≥ 4 时（默认线宽 15）覆盖长度 8 + 15 = 23 > 周期 12，
+    /// **相邻 dash 完全重叠 —— 「虚线」「点菱」两种预设画出来与实线毫无区别。**
+    ///
+    /// 现值经离屏实测：虚线在 1–30 的全部线宽下均保持约 40% 的空隙占比。
+    private func applyLineStyle(_ lineStyle: LineStyle, lineWidth lw: CGFloat, in ctx: CGContext) {
+        switch lineStyle {
+        case .solid:
+            ctx.setLineDash(phase: 0, lengths: [])
+            ctx.setLineCap(.round)
+        case .dashed:
+            // 平头 + [3w, 2w]（业界惯例）
+            ctx.setLineDash(phase: 0, lengths: [lw * 3, lw * 2])
+            ctx.setLineCap(.butt)
+        case .dotted:
+            // 圆头 + 极短 dash = 圆点；间隙需大于线宽才可见
+            ctx.setLineDash(phase: 0, lengths: [1, lw * 2])
+            ctx.setLineCap(.round)
         }
     }
 
