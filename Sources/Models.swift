@@ -77,10 +77,55 @@ enum ArrowTailType {
     }
 }
 
-enum LineStyle {
+enum LineStyle: CaseIterable {
     case solid
     case dashed
     case dotted
+
+    var displayName: String {
+        switch self {
+        case .solid: return "实线"
+        case .dashed: return "虚线"
+        case .dotted: return "点线"
+        }
+    }
+
+    /// 按线型设置 dash 与线帽。
+    ///
+    /// **dash 长度必须随线宽缩放，且虚线要用平头（.butt）**，否则间隙会被线帽吞掉：
+    /// 圆头（.round）会让每段 dash 两端各外扩 `lineWidth / 2`，
+    /// 实际覆盖长度变成 `dash + lineWidth`。原实现固定用 `[8, 4]` + 圆头，
+    /// 当线宽 ≥ 4 时（默认线宽 15）覆盖长度 8 + 15 = 23 > 周期 12，
+    /// **相邻 dash 完全重叠 —— 「虚线」「点菱」两种预设画出来与实线毫无区别。**
+    ///
+    /// 现值经离屏实测：虚线在 1–30 的全部线宽下均保持约 40% 的空隙占比。
+    ///
+    /// 箭头的箭身、矩形、椭圆共用本方法，保证线型在各形状上表现一致。
+    /// **命中检测（`drawHitTest`）不要调用它** —— 见 `Arrow.drawHitTest` 的说明。
+    func apply(lineWidth lw: CGFloat, in ctx: CGContext) {
+        switch self {
+        case .solid:
+            ctx.setLineDash(phase: 0, lengths: [])
+            ctx.setLineCap(.round)
+        case .dashed:
+            // 平头 + [3w, 2w]（业界惯例）
+            ctx.setLineDash(phase: 0, lengths: [lw * 3, lw * 2])
+            ctx.setLineCap(.butt)
+        case .dotted:
+            // 圆头 + 极短 dash = 圆点；间隙需大于线宽才可见
+            ctx.setLineDash(phase: 0, lengths: [1, lw * 2])
+            ctx.setLineCap(.round)
+        }
+    }
+}
+
+/// 支持线型（实线/虚线/点线）的标注对象。
+///
+/// 单独抽协议而不是塞进 `AnnotationObject`：箭头把线型放在 `ArrowStyle` 里，
+/// 序号/贴纸/聚光灯则根本没有「描边线型」这个概念，加进主协议会逼每个类型
+/// 都实现一遍（且多半只能写成空实现）。
+protocol LineStyleSupporting: AnyObject {
+    var lineStyle: LineStyle { get set }
 }
 
 struct ArrowStyle {
@@ -369,7 +414,7 @@ class Arrow: AnnotationObject {
             ctx.setLineCap(.round)
             ctx.setLineDash(phase: 0, lengths: [])
         } else {
-            applyLineStyle(style.lineStyle, lineWidth: lw, in: ctx)
+            style.lineStyle.apply(lineWidth: lw, in: ctx)
         }
 
         // Shaft
@@ -412,31 +457,6 @@ class Arrow: AnnotationObject {
                 drawHead(headType, at: startPoint, angle: angle + .pi,
                          in: ctx, color: drawColor)
             }
-        }
-    }
-
-    /// 按线型设置 dash 与线帽。
-    ///
-    /// **dash 长度必须随线宽缩放，且虚线要用平头（.butt）**，否则间隙会被线帽吞掉：
-    /// 圆头（.round）会让每段 dash 两端各外扩 `lineWidth / 2`，
-    /// 实际覆盖长度变成 `dash + lineWidth`。原实现固定用 `[8, 4]` + 圆头，
-    /// 当线宽 ≥ 4 时（默认线宽 15）覆盖长度 8 + 15 = 23 > 周期 12，
-    /// **相邻 dash 完全重叠 —— 「虚线」「点菱」两种预设画出来与实线毫无区别。**
-    ///
-    /// 现值经离屏实测：虚线在 1–30 的全部线宽下均保持约 40% 的空隙占比。
-    private func applyLineStyle(_ lineStyle: LineStyle, lineWidth lw: CGFloat, in ctx: CGContext) {
-        switch lineStyle {
-        case .solid:
-            ctx.setLineDash(phase: 0, lengths: [])
-            ctx.setLineCap(.round)
-        case .dashed:
-            // 平头 + [3w, 2w]（业界惯例）
-            ctx.setLineDash(phase: 0, lengths: [lw * 3, lw * 2])
-            ctx.setLineCap(.butt)
-        case .dotted:
-            // 圆头 + 极短 dash = 圆点；间隙需大于线宽才可见
-            ctx.setLineDash(phase: 0, lengths: [1, lw * 2])
-            ctx.setLineCap(.round)
         }
     }
 
@@ -540,7 +560,7 @@ class Arrow: AnnotationObject {
 
 // MARK: - RectangleShape
 
-class RectangleShape: AnnotationObject {
+class RectangleShape: AnnotationObject, LineStyleSupporting {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -549,6 +569,8 @@ class RectangleShape: AnnotationObject {
     var rotation: CGFloat
     var color: NSColor
     var lineWidth: CGFloat
+    /// 描边线型（实线/虚线/点线）。新建对象时由画布按当前工具设置写入。
+    var lineStyle: LineStyle = .solid
 
     init(center: CGPoint, width: CGFloat, height: CGFloat,
          color: NSColor, lineWidth: CGFloat = 2.0, hitTestColorKey: UInt32) {
@@ -618,8 +640,8 @@ class RectangleShape: AnnotationObject {
         let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
         ctx.setStrokeColor(color.cgColor)
         ctx.setLineWidth(lineWidth)
-        ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
+        lineStyle.apply(lineWidth: lineWidth, in: ctx)
         ctx.stroke(rect)
         ctx.restoreGState()
     }
@@ -631,6 +653,10 @@ class RectangleShape: AnnotationObject {
         let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
         ctx.setStrokeColor(color.cgColor)
         ctx.setLineWidth(lineWidth + 6)
+        // 命中检测强制实线：虚线/点线的空隙会让点击落在空处、选不中该对象
+        // （与 Arrow.drawHitTest 一致 —— picking pass 不继承 dash 是业界惯例）
+        ctx.setLineDash(phase: 0, lengths: [])
+        ctx.setLineCap(.round)
         ctx.stroke(rect)
         ctx.restoreGState()
     }
@@ -716,7 +742,7 @@ class RectangleShape: AnnotationObject {
 
 // MARK: - CircleShape (Ellipse)
 
-class CircleShape: AnnotationObject {
+class CircleShape: AnnotationObject, LineStyleSupporting {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -725,6 +751,8 @@ class CircleShape: AnnotationObject {
     var rotation: CGFloat
     var color: NSColor
     var lineWidth: CGFloat
+    /// 描边线型（实线/虚线/点线）。新建对象时由画布按当前工具设置写入。
+    var lineStyle: LineStyle = .solid
 
     init(center: CGPoint, radiusX: CGFloat, radiusY: CGFloat, color: NSColor,
          lineWidth: CGFloat = 2.0, hitTestColorKey: UInt32) {
@@ -765,6 +793,7 @@ class CircleShape: AnnotationObject {
         let rect = CGRect(x: -radiusX, y: -radiusY, width: radiusX * 2, height: radiusY * 2)
         ctx.setStrokeColor(color.cgColor)
         ctx.setLineWidth(lineWidth)
+        lineStyle.apply(lineWidth: lineWidth, in: ctx)
         ctx.strokeEllipse(in: rect)
         ctx.restoreGState()
     }
@@ -776,6 +805,9 @@ class CircleShape: AnnotationObject {
         let rect = CGRect(x: -radiusX, y: -radiusY, width: radiusX * 2, height: radiusY * 2)
         ctx.setStrokeColor(color.cgColor)
         ctx.setLineWidth(lineWidth + 6)
+        // 命中检测强制实线（同 RectangleShape.drawHitTest）
+        ctx.setLineDash(phase: 0, lengths: [])
+        ctx.setLineCap(.round)
         ctx.strokeEllipse(in: rect)
         ctx.restoreGState()
     }
