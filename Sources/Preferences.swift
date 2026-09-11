@@ -38,6 +38,7 @@ final class Preferences {
         case hotkeyWindow
         case updateFeedURL
         case autoCheckUpdates
+        case recordHistory
     }
 
     /// 缺省值集中在这里。改动这一处即同时改变「新用户初值」与「老用户缺键回退值」。
@@ -50,12 +51,25 @@ final class Preferences {
         static let lastToolTag = 0
         static let watermarkEnabled = false
         static let watermarkText = "AISnap"
+        /// 保留截图历史。默认开（它的用处就是"忘了保存还能找回来"）。
+        /// 关掉时**连写盘都不发生** —— 截图常含敏感内容，用户对"我没保存的东西
+        /// 却躺在磁盘上"的接受度因人而异，开关必须是真的开关。
+        static let recordHistory = true
 
-        /// 默认快捷键避开系统截图的 ⌘⇧3 / 4 / 5 / 6。
+        /// 默认快捷键。刻意避开两类组合：
+        ///
+        /// 1. 系统截图的 ⌘⇧3 / 4 / 5 / 6（注册前还会再拦一道，见
+        ///    `HotkeyConfig.systemScreenshotCombos`）；
+        /// 2. **主流应用的菜单快捷键** —— 这一点更要紧：全局热键是会话级独占的，
+        ///    注册之后那个组合就不再到达任何前台应用。最初的默认值用的是 ⌘⇧W，
+        ///    而它在浏览器里是"关闭窗口"级别的高频键，等于开箱就把用户常用快捷键
+        ///    静默劫持掉，症状还完全不像截图工具干的（与"⇧A 吞掉打大写"同一类）。
+        ///
+        /// ⌃⌘ 这一族几乎没有应用占用，两个动作也保持一致（成对的键不一致会很别扭）。
         static let regionCaptureHotkey = HotkeyConfig(keyCode: UInt32(kVK_ANSI_A),
-                                                     carbonModifiers: UInt32(cmdKey | shiftKey))
+                                                     carbonModifiers: UInt32(cmdKey | controlKey))
         static let windowCaptureHotkey = HotkeyConfig(keyCode: UInt32(kVK_ANSI_W),
-                                                     carbonModifiers: UInt32(cmdKey | shiftKey))
+                                                     carbonModifiers: UInt32(cmdKey | controlKey))
     }
 
     // MARK: - 线宽
@@ -186,6 +200,13 @@ final class Preferences {
         defaults.set("\(config.keyCode):\(config.carbonModifiers)", forKey: key.rawValue)
     }
 
+    // MARK: - 截图历史
+
+    var recordHistory: Bool {
+        get { defaults.object(forKey: Key.recordHistory.rawValue) as? Bool ?? Defaults.recordHistory }
+        set { defaults.set(newValue, forKey: Key.recordHistory.rawValue) }
+    }
+
     // MARK: - 更新
 
     /// 更新清单（appcast）地址。留空表示"还没有发布渠道"，此时只保留手动检查入口。
@@ -212,7 +233,8 @@ final class Preferences {
     func resetToDefaults() {
         for key in [Key.lineWidth, Key.lineStyle, Key.colorHex, Key.arrowStyleIndex,
                     Key.paletteIndex, Key.lastToolTag, Key.watermarkEnabled, Key.watermarkText,
-                    Key.hotkeyRegion, Key.hotkeyWindow, Key.updateFeedURL, Key.autoCheckUpdates] {
+                    Key.hotkeyRegion, Key.hotkeyWindow, Key.updateFeedURL, Key.autoCheckUpdates,
+                    Key.recordHistory] {
             defaults.removeObject(forKey: key.rawValue)
         }
     }

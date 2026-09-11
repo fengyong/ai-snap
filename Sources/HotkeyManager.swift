@@ -103,7 +103,12 @@ final class HotkeyManager {
 
     /// 注册失败的原因，供 UI 提示。
     enum RegistrationError: Error {
+        /// 被**别的应用**占了
         case keyAlreadyTaken(String)
+        /// 被**本应用内的另一个动作**占了。与上一条是不同的问题：
+        /// 混在一起报「已被其它应用占用」，会把人引去排查别的应用，
+        /// 而真正的原因是自己在设置窗口里把两个动作设成了同一个组合。
+        case keyUsedByAnotherAction(String)
         case systemError(OSStatus, String)
         case unusableCombination(String)
     }
@@ -127,11 +132,22 @@ final class HotkeyManager {
 
     // MARK: - 注册
 
-    /// 注册一个全局快捷键。同一个 `config` 只会生效一次（后注册的会先撤掉旧的）。
+    /// 注册一个全局快捷键。
+    ///
+    /// 同一个组合**不会被重复注册**：先查本应用已注册的表，命中就明确报出是
+    /// "本应用内已被另一个动作占用"。此前这里没有查重，于是第二个动作会拿到
+    /// Carbon 的 `eventHotKeyExistsErr`，被报成"已被**其它应用**占用"——
+    /// 而实际是我们自己占的，用户会去关别的应用，永远修不好。
+    ///
+    /// 注：这里**不是**「后注册的顶掉旧的」。顶掉会让先注册的那个动作静默失效，
+    /// 用户只知道"某个快捷键没反应"，比直接报错难查得多。
     @discardableResult
     func register(_ config: HotkeyConfig, handler: @escaping () -> Void) throws -> UInt32 {
         guard config.isUsable else {
             throw RegistrationError.unusableCombination(config.displayString)
+        }
+        if registrations.contains(where: { $0.config == config }) {
+            throw RegistrationError.keyUsedByAnotherAction(config.displayString)
         }
         installHandlerIfNeeded()
 
@@ -177,7 +193,8 @@ final class HotkeyManager {
 
     /// 只会装一次。Carbon 的事件处理器是 C 函数指针，拿不到 `self`，
     /// 因此通过单例转发。
-    private func installHandlerIfNeeded() {        guard !handlerInstalled else { return }
+    private func installHandlerIfNeeded() {
+        guard !handlerInstalled else { return }
         handlerInstalled = true
 
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
@@ -240,6 +257,8 @@ enum HotkeyRegistration {
         switch error {
         case .keyAlreadyTaken(let combo):
             return "「\(action)」的 \(combo) 已被其它应用占用，请换一个组合"
+        case .keyUsedByAnotherAction(let combo):
+            return "「\(action)」的 \(combo) 已用于本应用的另一个动作，请换一个组合"
         case .systemError(let status, let combo):
             return "「\(action)」的 \(combo) 注册失败（系统错误 \(status)）"
         case .unusableCombination(let combo):

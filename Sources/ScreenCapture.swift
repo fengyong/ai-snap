@@ -1,5 +1,40 @@
 import Cocoa
 
+/// 一次截图的结果：图像 + 它对应的「点 → 像素」倍率（可选的就地选区）。
+///
+/// ## 为什么倍率要跟图像一起返回
+///
+/// 标注窗口需要把图像包成 `NSImage` 并声明它的**逻辑尺寸**。原先显示侧自己取
+/// `NSScreen.main.backingScaleFactor`，而裁剪侧是按实际尺寸反推的 ——
+/// **两条路各算各的**。一旦捕获返回的分辨率与屏幕倍率不一致（跨屏、降到 1x、
+/// 或者 SCK 的行为随版本变化），裁出来的图像素会与预期不符，画布就缩成选区的一半，
+/// 而"画布正好压在选区上"这个刻意做出来的观感会当场崩掉。
+///
+/// 现在倍率由捕获方**按实际尺寸反推**、随图像一起往下传，两侧永远一致 ——
+/// 把"碰巧正确"变成"构造性正确"。（这条是第四批评审的未修项。）
+struct CapturedImage {
+    let image: CGImage
+    /// 图像像素宽 ÷ 逻辑点宽。实测反推，不取 `backingScaleFactor`。
+    let pixelScale: CGFloat
+    /// 区域截图时选区在 AppKit 屏幕坐标下的矩形（就地编辑要把画布压回这里）；
+    /// 窗口截图没有这个概念，为 nil。
+    let anchorRect: NSRect?
+
+    /// 逻辑尺寸（点）：标注窗口按它建画布。
+    var logicalSize: NSSize {
+        NSSize(width: CGFloat(image.width) / max(pixelScale, 0.01),
+               height: CGFloat(image.height) / max(pixelScale, 0.01))
+    }
+
+    /// 由「图像像素尺寸」与「对应的逻辑点尺寸」反推倍率。
+    ///
+    /// 点尺寸为 0（理论上不该发生）时退回 1，避免除零把画布尺寸变成无穷大。
+    static func scale(pixelWidth: Int, pointWidth: CGFloat) -> CGFloat {
+        guard pointWidth > 0 else { return 1 }
+        return CGFloat(pixelWidth) / pointWidth
+    }
+}
+
 /// 截图捕获的统一入口。
 ///
 /// ## 分工
@@ -42,11 +77,18 @@ enum ScreenCapture {
     // MARK: - 窗口截图
 
     /// 捕获鼠标所在位置的窗口。
-    static func captureWindowUnderMouse() async throws -> CGImage {
+    ///
+    /// 倍率按「图像像素宽 ÷ 窗口逻辑宽」反推 —— 窗口的 `frame` 是点，
+    /// 而捕获时配置的像素宽是 `frame.width × pointPixelScale`，两者相除恰好是实际倍率。
+    static func captureWindowUnderMouse() async throws -> CapturedImage {
         guard let targetID = windowIDUnderMouse() else {
             throw ScreenCaptureError.windowNotFoundUnderMouse
         }
-        return try await CaptureProviderSCK.captureWindow(windowID: targetID)
+        let (image, pointWidth) = try await CaptureProviderSCK.captureWindow(windowID: targetID)
+        return CapturedImage(image: image,
+                             pixelScale: CapturedImage.scale(pixelWidth: image.width,
+                                                             pointWidth: pointWidth),
+                             anchorRect: nil)
     }
 
     // MARK: - 窗口枚举

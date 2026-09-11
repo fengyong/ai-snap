@@ -57,8 +57,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     @objc private func showHistory() {
         if historyWindow == nil {
             let window = HistoryWindow()
-            window.onOpen = { [weak self] image in
-                self?.openAnnotationWindow(with: image)
+            window.onOpen = { [weak self] capture in
+                self?.openAnnotationWindow(with: capture)
             }
             historyWindow = window
         }
@@ -243,10 +243,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     private func presentRegionSelection() {
-        let window = RegionSelectionWindow { [weak self] image, anchor in
+        let window = RegionSelectionWindow { [weak self] capture in
             guard let self = self else { return }
 
-            guard let image = image, let anchor = anchor else {
+            guard let capture = capture, capture.anchorRect != nil else {
                 // 取消或失败：收掉覆盖层
                 self.regionSelectionWindow?.hideOverlays()
                 self.regionSelectionWindow = nil
@@ -256,8 +256,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // 等标注窗口关闭时再由 onClose 收掉
             // 记一笔历史。存的是**刚截下来的原图**，不含此后画上去的标注 ——
             // 这样"重新编辑"能从干净的一张图开始（在后台写盘，不挡开窗）
-            CaptureHistory.shared.record(image)
-            self.openAnnotationWindow(with: image, anchoredAt: anchor)
+            self.recordHistory(capture)
+            self.openAnnotationWindow(with: capture)
         }
         regionSelectionWindow = window
 
@@ -300,9 +300,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             guard let self else { return }
             Task { @MainActor in
                 do {
-                    let image = try await ScreenCapture.captureWindowUnderMouse()
-                    CaptureHistory.shared.record(image)
-                    self.openAnnotationWindow(with: image)
+                    let capture = try await ScreenCapture.captureWindowUnderMouse()
+                    self.recordHistory(capture)
+                    self.openAnnotationWindow(with: capture)
                 } catch ScreenCaptureError.permissionDenied {
                     // 旧实现此处只会静默返回 nil，用户点了没反应；现在给出正确引导
                     self.showPermissionAlert()
@@ -336,15 +336,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Annotation
 
-    private func openAnnotationWindow(with image: CGImage, anchoredAt anchor: NSRect? = nil) {
-        // 用屏幕 backingScaleFactor 将像素尺寸换算为逻辑点尺寸
-        let scaleFactor = NSScreen.main?.backingScaleFactor ?? 2.0
-        let logicalSize = NSSize(width: CGFloat(image.width) / scaleFactor,
-                                 height: CGFloat(image.height) / scaleFactor)
-        let nsImage = NSImage(cgImage: image, size: logicalSize)
+    /// 记一笔截图历史。受偏好开关控制（默认开）。
+    ///
+    /// 开关关掉时**连写盘都不发生** —— 截图常含敏感内容，用户对"我没保存的东西
+    /// 却躺在磁盘上"的接受度因人而异，所以开关必须是真的开关，而不是"少显示几条"。
+    private func recordHistory(_ capture: CapturedImage) {
+        guard Preferences.shared.recordHistory else { return }
+        CaptureHistory.shared.record(capture.image, pixelScale: capture.pixelScale)
+    }
 
-        let window = AnnotationWindow(image: nsImage, anchor: anchor)
-        if anchor != nil {
+    /// 打开标注窗口。
+    ///
+    /// 逻辑尺寸取捕获方**实测反推**的倍率（`CapturedImage.logicalSize`），
+    /// 不再自己读 `backingScaleFactor`：那是"显示侧用屏幕倍率、裁剪侧用反推"的双轨制，
+    /// 两者一旦不符（跨屏 / 降级 1x），画布会与选区错位，而这个错位只在真机上才看得见。
+    private func openAnnotationWindow(with capture: CapturedImage) {
+        let nsImage = NSImage(cgImage: capture.image, size: capture.logicalSize)
+
+        let window = AnnotationWindow(image: nsImage, anchor: capture.anchorRect)
+        if capture.anchorRect != nil {
             // 标注窗口关闭时收掉冻结覆盖层 —— 覆盖层的所有权在 regionSelectionWindow 手上，
             // 标注窗口只负责通知
             window.onClose = { [weak self] in

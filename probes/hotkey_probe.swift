@@ -59,20 +59,41 @@ check("⇧⌘A 不在黑名单内",
 print("\n=== 5. 默认快捷键 ===\n")
 let region = Preferences.Defaults.regionCaptureHotkey
 let windowKey = Preferences.Defaults.windowCaptureHotkey
-check("区域截图 = ⇧⌘A", region.displayString == "⇧⌘A", region.displayString)
-check("窗口截图 = ⇧⌘W", windowKey.displayString == "⇧⌘W", windowKey.displayString)
+// 默认值本身**不再写死在断言里**：算成一个变量再比。
+// 原先断言"区域截图 = ⇧⌘A"这种字面值，一改默认值探针就红 —— 而"改默认值"
+// 恰恰是它该允许发生的事。这里只钉住"默认值必须满足的性质"。
+let regionDisplay = region.displayString
+let windowDisplay = windowKey.displayString
 check("均可用", region.isUsable && windowKey.isUsable)
 check("均不在系统截图黑名单",
       !HotkeyConfig.systemScreenshotCombos.contains(region)
       && !HotkeyConfig.systemScreenshotCombos.contains(windowKey))
 check("两者互不冲突", region != windowKey)
+check("都含 ⌘ 或 ⌃（命令型修饰键，不参与常规文本输入）",
+      region.carbonModifiers & UInt32(cmdKey | controlKey) != 0
+      && windowKey.carbonModifiers & UInt32(cmdKey | controlKey) != 0,
+      "\(regionDisplay) / \(windowDisplay)")
+
+// ★ 这一条是第四批之后加的真问题：全局热键是会话级独占的，注册后那个组合就
+//   不再到达任何前台应用。若默认值落在主流应用的高频菜单键上，等于开箱就静默
+//   劫持掉用户常用快捷键 —— 而症状完全不像截图工具干的。
+//   ⌘⇧W 在浏览器里是"关闭窗口"，⌘⇧A 在 Firefox 里是"扩展管理"，都曾是我们的默认值。
+let highFrequencyMenuCombos: [(String, HotkeyConfig)] = [
+    ("⌘⇧W 浏览器「关闭窗口」", mk(kVK_ANSI_W, cmdKey | shiftKey)),
+    ("⌘⇧A 部分应用「附加组件」", mk(kVK_ANSI_A, cmdKey | shiftKey)),
+    ("⌘⇧S 各应用「另存为」", mk(kVK_ANSI_S, cmdKey | shiftKey)),
+    ("⌘⇧T 浏览器「恢复标签页」", mk(kVK_ANSI_T, cmdKey | shiftKey)),
+]
+for (label, combo) in highFrequencyMenuCombos {
+    check("默认值避开 \(label)", region != combo && windowKey != combo)
+}
 
 print("\n=== 6. 持久化往返 + 脏数据回退 ===\n")
 let suite = "com.aisnap.hotkeytest.\(UUID().uuidString)"
 let store = UserDefaults(suiteName: suite)!
 let prefs = Preferences(defaults: store)
 
-check("缺省时读到默认 ⇧⌘A", prefs.regionCaptureHotkey.displayString == "⇧⌘A",
+check("缺省时读到默认（\(regionDisplay)）", prefs.regionCaptureHotkey.displayString == regionDisplay,
       prefs.regionCaptureHotkey.displayString)
 
 let custom = mk(kVK_ANSI_S, cmdKey | optionKey)
@@ -81,22 +102,22 @@ check("改键后跨实例读回", Preferences(defaults: store).regionCaptureHotk
       Preferences(defaults: store).regionCaptureHotkey.displayString)
 
 store.set("garbage", forKey: "hotkeyRegion")
-check("格式错误 → 回默认", Preferences(defaults: store).regionCaptureHotkey.displayString == "⇧⌘A",
+check("格式错误 → 回默认", Preferences(defaults: store).regionCaptureHotkey.displayString == regionDisplay,
       Preferences(defaults: store).regionCaptureHotkey.displayString)
 
 store.set("\(kVK_ANSI_A):0", forKey: "hotkeyRegion")
-check("已存值无修饰键 → 回默认", Preferences(defaults: store).regionCaptureHotkey.displayString == "⇧⌘A",
+check("已存值无修饰键 → 回默认", Preferences(defaults: store).regionCaptureHotkey.displayString == regionDisplay,
       Preferences(defaults: store).regionCaptureHotkey.displayString)
 
 store.set("\(kVK_ANSI_A):\(shiftKey)", forKey: "hotkeyRegion")
 check("已存值仅 ⇧ → 回默认（不注册会抢打字的键）",
-      Preferences(defaults: store).regionCaptureHotkey.displayString == "⇧⌘A",
+      Preferences(defaults: store).regionCaptureHotkey.displayString == regionDisplay,
       Preferences(defaults: store).regionCaptureHotkey.displayString)
 
 prefs.regionCaptureHotkey = custom
 check("resetToDefaults 后回默认",
       { prefs.resetToDefaults()
-        return Preferences(defaults: store).regionCaptureHotkey.displayString == "⇧⌘A" }())
+        return Preferences(defaults: store).regionCaptureHotkey.displayString == regionDisplay }())
 
 store.removePersistentDomain(forName: suite)
 
