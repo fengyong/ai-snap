@@ -171,6 +171,16 @@ class AnnotationWindow: NSWindow {
         let deleteItem = NSMenuItem(title: "删除选中", action: #selector(deleteSelectedAction), keyEquivalent: "\u{8}")
         deleteItem.target = self
         editMenu.addItem(deleteItem)
+        editMenu.addItem(NSMenuItem.separator())
+        // 这两个在菜单里列出来主要是**可发现性**：快捷键本身在 AnnotationView.keyDown
+        // 里也有一份实现，两条路都调用同一个方法。菜单若消费了事件，keyDown 就收不到，
+        // 所以不会重复执行。
+        let copyItem = NSMenuItem(title: "复制到剪贴板", action: #selector(copyImage), keyEquivalent: "c")
+        copyItem.target = self
+        editMenu.addItem(copyItem)
+        let saveItem = NSMenuItem(title: "保存为文件…", action: #selector(saveImage), keyEquivalent: "s")
+        saveItem.target = self
+        editMenu.addItem(saveItem)
         let editMenuItem = NSMenuItem()
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
@@ -467,11 +477,7 @@ class AnnotationWindow: NSWindow {
     ]
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
-        let tools = Self.toolbarTools
-        guard sender.tag >= 0 && sender.tag < tools.count else { return }
-        annotationView.currentTool = tools[sender.tag].tool
-        updateToolButtonStates(selectedIndex: sender.tag)
-        Preferences.shared.lastToolTag = sender.tag
+        selectTool(atIndex: sender.tag)
     }
 
     @objc private func stampSelected(_ sender: NSPopUpButton) {
@@ -521,14 +527,35 @@ class AnnotationWindow: NSWindow {
     }
 
     @objc private func deleteSelectedAction() {
-        // 模拟 Delete 键
-        let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
-                                     timestamp: 0, windowNumber: windowNumber,
-                                     context: nil, characters: "", charactersIgnoringModifiers: "",
-                                     isARepeat: false, keyCode: 51)
-        if let event = event {
-            annotationView.keyDown(with: event)
-        }
+        annotationView.deleteSelectedObject()
+    }
+
+    // MARK: - 由 AnnotationView 的键盘处理调用
+
+    /// Enter：复制到剪贴板并关闭标注窗口（Snipaste 的一步到位行为）。
+    func copyAndClose() {
+        copyImage()
+        close()
+    }
+
+    /// Tab / ⇧Tab：按工具栏顺序循环切换绘图工具。
+    ///
+    /// 放在窗口而不是画布上，是因为切换工具还要同步工具栏按钮的选中态 ——
+    /// 而按钮归窗口管。画布只管 `currentTool` 这一个值。
+    func cycleTool(reverse: Bool) {
+        let current = Self.toolbarTools.firstIndex { $0.tool == annotationView.currentTool }
+        // 环绕算术走 CyclicIndex.step（纯函数，已离屏测试过边界）
+        selectTool(atIndex: CyclicIndex.step(current,
+                                             count: Self.toolbarTools.count,
+                                             reverse: reverse))
+    }
+
+    /// 按工具栏下标选中工具（数字键直选、Tab 循环、按钮点击都走这里）。
+    func selectTool(atIndex index: Int) {
+        guard index >= 0 && index < Self.toolbarTools.count else { return }
+        annotationView.currentTool = Self.toolbarTools[index].tool
+        updateToolButtonStates(selectedIndex: index)
+        Preferences.shared.lastToolTag = index
     }
 
     @objc private func watermarkToggled(_ sender: NSButton) {
@@ -539,7 +566,7 @@ class AnnotationWindow: NSWindow {
         annotationView.watermarkConfig.text = sender.stringValue
     }
 
-    @objc private func saveImage() {
+    @objc func saveImage() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "screenshot.png"
@@ -549,13 +576,18 @@ class AnnotationWindow: NSWindow {
                   let self = self else { return }
 
             let image = self.annotationView.compositeImage()
-            if let data = self.pngData(from: image) {
-                try? data.write(to: url)
+            guard let data = self.pngData(from: image) else { return }
+            do {
+                try data.write(to: url)
+                self.flashHUD("已保存")
+            } catch {
+                // 以前是 try? 静默吞掉 —— 磁盘满 / 无权限时用户完全不知道没存上
+                self.presentWriteFailure(error, url: url)
             }
         }
     }
 
-    @objc private func copyImage() {
+    @objc func copyImage() {
         let image = annotationView.compositeImage()
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -568,6 +600,62 @@ class AnnotationWindow: NSWindow {
             items.append(url as NSURL)
         }
         pb.writeObjects(items)
+        flashHUD("已复制")
+    }
+
+    // MARK: - 视觉反馈
+
+    private var hudLabel: NSTextField?
+
+    /// 在画布中央短暂显示一条提示。
+    ///
+    /// 快捷键必须有反馈：⌘C 之后界面上什么都不变的话，用户不确定到底生效没有，
+    /// 会重复按很多次。Enter 虽然会关窗口（本身就是反馈），但用它统一处理也无害。
+    private func flashHUD(_ text: String) {
+        hudLabel?.removeFromSuperview()
+
+        let label = NSTextField(labelWithString: text)
+        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        label.textColor = .white
+        label.alignment = .center
+        label.wantsLayer = true
+        label.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
+        label.layer?.cornerRadius = 6
+        label.sizeToFit()
+        label.frame.size.width += 28
+        label.frame.size.height += 14
+        label.frame.origin = NSPoint(
+            x: annotationView.frame.midX - label.frame.width / 2,
+            y: annotationView.frame.midY - label.frame.height / 2
+        )
+        label.alphaValue = 0
+        contentView?.addSubview(label)
+        hudLabel = label
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            label.animator().alphaValue = 1
+        } completionHandler: { [weak self] in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.25
+                    label.animator().alphaValue = 0
+                } completionHandler: { [weak self] in
+                    label.removeFromSuperview()
+                    if self?.hudLabel === label { self?.hudLabel = nil }
+                }
+            }
+        }
+    }
+
+    private func presentWriteFailure(_ error: Error, url: URL) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "保存失败"
+        alert.informativeText = "无法写入 \(url.path)\n\n\(error.localizedDescription)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 
     // MARK: - 导出辅助
@@ -664,6 +752,17 @@ class AnnotationWindow: NSWindow {
         【水印】
         勾选"启用"并输入文本，导出时自动叠加平铺水印
 
+        【键盘】
+        标注阶段可以全程不碰鼠标：
+        - Enter        复制到剪贴板并关闭窗口（最常用，一步到位）
+        - ⌘C           复制到剪贴板（不关窗口）
+        - ⌘S           保存为 PNG 文件
+        - Tab / ⇧Tab   循环切换绘图工具
+        - 1 ~ 7        直接选中第 N 个绘图工具（按工具栏从左到右的顺序）
+        - Esc          取消选中，回到绘制模式
+        - Delete       删除选中的对象（连同挂在它上面的箭头）
+        - ⌘Z / ⇧⌘Z     撤销 / 重做
+
         【导出】
         - 保存：导出为 PNG 文件
         - 复制：复制到系统剪贴板（同时写入图片内容和图片文件，
@@ -672,7 +771,7 @@ class AnnotationWindow: NSWindow {
         【设置会自动记住】
         线宽、颜色、线型、箭头样式、调色板、水印与上次使用的工具都会保存下来，
         下次启动沿用，不需要每次重新调。
-        要恢复到出厂值：点状态栏图标 →「恢复默认设置」。
+        要恢复到出厂值：点状态栏图标 →「偏好设置…」。
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "知道了")
