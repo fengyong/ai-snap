@@ -58,7 +58,9 @@ macOS 截图标注工具，支持区域截图、窗口截图，以及在截图�
 
 该 API 在 CoreGraphics 头文件中的标记是 `SCREEN_CAPTURE_OBSOLETE(10.5, 14.0, 15.0)` ——
 引入于 10.5、**废弃于 14.0、15.0 起 obsolete**，编译期提示原文是
-"Please use ScreenCaptureKit instead."。在 macOS 15+ 上继续使用会触发反复的权限弹窗且随时可能失效。
+"Please use ScreenCaptureKit instead."。此外该 API 已 obsolete，随时可能被移除；
+对代码签名不稳定的二进制（如未签名分发、频繁重新构建的本地调试版本），
+继续使用还会反复触发权限授权弹窗 —— 本项目当前正是这种情况。
 
 迁移时保留了一处关键设计：**`CGWindowListCopyWindowInfo` 并未被废弃**（`API_AVAILABLE(macos(10.5))`），
 所以「决定截哪个窗口」仍用它，只把「真正抓图」换成 ScreenCaptureKit：
