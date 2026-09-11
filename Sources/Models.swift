@@ -64,6 +64,17 @@ enum ArrowTailType {
     case none
     case circle
     case perpendicular
+    case triangle   // 尾部箭头（实心）→ 与三角形头部组合即为双向箭头
+    case open       // 尾部箭头（开放）
+
+    /// 尾部为箭头样式时返回等价的头部类型，供复用头部绘制逻辑；否则返回 nil。
+    var asArrowHead: ArrowHeadType? {
+        switch self {
+        case .triangle: return .triangle
+        case .open:     return .open
+        case .none, .circle, .perpendicular: return nil
+        }
+    }
 }
 
 enum LineStyle {
@@ -109,12 +120,25 @@ struct ArrowStyle {
         headLength: 14, headAngle: .pi / 6
     )
 
+    /// 双向箭头（两端都是实心三角）
+    static let doubleArrow = ArrowStyle(
+        headType: .triangle, tailType: .triangle, lineStyle: .solid,
+        headLength: 14, headAngle: .pi / 6
+    )
+
+    /// 双向箭头（两端都是开放样式）
+    static let doubleOpenArrow = ArrowStyle(
+        headType: .open, tailType: .open, lineStyle: .solid,
+        headLength: 14, headAngle: .pi / 6
+    )
+
     static let allPresets: [ArrowStyle] = [
-        .default, .openArrow, .dashedArrow, .diamondArrow, .circleEndpoints, .dottedDiamond
+        .default, .openArrow, .dashedArrow, .diamondArrow,
+        .circleEndpoints, .dottedDiamond, .doubleArrow, .doubleOpenArrow
     ]
 
     static let presetNames: [String] = [
-        "实心", "开放", "虚线", "菱形", "圆端", "点菱"
+        "实心", "开放", "虚线", "菱形", "圆端", "点菱", "双向", "双开放"
     ]
 }
 
@@ -358,60 +382,10 @@ class Arrow: AnnotationObject {
 
         let angle = atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x)
 
-        // Head
-        switch style.headType {
-        case .triangle:
-            let p1 = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle - style.headAngle),
-                y: endPoint.y - style.headLength * sin(angle - style.headAngle))
-            let p2 = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle + style.headAngle),
-                y: endPoint.y - style.headLength * sin(angle + style.headAngle))
-            ctx.setFillColor(drawColor.cgColor)
-            ctx.move(to: endPoint)
-            ctx.addLine(to: p1)
-            ctx.addLine(to: p2)
-            ctx.closePath()
-            ctx.fillPath()
+        // 头部（箭头指向 endPoint）
+        drawHead(style.headType, at: endPoint, angle: angle, in: ctx, color: drawColor)
 
-        case .open:
-            let p1 = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle - style.headAngle),
-                y: endPoint.y - style.headLength * sin(angle - style.headAngle))
-            let p2 = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle + style.headAngle),
-                y: endPoint.y - style.headLength * sin(angle + style.headAngle))
-            ctx.move(to: p1)
-            ctx.addLine(to: endPoint)
-            ctx.addLine(to: p2)
-            ctx.strokePath()
-
-        case .diamond:
-            let mid = CGPoint(
-                x: endPoint.x - style.headLength * 0.5 * cos(angle),
-                y: endPoint.y - style.headLength * 0.5 * sin(angle))
-            let p1 = CGPoint(
-                x: mid.x - style.headLength * 0.4 * cos(angle - .pi / 2),
-                y: mid.y - style.headLength * 0.4 * sin(angle - .pi / 2))
-            let p2 = CGPoint(
-                x: mid.x + style.headLength * 0.4 * cos(angle - .pi / 2),
-                y: mid.y + style.headLength * 0.4 * sin(angle - .pi / 2))
-            let back = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle),
-                y: endPoint.y - style.headLength * sin(angle))
-            ctx.setFillColor(drawColor.cgColor)
-            ctx.move(to: endPoint)
-            ctx.addLine(to: p1)
-            ctx.addLine(to: back)
-            ctx.addLine(to: p2)
-            ctx.closePath()
-            ctx.fillPath()
-
-        case .none:
-            break
-        }
-
-        // Tail
+        // 尾部
         switch style.tailType {
         case .none:
             break
@@ -431,6 +405,65 @@ class Arrow: AnnotationObject {
             ctx.move(to: p1)
             ctx.addLine(to: p2)
             ctx.strokePath()
+        case .triangle, .open:
+            // 尾部箭头：复用头部绘制，方向反转 180° 使其指向 startPoint
+            if let headType = style.tailType.asArrowHead {
+                drawHead(headType, at: startPoint, angle: angle + .pi,
+                         in: ctx, color: drawColor)
+            }
+        }
+    }
+
+    /// 在指定端点绘制箭头头部。`angle` 是箭头指向的方向（弧度）。
+    ///
+    /// 头尾共用本方法：头部传 `angle`，尾部传 `angle + π`。
+    private func drawHead(_ type: ArrowHeadType, at tip: CGPoint, angle: CGFloat,
+                          in ctx: CGContext, color drawColor: NSColor) {
+        let len = style.headLength
+        let spread = style.headAngle
+
+        switch type {
+        case .triangle:
+            let p1 = CGPoint(x: tip.x - len * cos(angle - spread),
+                             y: tip.y - len * sin(angle - spread))
+            let p2 = CGPoint(x: tip.x - len * cos(angle + spread),
+                             y: tip.y - len * sin(angle + spread))
+            ctx.setFillColor(drawColor.cgColor)
+            ctx.move(to: tip)
+            ctx.addLine(to: p1)
+            ctx.addLine(to: p2)
+            ctx.closePath()
+            ctx.fillPath()
+
+        case .open:
+            let p1 = CGPoint(x: tip.x - len * cos(angle - spread),
+                             y: tip.y - len * sin(angle - spread))
+            let p2 = CGPoint(x: tip.x - len * cos(angle + spread),
+                             y: tip.y - len * sin(angle + spread))
+            ctx.move(to: p1)
+            ctx.addLine(to: tip)
+            ctx.addLine(to: p2)
+            ctx.strokePath()
+
+        case .diamond:
+            let mid = CGPoint(x: tip.x - len * 0.5 * cos(angle),
+                              y: tip.y - len * 0.5 * sin(angle))
+            let p1 = CGPoint(x: mid.x - len * 0.4 * cos(angle - .pi / 2),
+                             y: mid.y - len * 0.4 * sin(angle - .pi / 2))
+            let p2 = CGPoint(x: mid.x + len * 0.4 * cos(angle - .pi / 2),
+                             y: mid.y + len * 0.4 * sin(angle - .pi / 2))
+            let back = CGPoint(x: tip.x - len * cos(angle),
+                               y: tip.y - len * sin(angle))
+            ctx.setFillColor(drawColor.cgColor)
+            ctx.move(to: tip)
+            ctx.addLine(to: p1)
+            ctx.addLine(to: back)
+            ctx.addLine(to: p2)
+            ctx.closePath()
+            ctx.fillPath()
+
+        case .none:
+            break
         }
     }
 
