@@ -298,7 +298,7 @@ class AnnotationView: NSView {
                     }
                     obj = arrow
 
-                case .rectangle:
+                case .rectangle, .roundedRectangle:
                     if drawingFromCenter {
                         // 以 start 为中心，拖拽确定半尺寸
                         let hw = abs(snappedEnd.x - start.x)
@@ -314,6 +314,7 @@ class AnnotationView: NSView {
                                              lineWidth: currentLineWidth,
                                              hitTestColorKey: colorKey)
                     }
+                    (obj as? RectangleShape)?.cornerRadius = defaultCornerRadius(for: tool)
 
                 case .circle:
                     if drawingFromCenter {
@@ -689,6 +690,24 @@ class AnnotationView: NSView {
         ctx.strokePath()
     }
 
+    /// 新建圆角矩形时的默认圆角半径 = max(12, 2.5 × 线宽)。
+    ///
+    /// **为什么必须随线宽缩放**：描边以路径为中心、向两侧各扩 `lineWidth / 2`。
+    /// 半径太小时，圆角整块被线宽本身填满，看上去仍是直角 —— 用户点了「圆角」
+    /// 却发现没变化。这与之前「虚线 dash 用固定值导致画出来是实线」是同一类问题：
+    /// **参数不随线宽缩放，差别就看不见**（参见 LineStyle.apply 的说明）。
+    ///
+    /// 离屏实测的「角点从被描边覆盖变为被切掉」的翻转半径（二分求得）：
+    ///
+    ///   线宽  2 → 5.8    线宽  8 → 13.1    线宽 30 → 39.6
+    ///   线宽  4 → 8.2    线宽 15 → 21.5
+    ///
+    /// 翻转点与线宽的比值随线宽增大而收敛（2.91 → 1.32），细线处更大，由 12 的下限兜住。
+    /// 取 2.5 倍是为了在所有线宽下都留出余量，而不是刚好压在翻转点上。
+    private func defaultCornerRadius(for tool: DrawingTool) -> CGFloat {
+        tool == .roundedRectangle ? max(12, currentLineWidth * 2.5) : 0
+    }
+
     /// 把「当前线型」应用到支持它的对象上。
     ///
     /// 新建对象与拖拽预览共用这一个入口，因此不必在十几个构造点各自传参 ——
@@ -705,7 +724,7 @@ class AnnotationView: NSView {
                                 hitTestColorKey: 0, style: currentArrowStyle)
             preview.draw(in: ctx)
 
-        case .rectangle:
+        case .rectangle, .roundedRectangle:
             if drawingFromCenter {
                 let hw = abs(end.x - start.x)
                 let hh = abs(end.y - start.y)
@@ -714,6 +733,7 @@ class AnnotationView: NSView {
                                               color: currentColor,
                                               lineWidth: currentLineWidth,
                                               hitTestColorKey: 0)
+                preview.cornerRadius = defaultCornerRadius(for: tool)
                 applyCurrentStroke(to: preview)
                 preview.draw(in: ctx)
             } else {
@@ -721,6 +741,7 @@ class AnnotationView: NSView {
                                               color: currentColor,
                                               lineWidth: currentLineWidth,
                                               hitTestColorKey: 0)
+                preview.cornerRadius = defaultCornerRadius(for: tool)
                 applyCurrentStroke(to: preview)
                 preview.draw(in: ctx)
             }
