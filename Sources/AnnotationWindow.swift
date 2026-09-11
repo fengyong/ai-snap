@@ -34,7 +34,9 @@ class AnnotationWindow: NSWindow {
         let debugHeight = canvasH * debugScale
 
         let totalWidth = canvasW + debugPadding + debugWidth
-        let windowSize = NSSize(width: max(totalWidth, 780),
+        // 最小宽度需容纳底部工具栏（工具栏用绝对坐标排布，超出窗口宽度的按钮会被裁掉）
+        let minimumWidth: CGFloat = 1060
+        let windowSize = NSSize(width: max(totalWidth, minimumWidth),
                                 height: max(canvasH, debugHeight) + toolbarHeight)
 
         let origin = NSPoint(
@@ -178,6 +180,22 @@ class AnnotationWindow: NSWindow {
         }
         updateToolButtonStates(selectedIndex: 0)
         xOffset += 4
+
+        addSeparator(to: toolbar, at: &xOffset, height: height)
+
+        // ── 箭头样式 ──
+        // 注：常被选中的是箭头工具，样式选择放在工具组旁边最顺手。
+        addGroupLabel("箭头样式", to: toolbar, at: xOffset, width: 84)
+        let arrowStylePopup = NSPopUpButton(
+            frame: NSRect(x: xOffset, y: 12, width: 84, height: 24), pullsDown: false)
+        arrowStylePopup.font = NSFont.systemFont(ofSize: 11)
+        arrowStylePopup.addItems(withTitles: ArrowStyle.presetNames)
+        arrowStylePopup.selectItem(at: 0)
+        arrowStylePopup.toolTip = "选择箭头样式（双向 = 两端都有箭头）"
+        arrowStylePopup.target = self
+        arrowStylePopup.action = #selector(arrowStyleSelected(_:))
+        toolbar.addSubview(arrowStylePopup)
+        xOffset += 88
 
         addSeparator(to: toolbar, at: &xOffset, height: height)
 
@@ -388,6 +406,12 @@ class AnnotationWindow: NSWindow {
         }
     }
 
+    @objc private func arrowStyleSelected(_ sender: NSPopUpButton) {
+        let index = sender.indexOfSelectedItem
+        guard index >= 0 && index < ArrowStyle.allPresets.count else { return }
+        annotationView.currentArrowStyle = ArrowStyle.allPresets[index]
+    }
+
     @objc private func colorButtonClicked(_ sender: NSButton) {
         let palette = ColorPalette.allPalettes[paletteIndex]
         if sender.tag >= 0 && sender.tag < palette.colors.count {
@@ -518,6 +542,11 @@ class AnnotationWindow: NSWindow {
         - 椭圆：拖拽绘制椭圆（宽高独立）
         - 聚光：拖拽框选高亮区域，其余区域变暗
         - 序号：单击放置带数字的圆形标记，编号自动递增（1、2、3…）
+
+        【箭头样式】
+        选中"箭头"工具后，用工具栏的「箭头样式」下拉切换：
+        实心 / 开放 / 虚线 / 菱形 / 圆端 / 点菱 / 双向 / 双开放。
+        其中「双向」「双开放」两端都有箭头。
 
         【端点捕捉】
         鼠标悬停在已有对象的中心、边角、象限点附近时
