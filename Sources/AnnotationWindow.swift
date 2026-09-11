@@ -35,6 +35,21 @@ class AnnotationWindow: NSWindow {
         onClose = nil
     }
 
+    /// 取色器取到颜色：把 HEX 复制到剪贴板并提示。
+    ///
+    /// **顺带清掉调色板按钮的选中边框**：那些按钮用边框表示"当前用的是哪个颜色"，
+    /// 而取来的颜色多半不在调色板里 —— 不清的话界面会指着 A 色、实际用的是 B 色。
+    /// （当前颜色本身由画布在调用这里之前就写好了。）
+    func didPickColor(hex: String) {
+        for btn in colorButtons {
+            btn.layer?.borderColor = NSColor.clear.cgColor
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(hex, forType: .string)
+        flashHUD("已取色 \(hex)　已复制")
+    }
+
     /// 区域截图「就地编辑」模式下，画布精确覆盖在刚才的选区上。
     ///
     /// - Parameter anchor: 选区在 AppKit 屏幕坐标下的矩形；传 nil 则按普通方式居中开窗
@@ -537,6 +552,7 @@ class AnnotationWindow: NSWindow {
         ("马赛克", "拖拽框选一块区域打马赛克（隐私打码）", .mosaic),
         ("模糊", "拖拽框选一块区域做高斯模糊（隐私打码）", .blur),
         ("橡皮", "拖拽抹掉经过的标注对象（整笔合并为一步撤销）", .eraser),
+        ("取色", "从截图上取色：移到目标处单击，HEX 自动进剪贴板", .picker),
     ]
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
@@ -791,6 +807,14 @@ class AnnotationWindow: NSWindow {
         - 马赛克：拖拽框选一块区域，替换为像素化色块
         - 模糊：拖拽框选一块区域，替换为高斯模糊
         - 橡皮：拖拽抹掉经过的标注对象（可撤销，整笔算一步）
+        - 取色：移到目标处单击，颜色成为当前颜色，HEX 自动复制到剪贴板
+
+        【取色器】
+        - 移动鼠标即显示 11×11 放大镜与色值，长按拖拽可以边移边比色
+        - 取到的是**原始截图**的颜色，不包含你已经画上去的标注
+          （否则"这个位置是什么颜色"会随你画过什么而变）
+        - 松手时把当前颜色切换成取到的颜色，并复制 #RRGGBB 到剪贴板
+        - 取色后仍停在取色工具，方便连续比几个色；按数字键或 Tab 即可换回绘图工具
 
         【隐私打码】
         - 马赛克与模糊都直接读原始截图的像素，与画布上的其它标注无关，
