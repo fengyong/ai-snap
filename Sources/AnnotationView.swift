@@ -130,6 +130,19 @@ class AnnotationView: NSView {
     private var pickerPreview: NSColor?
     private lazy var pixelSampler = baseCGImage.flatMap { ImagePixelSampler(image: $0) }
 
+    // MARK: 文字识别的结果框
+    //
+    // 只做**显示层**的高亮，不生成标注对象：它们不该被导出、不该进撤销栈、
+    // 也不该被橡皮擦当对象擦掉。识别坐标将来要变成真对象的话，那是「智能脱敏」的事。
+    /// 最近一次识别出的文字外框（画布坐标）
+    private(set) var ocrHighlights: [CGRect] = []
+
+    /// 显示识别结果框（传空数组即清除）
+    func showOCRHighlights(_ rects: [CGRect]) {
+        ocrHighlights = rects
+        needsDisplay = true
+    }
+
     // MARK: 文字标注的行内编辑
     //
     // 这三个必须存在类里而不是扩展文件里（extension 不能加实例存储属性），
@@ -526,6 +539,11 @@ class AnnotationView: NSView {
         case 53: // Esc → 取消选中，回到绘制模式
             selectedKey = nil
             state = .idle
+            // 识别结果框也一并收掉：它是"看一眼就好"的临时信息，
+            // Esc 在用户心里就是"清掉眼前这些临时东西"
+            if !ocrHighlights.isEmpty {
+                ocrHighlights = []
+            }
             needsDisplay = true
             return true
 
@@ -887,6 +905,28 @@ class AnnotationView: NSView {
         if currentTool == .picker {
             drawPickerLoupe(in: ctx)
         }
+
+        // 8. 识别结果框（显示层，不参与导出）
+        drawOCRHighlights(in: ctx)
+    }
+
+    /// 识别到的文字外框。画在最上层，颜色刻意和中性的选中框区分开。
+    private func drawOCRHighlights(in ctx: CGContext) {
+        guard !ocrHighlights.isEmpty else { return }
+        ctx.saveGState()
+        ctx.setStrokeColor(NSColor.systemTeal.cgColor)
+        ctx.setFillColor(NSColor.systemTeal.withAlphaComponent(0.14).cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineDash(phase: 0, lengths: [4, 2])
+        for rect in ocrHighlights {
+            let path = CGPath(roundedRect: rect.insetBy(dx: -2, dy: -2),
+                              cornerWidth: 3, cornerHeight: 3, transform: nil)
+            ctx.addPath(path)
+            ctx.fillPath()
+            ctx.addPath(path)
+            ctx.strokePath()
+        }
+        ctx.restoreGState()
     }
 
     // MARK: - 工具上下文与对象登记

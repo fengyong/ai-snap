@@ -441,6 +441,18 @@ class AnnotationWindow: NSWindow {
 
         addSeparator(to: toolbar, at: &xOffset, height: height)
 
+        // ── 文字识别 ──
+        // 单独成组而不塞进「导出」：它是"从图上取信息"（进剪贴板的是一段文字），
+        // 不是"把图送出去"，放在一起会让人以为点了就等于导出图片。
+        addGroupLabel("识别", to: toolbar, at: xOffset, width: 76)
+        let ocrBtn = makeToolbarButton(title: "OCR", tooltip: "识别截图里的文字（本地离线），结果复制到剪贴板",
+                                        at: xOffset, tag: 500, action: #selector(runOCR))
+        toolbar.addSubview(ocrBtn)
+        xOffset += ocrBtn.frame.width + 2
+        xOffset += 4
+
+        addSeparator(to: toolbar, at: &xOffset, height: height)
+
         // ── 帮助 ──
         let helpBtn = makeToolbarButton(title: "帮助", tooltip: "查看使用帮助", at: xOffset, tag: 400,
                                          action: #selector(showHelp))
@@ -624,6 +636,35 @@ class AnnotationWindow: NSWindow {
     @objc func pinImage() {
         PinManager.shared.pin(annotationView.compositeImage())
         close()
+    }
+
+    /// 识别截图里的文字（本地离线），结果复制到剪贴板并在画布上框出位置。
+    ///
+    /// 之所以要把结果框出来：OCR 如果只往剪贴板里塞文字，用户没法判断是"没识别到"
+    /// 还是"识别错了"——只能粘贴到别处再对比。框出来就能一眼看出它读到了哪几块。
+    ///
+    /// 识别用的是**原始截图**，与已经画上去的标注无关（涂掉的文字照样能认出来）。
+    @objc private func runOCR() {
+        guard let image = annotationView.baseCGImage else {
+            flashHUD("没有可识别的图像")
+            return
+        }
+        flashHUD("正在识别文字…")
+
+        let canvasSize = annotationView.baseImage.size
+        TextRecognizer.recognize(in: image, canvasSize: canvasSize) { [weak self] items in
+            guard let self = self else { return }
+            guard !items.isEmpty else {
+                self.annotationView.showOCRHighlights([])
+                self.flashHUD("未识别到文字")
+                return
+            }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(TextRecognizer.joinedText(items), forType: .string)
+            self.annotationView.showOCRHighlights(items.map(\.box))
+            self.flashHUD("已识别 \(items.count) 段文字　已复制")
+        }
     }
 
     /// Tab / ⇧Tab：按工具栏顺序循环切换绘图工具。
@@ -890,6 +931,14 @@ class AnnotationWindow: NSWindow {
         - 保存：导出为 PNG 文件
         - 复制：复制到系统剪贴板（同时写入图片内容和图片文件，
           因此既可直接粘贴到聊天窗口，也能在访达里 ⌘V 存成 .png）
+        - 贴图：把当前画面钉在屏幕上（F3），可拖动、滚轮缩放、双击关闭
+
+        【文字识别（OCR）】
+        - 点「OCR」识别截图里的文字，结果按阅读顺序拼好复制到剪贴板
+        - 识别到的地方会在画布上框出来，按 Esc 清除
+        - 完全本地离线（系统自带 Vision），不需要联网、不需要账号
+        - 识别的是原始截图，与已经画上去的标注无关
+        - 大图识别需要几百毫秒，期间界面不会卡住（在后台线程跑）
 
         【设置会自动记住】
         线宽、颜色、线型、箭头样式、调色板、水印与上次使用的工具都会保存下来，
