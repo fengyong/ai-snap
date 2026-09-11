@@ -214,32 +214,8 @@ class AnnotationView: NSView {
             state = .moving(colorKey: colorKey, grabOffset: offset)
             selectedKey = colorKey
             dragStartCenter = obj.center
-        } else if currentTool == .step {
-            // 序号工具：单击直接放置，编号自动递增
-            let key = hitTestBuffer.generateUniqueColorKey()
-            let badge = StepBadge(center: point, number: nextStepNumber(),
-                                  color: currentColor, hitTestColorKey: key)
-            objects[key] = badge
-            zOrder.append(key)
-            hitTestBuffer.drawObject(badge)
-            refreshDebugView()
-            undoStack.append(.add(colorKey: key))
-            redoStack.removeAll()
-            selectedKey = key
-            state = .idle
-        } else if case .stamp(let stampType) = currentTool {
-            // Stamp 工具：单击直接放置
-            let key = hitTestBuffer.generateUniqueColorKey()
-            let stamp = StampObject(center: point, size: 48, stampType: stampType,
-                                    color: currentColor, hitTestColorKey: key)
-            objects[key] = stamp
-            zOrder.append(key)
-            hitTestBuffer.drawObject(stamp)
-            refreshDebugView()
-            undoStack.append(.add(colorKey: key))
-            redoStack.removeAll()
-            selectedKey = key
-            state = .idle
+        } else if placeClickToolObject(at: point) {
+            // 序号 / 贴纸这类单击放置的工具：对象已放置并选中
         } else {
             // 未命中 → 开始画新图形
             // 对起始点进行 snap：如果吸附到已有对象的 snap point，则以该点为中心绘制
@@ -333,114 +309,18 @@ class AnnotationView: NSView {
             let dist = hypot(snappedEnd.x - start.x, snappedEnd.y - start.y)
             if dist > 5 {
                 let colorKey = hitTestBuffer.generateUniqueColorKey()
-                let obj: any AnnotationObject
-
-                switch tool {
-                case .arrow:
-                    let arrow = Arrow(startPoint: start, endPoint: snappedEnd,
-                                color: currentColor, lineWidth: currentLineWidth,
-                                hitTestColorKey: colorKey, style: currentArrowStyle)
-                    arrow.startAttachment = detectAttachment(at: start, excludeKey: colorKey)
-                    arrow.endAttachment = detectAttachment(at: snappedEnd, excludeKey: colorKey)
-                    if let att = arrow.startAttachment, let pos = resolveAttachmentPosition(att) {
-                        arrow.startPoint = pos
-                    }
-                    if let att = arrow.endAttachment, let pos = resolveAttachmentPosition(att) {
-                        arrow.endPoint = pos
-                    }
-                    obj = arrow
-
-                case .rectangle, .roundedRectangle:
-                    if drawingFromCenter {
-                        // 以 start 为中心，拖拽确定半尺寸
-                        let hw = abs(snappedEnd.x - start.x)
-                        let hh = abs(snappedEnd.y - start.y)
-                        obj = RectangleShape(center: start, width: max(hw * 2, 6),
-                                             height: max(hh * 2, 6),
-                                             color: currentColor,
-                                             lineWidth: currentLineWidth,
-                                             hitTestColorKey: colorKey)
-                    } else {
-                        obj = RectangleShape(from: start, to: snappedEnd,
-                                             color: currentColor,
-                                             lineWidth: currentLineWidth,
-                                             hitTestColorKey: colorKey)
-                    }
-                    (obj as? RectangleShape)?.cornerRadius = defaultCornerRadius(for: tool)
-
-                case .circle:
-                    if drawingFromCenter {
-                        let r = hypot(snappedEnd.x - start.x, snappedEnd.y - start.y)
-                        obj = CircleShape(center: start, radiusX: max(r, 3),
-                                          radiusY: max(r, 3),
-                                          color: currentColor,
-                                          lineWidth: currentLineWidth,
-                                          hitTestColorKey: colorKey)
-                    } else {
-                        let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
-                                               y: (start.y + snappedEnd.y) / 2)
-                        let r = max(abs(snappedEnd.x - start.x), abs(snappedEnd.y - start.y)) / 2
-                        obj = CircleShape(center: centerPt, radiusX: max(r, 3),
-                                          radiusY: max(r, 3),
-                                          color: currentColor,
-                                          lineWidth: currentLineWidth,
-                                          hitTestColorKey: colorKey)
-                    }
-
-                case .ellipse:
-                    if drawingFromCenter {
-                        let rx = abs(snappedEnd.x - start.x)
-                        let ry = abs(snappedEnd.y - start.y)
-                        obj = CircleShape(center: start, radiusX: max(rx, 3),
-                                          radiusY: max(ry, 3),
-                                          color: currentColor,
-                                          lineWidth: currentLineWidth,
-                                          hitTestColorKey: colorKey)
-                    } else {
-                        let centerPt = CGPoint(x: (start.x + snappedEnd.x) / 2,
-                                               y: (start.y + snappedEnd.y) / 2)
-                        let rx = abs(snappedEnd.x - start.x) / 2
-                        let ry = abs(snappedEnd.y - start.y) / 2
-                        obj = CircleShape(center: centerPt, radiusX: max(rx, 3),
-                                          radiusY: max(ry, 3),
-                                          color: currentColor,
-                                          lineWidth: currentLineWidth,
-                                          hitTestColorKey: colorKey)
-                    }
-
-                case .step:
-                    // 序号标注在 mouseDown 中直接放置，不会走到这里
+                // 具体形状的构造交给工具自己的 handler（见 Sources/Tools/）。
+                // 画布只负责：配色 key、登记对象、记撤销、重绘。
+                guard let obj = ToolRegistry.handler(for: tool)?
+                    .makeObject(from: start, to: snappedEnd, tool: tool,
+                                context: toolContext(colorKey: colorKey)) else {
+                    // 该工具不由拖拽构造（序号/贴纸是单击放置）
                     currentDrawEnd = nil
                     state = .idle
                     needsDisplay = true
                     return
-
-                case .stamp:
-                    // stamp 在 mouseDown 中直接放置，不会走到这里
-                    currentDrawEnd = nil
-                    state = .idle
-                    needsDisplay = true
-                    return
-
-                case .spotlight:
-                    obj = SpotlightShape(from: start, to: snappedEnd,
-                                         hitTestColorKey: colorKey)
                 }
-
-                // 线型在这里统一写回，而不是让十几个构造点各自多传一个参数。
-                // 只有矩形/椭圆这类支持线型的对象会接住（见 LineStyleSupporting）。
-                applyCurrentStroke(to: obj)
-
-                objects[colorKey] = obj
-                zOrder.append(colorKey)
-
-                // 记录 undo
-                undoStack.append(.add(colorKey: colorKey))
-                redoStack.removeAll()
-
-                // 在 Layer B 上绘制新对象
-                hitTestBuffer.drawObject(obj)
-                refreshDebugView()
+                registerNewObject(obj, colorKey: colorKey)
             }
             currentDrawEnd = nil
 
@@ -802,145 +682,72 @@ class AnnotationView: NSView {
         ctx.strokePath()
     }
 
-    /// 新建圆角矩形时的默认圆角半径 = max(12, 2.5 × 线宽)。
+    // MARK: - 工具上下文与对象登记
+
+    /// 把画布的当前设置打包给工具 handler。
     ///
-    /// **为什么必须随线宽缩放**：描边以路径为中心、向两侧各扩 `lineWidth / 2`。
-    /// 半径太小时，圆角整块被线宽本身填满，看上去仍是直角 —— 用户点了「圆角」
-    /// 却发现没变化。这与之前「虚线 dash 用固定值导致画出来是实线」是同一类问题：
-    /// **参数不随线宽缩放，差别就看不见**（参见 LineStyle.apply 的说明）。
-    ///
-    /// 离屏实测的「角点从被描边覆盖变为被切掉」的翻转半径（二分求得）：
-    ///
-    ///   线宽  2 → 5.8    线宽  8 → 13.1    线宽 30 → 39.6
-    ///   线宽  4 → 8.2    线宽 15 → 21.5
-    ///
-    /// 翻转点与线宽的比值随线宽增大而收敛（2.91 → 1.32），细线处更大，由 12 的下限兜住。
-    /// 取 2.5 倍是为了在所有线宽下都留出余量，而不是刚好压在翻转点上。
-    private func defaultCornerRadius(for tool: DrawingTool) -> CGFloat {
-        tool == .roundedRectangle ? max(12, currentLineWidth * 2.5) : 0
+    /// 两个闭包是必要的妥协：端点吸附与序号编号都需要访问画布上的对象表，
+    /// 而 handler 不该持有画布引用（否则拆分就白做了）。
+    private func toolContext(colorKey: UInt32) -> ToolContext {
+        ToolContext(
+            color: currentColor,
+            lineWidth: currentLineWidth,
+            lineStyle: currentLineStyle,
+            arrowStyle: currentArrowStyle,
+            drawingFromCenter: drawingFromCenter,
+            canvasSize: baseImage.size,
+            colorKey: colorKey,
+            detectAttachment: { [weak self] point in
+                self?.detectAttachment(at: point, excludeKey: colorKey)
+            },
+            resolveAttachmentPosition: { [weak self] attachment in
+                self?.resolveAttachmentPosition(attachment)
+            },
+            nextStepNumber: { [weak self] in
+                self?.nextStepNumber() ?? 1
+            }
+        )
     }
 
-    /// 把「当前线型」应用到支持它的对象上。
+    /// 把新对象登记进画布：入表、追加 z 序、记一步撤销、画进 Layer B。
     ///
-    /// 新建对象与拖拽预览共用这一个入口，因此不必在十几个构造点各自传参 ——
-    /// 将来给形状加描边属性（比如圆角半径）时也只需改这里。
-    private func applyCurrentStroke(to obj: any AnnotationObject) {
-        (obj as? LineStyleSupporting)?.lineStyle = currentLineStyle
+    /// 拖拽构造与单击放置共用这一处，避免两份「登记 + 撤销 + 重绘」的重复 ——
+    /// 这类重复最容易出的问题是漏掉其中一步（比如忘了往 Layer B 画，新对象就选不中）。
+    private func registerNewObject(_ obj: any AnnotationObject,
+                                   colorKey: UInt32,
+                                   selectAfterPlacing: Bool = false) {
+        objects[colorKey] = obj
+        zOrder.append(colorKey)
+        undoStack.append(.add(colorKey: colorKey))
+        redoStack.removeAll()
+        hitTestBuffer.drawObject(obj)
+        refreshDebugView()
+        if selectAfterPlacing {
+            selectedKey = colorKey
+            state = .idle
+        }
+        needsDisplay = true
+    }
+
+    /// 单击放置类工具（序号、贴纸）。返回是否真的放置了对象。
+    @discardableResult
+    private func placeClickToolObject(at point: CGPoint) -> Bool {
+        guard let handler = ToolRegistry.handler(for: currentTool) else { return false }
+        let colorKey = hitTestBuffer.generateUniqueColorKey()
+        guard let obj = handler.placeObject(at: point, tool: currentTool,
+                                            context: toolContext(colorKey: colorKey)) else {
+            return false
+        }
+        // 单击放置完就选中它，方便立刻调整位置
+        registerNewObject(obj, colorKey: colorKey, selectAfterPlacing: true)
+        return true
     }
 
     private func drawPreview(tool: DrawingTool, start: CGPoint, end: CGPoint, in ctx: CGContext) {
-        switch tool {
-        case .arrow:
-            let preview = Arrow(startPoint: start, endPoint: end,
-                                color: currentColor, lineWidth: currentLineWidth,
-                                hitTestColorKey: 0, style: currentArrowStyle)
-            preview.draw(in: ctx)
-
-        case .rectangle, .roundedRectangle:
-            if drawingFromCenter {
-                let hw = abs(end.x - start.x)
-                let hh = abs(end.y - start.y)
-                let preview = RectangleShape(center: start, width: max(hw * 2, 2),
-                                              height: max(hh * 2, 2),
-                                              color: currentColor,
-                                              lineWidth: currentLineWidth,
-                                              hitTestColorKey: 0)
-                preview.cornerRadius = defaultCornerRadius(for: tool)
-                applyCurrentStroke(to: preview)
-                preview.draw(in: ctx)
-            } else {
-                let preview = RectangleShape(from: start, to: end,
-                                              color: currentColor,
-                                              lineWidth: currentLineWidth,
-                                              hitTestColorKey: 0)
-                preview.cornerRadius = defaultCornerRadius(for: tool)
-                applyCurrentStroke(to: preview)
-                preview.draw(in: ctx)
-            }
-
-        case .circle:
-            if drawingFromCenter {
-                let r = hypot(end.x - start.x, end.y - start.y)
-                let preview = CircleShape(center: start, radiusX: max(r, 1),
-                                           radiusY: max(r, 1),
-                                           color: currentColor,
-                                           lineWidth: currentLineWidth,
-                                           hitTestColorKey: 0)
-                applyCurrentStroke(to: preview)
-                preview.draw(in: ctx)
-            } else {
-                let centerPt = CGPoint(x: (start.x + end.x) / 2,
-                                       y: (start.y + end.y) / 2)
-                let r = max(abs(end.x - start.x), abs(end.y - start.y)) / 2
-                let preview = CircleShape(center: centerPt, radiusX: max(r, 1),
-                                           radiusY: max(r, 1),
-                                           color: currentColor,
-                                           lineWidth: currentLineWidth,
-                                           hitTestColorKey: 0)
-                applyCurrentStroke(to: preview)
-                preview.draw(in: ctx)
-            }
-
-        case .ellipse:
-            if drawingFromCenter {
-                let rx = abs(end.x - start.x)
-                let ry = abs(end.y - start.y)
-                let preview = CircleShape(center: start, radiusX: max(rx, 1),
-                                           radiusY: max(ry, 1),
-                                           color: currentColor,
-                                           lineWidth: currentLineWidth,
-                                           hitTestColorKey: 0)
-                applyCurrentStroke(to: preview)
-                preview.draw(in: ctx)
-            } else {
-                let centerPt = CGPoint(x: (start.x + end.x) / 2,
-                                       y: (start.y + end.y) / 2)
-                let rx = abs(end.x - start.x) / 2
-                let ry = abs(end.y - start.y) / 2
-                let preview = CircleShape(center: centerPt, radiusX: max(rx, 1),
-                                           radiusY: max(ry, 1),
-                                           color: currentColor,
-                                           lineWidth: currentLineWidth,
-                                           hitTestColorKey: 0)
-                applyCurrentStroke(to: preview)
-                preview.draw(in: ctx)
-            }
-
-        case .step:
-            break  // 序号标注是单击放置，不需要拖拽预览
-
-        case .stamp:
-            break  // stamp 是单击放置，不需要拖拽预览
-
-        case .spotlight:
-            let imageRect = CGRect(origin: .zero, size: baseImage.size)
-            let spotRect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
-                                  width: abs(end.x - start.x), height: abs(end.y - start.y))
-            let spotPath = CGPath(roundedRect: spotRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
-            // 周围变暗
-            ctx.saveGState()
-            let fullPath = CGMutablePath()
-            fullPath.addRect(imageRect)
-            fullPath.addPath(spotPath)
-            ctx.addPath(fullPath)
-            ctx.clip(using: .evenOdd)
-            ctx.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
-            ctx.fill(imageRect)
-            ctx.restoreGState()
-            // 中心提亮
-            ctx.saveGState()
-            ctx.addPath(spotPath)
-            ctx.clip()
-            ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
-            ctx.fill(imageRect)
-            ctx.restoreGState()
-            // 边框
-            ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.8).cgColor)
-            ctx.setLineWidth(2)
-            ctx.setLineDash(phase: 0, lengths: [6, 3])
-            ctx.addPath(spotPath)
-            ctx.strokePath()
-        }
+        // 预览的具体画法同样交给工具自己的 handler：画布不再为每个工具维护一个分支。
+        ToolRegistry.handler(for: tool)?
+            .drawPreview(from: start, to: end, tool: tool, in: ctx,
+                         context: toolContext(colorKey: 0))
     }
 
     // MARK: - Object Snap
