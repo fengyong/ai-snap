@@ -173,8 +173,27 @@ rm -rf "$DMG_TEMP"
 
 # ── 5. 验证 DMG（这一步才是"能不能装"的真正判据）────────────────────
 step "验证 DMG"
+# 挂载点必须在**任何**退出路径上卸载。
+#
+# 原先只在验证末尾 detach：脚本开头是 `set -euo pipefail`，中间任何一步失败
+# （或脚本被 Ctrl-C / 被中断）都会**跳过**那一行，DMG 就永久挂在 /Volumes 下。
+# 后果不只是"桌面上多出一个盘"：
+#   下一次挂载占不到原名，会变成 "AISnap 1"；
+#   而用户很可能直接从残留卷里运行应用 —— 那跑的是**另一个 cdhash 的副本**。
+#   ad-hoc 签名下 TCC 是按 cdhash 认应用的，于是系统又要求授权一次。
+# 这是「反复要求屏幕录制权限」的来源之一。
+DMG_MOUNT=""
+detach_dmg() {
+  if [ -n "$DMG_MOUNT" ]; then
+    hdiutil detach "$DMG_MOUNT" -quiet 2>/dev/null || true
+    DMG_MOUNT=""
+  fi
+}
+trap detach_dmg EXIT
+
 ATTACH_OUT=$(hdiutil attach "$DMG_NAME" -nobrowse -readonly)
 MOUNT_POINT=$(echo "$ATTACH_OUT" | grep -oE '/Volumes/.*' | head -1)
+DMG_MOUNT="$MOUNT_POINT"
 if [ -z "$MOUNT_POINT" ] || [ ! -d "$MOUNT_POINT/$APP_NAME.app" ]; then
   echo "❌ 挂载后找不到 $APP_NAME.app" >&2
   exit 1
@@ -183,7 +202,7 @@ echo "挂载点：$MOUNT_POINT"
 echo "  内含：$(ls "$MOUNT_POINT" | tr '\n' ' ')"
 codesign --verify --strict "$MOUNT_POINT/$APP_NAME.app" && echo "  包内签名校验通过"
 [ -L "$MOUNT_POINT/Applications" ] && echo "  存在指向 /Applications 的快捷方式"
-hdiutil detach "$MOUNT_POINT" -quiet
+detach_dmg
 
 step "全部完成"
 printf '  %s/%s\n     可直接 open 运行\n' "$(pwd)" "$APP_BUNDLE"
