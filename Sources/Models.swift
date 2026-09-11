@@ -283,6 +283,7 @@ enum UndoAction {
 enum DrawingTool: Equatable {
     case arrow
     case rectangle
+    case roundedRectangle   // 圆角矩形（与 rectangle 同一个形状类，只是 cornerRadius > 0）
     case circle    // 正圆（radiusX == radiusY）
     case ellipse   // 椭圆（独立 radiusX / radiusY）
     case stamp(StampType)
@@ -292,6 +293,7 @@ enum DrawingTool: Equatable {
     static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
         switch (lhs, rhs) {
         case (.arrow, .arrow), (.rectangle, .rectangle),
+             (.roundedRectangle, .roundedRectangle),
              (.circle, .circle), (.ellipse, .ellipse),
              (.step, .step), (.spotlight, .spotlight):
             return true
@@ -571,6 +573,10 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
     var lineWidth: CGFloat
     /// 描边线型（实线/虚线/点线）。新建对象时由画布按当前工具设置写入。
     var lineStyle: LineStyle = .solid
+    /// 圆角半径，0 = 直角矩形。
+    /// 圆角矩形与直角矩形共用本类，只是这个值不同 —— 于是旋转、缩放、吸附、
+    /// 撤销重做、线型全部自动共用，不必再写一个新形状类。
+    var cornerRadius: CGFloat = 0
 
     init(center: CGPoint, width: CGFloat, height: CGFloat,
          color: NSColor, lineWidth: CGFloat = 2.0, hitTestColorKey: UInt32) {
@@ -642,7 +648,15 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
         ctx.setLineWidth(lineWidth)
         ctx.setLineJoin(.round)
         lineStyle.apply(lineWidth: lineWidth, in: ctx)
-        ctx.stroke(rect)
+        if cornerRadius > 0 {
+            // 半径上限取短边一半：超出时 CGPath 的圆角会彼此挤压、形状失真
+            let r = min(cornerRadius, min(width, height) / 2)
+            ctx.addPath(CGPath(roundedRect: rect, cornerWidth: r, cornerHeight: r,
+                               transform: nil))
+            ctx.strokePath()
+        } else {
+            ctx.stroke(rect)
+        }
         ctx.restoreGState()
     }
 
@@ -650,6 +664,9 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
         ctx.saveGState()
         ctx.translateBy(x: center.x, y: center.y)
         ctx.rotate(by: rotation)
+        // 命中区刻意用「直角矩形」而不是圆角路径：
+        // 圆角路径内切于直角矩形，用直角判定得到的命中区是视觉的**超集** ——
+        // 圆角处点到边角外侧的空白也能选中，比反过来「看得见却点不中」更友好。
         let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
         ctx.setStrokeColor(color.cgColor)
         ctx.setLineWidth(lineWidth + 6)

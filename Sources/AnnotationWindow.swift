@@ -197,17 +197,9 @@ class AnnotationWindow: NSWindow {
         var xOffset: CGFloat = 8
 
         // ── 绘图工具（带文字标签）──
-        addGroupLabel("绘图工具", to: toolbar, at: xOffset, width: 232)
-        let tools: [(String, String)] = [
-            ("箭头", "绘制箭头标注"),
-            ("矩形", "绘制矩形框"),
-            ("圆形", "拖拽绘制正圆"),
-            ("椭圆", "拖拽绘制椭圆"),
-            ("聚光", "聚光灯高亮区域"),
-            ("序号", "单击放置序号标注（编号自动递增）"),
-        ]
-        for (i, (title, tip)) in tools.enumerated() {
-            let btn = makeToolbarButton(title: title, tooltip: tip, at: xOffset, tag: i,
+        addGroupLabel("绘图工具", to: toolbar, at: xOffset, width: 268)
+        for (i, item) in Self.toolbarTools.enumerated() {
+            let btn = makeToolbarButton(title: item.title, tooltip: item.tip, at: xOffset, tag: i,
                                         action: #selector(toolButtonClicked(_:)))
             toolbar.addSubview(btn)
             toolButtons.append(btn)
@@ -446,12 +438,26 @@ class AnnotationWindow: NSWindow {
         lineWidthLabel.stringValue = "\(Int(value))px"
     }
 
+    /// 工具栏上的绘图工具。
+    ///
+    /// **单一来源**：按钮顺序即 `tag`，`toolButtonClicked` 也从这里取工具。
+    /// 此前「标题数组」和「tag → 工具映射数组」是两份独立列表，加一个工具要改两处，
+    /// 顺序一旦不同步就会点 A 出 B（且不会有任何编译错误）。
+    private static let toolbarTools: [(title: String, tip: String, tool: DrawingTool)] = [
+        ("箭头", "绘制箭头标注", .arrow),
+        ("矩形", "拖拽绘制矩形框", .rectangle),
+        ("圆角", "拖拽绘制圆角矩形", .roundedRectangle),
+        ("圆形", "拖拽绘制正圆", .circle),
+        ("椭圆", "拖拽绘制椭圆", .ellipse),
+        ("聚光", "聚光灯高亮区域", .spotlight),
+        ("序号", "单击放置序号标注（编号自动递增）", .step),
+    ]
+
     @objc private func toolButtonClicked(_ sender: NSButton) {
-        let tools: [DrawingTool] = [.arrow, .rectangle, .circle, .ellipse, .spotlight, .step]
-        if sender.tag >= 0 && sender.tag < tools.count {
-            annotationView.currentTool = tools[sender.tag]
-            updateToolButtonStates(selectedIndex: sender.tag)
-        }
+        let tools = Self.toolbarTools
+        guard sender.tag >= 0 && sender.tag < tools.count else { return }
+        annotationView.currentTool = tools[sender.tag].tool
+        updateToolButtonStates(selectedIndex: sender.tag)
     }
 
     @objc private func stampSelected(_ sender: NSPopUpButton) {
@@ -602,6 +608,8 @@ class AnnotationWindow: NSWindow {
         【绘图工具】
         - 箭头：在画布上拖拽绘制箭头标注
         - 矩形：拖拽绘制矩形边框
+        - 圆角：拖拽绘制圆角矩形（默认圆角半径 12）
+        - 圆形：拖拽绘制正圆（取宽高较大值为直径）
         - 圆形：拖拽绘制正圆（取宽高较大值为直径）
         - 椭圆：拖拽绘制椭圆（宽高独立）
         - 聚光：拖拽框选高亮区域，其余区域变暗
