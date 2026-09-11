@@ -84,6 +84,7 @@ run_probe text_shape_probe       Sources/Models.swift
 run_probe screen_geometry_probe  Sources/Capture/ScreenGeometry.swift
 run_probe anchored_placement_probe Sources/AnchoredPlacement.swift
 run_probe overlay_style_probe    Sources/OverlayWindowStyle.swift
+run_probe toolbar_layout_probe   Sources/ToolbarLayout.swift
 run_probe redaction_probe        Sources/Models.swift Sources/Capture/ScreenGeometry.swift \
                                  Sources/Redaction/ImageRedaction.swift \
                                  Sources/Redaction/RedactionShape.swift
@@ -95,6 +96,7 @@ run_probe update_probe           Sources/Models.swift Sources/Preferences.swift 
 run_probe eraser_probe           "${ALL_SOURCES[@]}"
 run_probe picker_probe           "${ALL_SOURCES[@]}"
 run_probe ocr_probe              "${ALL_SOURCES[@]}"
+run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
 
 echo
 echo "========================================"
