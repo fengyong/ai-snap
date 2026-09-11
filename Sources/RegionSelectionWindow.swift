@@ -66,17 +66,24 @@ class RegionSelectionWindow: NSWindow {
         }
 
         // NSView 坐标 → 屏幕坐标（左上角原点，ScreenCaptureKit 与旧 CGWindowList 同语义）
-        let screenFrame = NSScreen.main?.frame ?? .zero
+        //
+        // 注意翻转基准必须用「主显示器高度」而不是本覆盖层所在屏的高度：
+        // AppKit 全局原点在主显示器左下、Quartz 全局原点在主显示器左上，
+        // 因此 quartzY = 主显示器高度 - appKitY 对所有屏幕都成立。
         let captureRect = CGRect(
             x: rect.origin.x,
-            y: screenFrame.height - rect.origin.y - rect.height,
+            y: ScreenCapture.primaryScreenHeight - rect.origin.y - rect.height,
             width: rect.width,
             height: rect.height
         )
 
         Task { @MainActor [weak self] in
-            // 给窗口服务器一点合成时间，确保覆盖层不出现在截图里
-            // （旧实现用的是 200ms；这里降到 80ms，SCK 的就绪时机比旧 API 快）
+            // 给窗口服务器一点合成时间，确保覆盖层不出现在截图里。
+            //
+            // 为什么需要这个等待：macOS 15.2+ 的首选路径 `captureImage(in:)` **没有 filter 参数**，
+            // 无法像 filter 路径那样显式排除自身窗口，所以只能靠「先 orderOut、等合成完成」。
+            // （旧实现用 200ms，这里降到 80ms —— SCK 的就绪时机比旧 API 快。）
+            // 根治办法是「先截全屏、再在冻结帧上选区」的重构，届时这个等待可以完全去掉。
             try? await Task.sleep(for: .milliseconds(80))
             let image = try? await ScreenCapture.captureRegion(captureRect)
             self?.completionHandler(image)

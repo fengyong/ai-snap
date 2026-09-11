@@ -49,7 +49,19 @@ enum ScreenCapture {
         return try await CaptureProviderSCK.captureWindow(windowID: targetID)
     }
 
-    // MARK: - 窗口枚举（原有逻辑，保留不变）
+    // MARK: - 窗口枚举
+
+    /// Y 轴翻转的基准高度 = **主显示器**（Quartz 原点所在、`frame.origin == .zero` 的那块）的高度。
+    ///
+    /// 这里不能用 `NSScreen.main`：它表示「当前 key window 所在屏，无 key window 时为菜单栏所在屏」，
+    /// 当标注窗口位于副屏时取值会变，翻转基准随之出错，导致鼠标在副屏时命中到错误的窗口。
+    /// macOS 全局坐标系里 AppKit 原点在主显示器左下、Quartz 原点在主显示器左上，
+    /// 因此 `quartzY = 主显示器高度 - appKitY` 对所有屏幕都成立。
+    static var primaryScreenHeight: CGFloat {
+        NSScreen.screens.first { $0.frame.origin == .zero }?.frame.height
+            ?? NSScreen.main?.frame.height
+            ?? 0
+    }
 
     /// 返回鼠标下方最前面、非自身进程的窗口 ID。
     ///
@@ -64,6 +76,10 @@ enum ScreenCapture {
         ) as? [[String: Any]] else {
             return nil
         }
+
+        // CGWindowList 使用屏幕坐标（左上原点），NSEvent 使用左下原点。整个循环共用一个点，算一次即可。
+        let testPoint = CGPoint(x: mouseLocation.x,
+                                y: primaryScreenHeight - mouseLocation.y)
 
         let myPID = ProcessInfo.processInfo.processIdentifier
         for info in windowList {
@@ -80,11 +96,6 @@ enum ScreenCapture {
                 width: boundsDict["Width"] ?? 0,
                 height: boundsDict["Height"] ?? 0
             )
-
-            // CGWindowList 使用屏幕坐标（左上角原点），NSEvent 使用左下角原点
-            let screenHeight = NSScreen.main?.frame.height ?? 0
-            let flippedY = screenHeight - mouseLocation.y
-            let testPoint = CGPoint(x: mouseLocation.x, y: flippedY)
 
             if bounds.contains(testPoint) {
                 return windowID
