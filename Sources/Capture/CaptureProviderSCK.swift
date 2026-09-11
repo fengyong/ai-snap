@@ -81,7 +81,11 @@ enum CaptureProviderSCK {
     ///
     /// `SCWindow.windowID` 的类型就是 `CGWindowID`，所以可以和
     /// `CGWindowListCopyWindowInfo` 的结果直接按 ID 对接。
-    static func captureWindow(windowID: CGWindowID) async throws -> CGImage {
+    ///
+    /// 返回「图像 + 窗口的逻辑宽度（点）」：调用方据此**反推**实际倍率，
+    /// 而不是另外去取 `backingScaleFactor`（原因见 `CapturedImage`）。
+    static func captureWindow(windowID: CGWindowID)
+        async throws -> (image: CGImage, pointWidth: CGFloat) {
         // 过滤条件对齐旧代码的 [.optionOnScreenOnly, .excludeDesktopElements]
         let content = try await shareableContent(excludingDesktopWindows: true,
                                                  onScreenWindowsOnly: true)
@@ -94,7 +98,8 @@ enum CaptureProviderSCK {
     }
 
     /// 直接对已取得的 `SCWindow` 截图（自检工具也会用到）。
-    static func captureWindow(_ window: SCWindow) async throws -> CGImage {
+    static func captureWindow(_ window: SCWindow)
+        async throws -> (image: CGImage, pointWidth: CGFloat) {
         let filter = SCContentFilter(desktopIndependentWindow: window)
 
         let config = SCStreamConfiguration()
@@ -108,9 +113,10 @@ enum CaptureProviderSCK {
         config.height = Int((window.frame.height * scale).rounded())
 
         do {
-            return try await SCScreenshotManager.captureImage(
+            let image = try await SCScreenshotManager.captureImage(
                 contentFilter: filter, configuration: config
             )
+            return (image, window.frame.width)
         } catch {
             throw mapError(error)
         }

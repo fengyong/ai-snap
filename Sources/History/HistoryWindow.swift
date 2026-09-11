@@ -6,8 +6,9 @@ import Cocoa
 /// 网格里塞这些字会挤成一团。行高固定，用绝对坐标排布 —— 与项目其它地方一致。
 final class HistoryWindow: NSWindow {
 
-    /// 点「打开」时回调：把原图交给 AppDelegate 去开标注窗口（即"重新编辑"）
-    var onOpen: ((CGImage) -> Void)?
+    /// 点「打开」时回调：把原图交给 AppDelegate 去开标注窗口（即"重新编辑"）。
+    /// 一并带上记录时存下的像素倍率，画布尺寸才不会猜错。
+    var onOpen: ((CapturedImage) -> Void)?
 
     private let history: CaptureHistory
     private let scrollView = NSScrollView()
@@ -205,7 +206,10 @@ final class HistoryWindow: NSWindow {
             NSSound.beep()
             return
         }
-        onOpen?(image)
+        // 加入 pixelScale 字段之前记录的老条目没有这个值，只能按当前屏幕倍率兜底。
+        // 只影响"从历史重新编辑"时的画布尺寸，导出的像素内容不受影响。
+        let scale = entry.pixelScale ?? NSScreen.main?.backingScaleFactor ?? 2
+        onOpen?(CapturedImage(image: image, pixelScale: scale, anchorRect: nil))
         orderOut(nil)
     }
 

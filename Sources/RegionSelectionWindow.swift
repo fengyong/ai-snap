@@ -15,11 +15,11 @@ import Cocoa
 ///
 /// 多屏：每块屏各一张冻结图、各一个覆盖层；但只有主屏可交互（与原先一致）。
 class RegionSelectionWindow: NSWindow {
-    /// 选区完成时回调。
+    /// 选区完成时回调。传 nil 表示取消 / 失败。
     ///
-    /// 除了裁好的图，还回传**选区在 AppKit 屏幕坐标下的矩形** ——
-    /// 调用方据此把标注窗口「就地」摆在选区上。图或矩形为 nil 表示取消 / 失败。
-    private let completionHandler: (CGImage?, NSRect?) -> Void
+    /// 结果里除裁好的图，还带**选区在屏幕坐标下的矩形**（调用方据此把标注窗口
+    /// 「就地」摆在选区上）与**实测的像素倍率**（见 `CapturedImage`）。
+    private let completionHandler: (CapturedImage?) -> Void
     private var selectionView: RegionSelectionView!
     private var overlayWindows: [NSWindow] = []
 
@@ -29,7 +29,7 @@ class RegionSelectionWindow: NSWindow {
     /// 交互屏（主屏）的框架，用于把视图坐标换算成屏幕坐标。
     private let mainScreenFrame: NSRect
 
-    init(completion: @escaping (CGImage?, NSRect?) -> Void) {
+    init(completion: @escaping (CapturedImage?) -> Void) {
         self.completionHandler = completion
 
         let screenFrame = NSScreen.main?.frame ?? .zero
@@ -120,19 +120,31 @@ class RegionSelectionWindow: NSWindow {
         // 但必须停止接收鼠标事件，否则它会挡住标注窗口的交互。
         stopInteracting()
 
-        guard let frozen = frozenMainImage, let screen = NSScreen.main,
-              let cropped = frozen.cropped(fromAppKitRect: screenRect, on: screen) else {
+        // 用 **init 时存下的** mainScreenFrame，而不是此刻再取 NSScreen.main ——
+        // 后者的定义是"当前 key window 所在屏"，冻结帧之后覆盖层成了 key window，
+        // 取值可能与冻屏时不是同一块屏（这与之前修掉的副屏 Y 翻转 bug 同源）。
+        guard let frozen = frozenMainImage,
+              let cropped = frozen.cropped(fromAppKitRect: screenRect,
+                                           screenFrame: mainScreenFrame) else {
             hideOverlays()
-            completionHandler(nil, nil)
+            completionHandler(nil)
             return
         }
         // 纯裁剪，没有异步等待 —— 这正是「先截后选」换来的收益
-        completionHandler(cropped, screenRect)
+        //
+        // 倍率在这里**按实际尺寸反推**（冻结图像素宽 ÷ 屏幕点宽），随后一路传到标注窗口。
+        // 于是裁剪与显示两侧用的是同一个数：即便捕获返回的分辨率与屏幕倍率不符，
+        // 画布尺寸仍然与选区像素严格对应，不会出现"画布缩成选区一半"。
+        completionHandler(CapturedImage(
+            image: cropped,
+            pixelScale: CapturedImage.scale(pixelWidth: frozen.width,
+                                            pointWidth: mainScreenFrame.width),
+            anchorRect: screenRect))
     }
 
     private func cancelSelection() {
         hideOverlays()
-        completionHandler(nil, nil)
+        completionHandler(nil)
     }
 
     /// 保留冻结画面，但不再吃鼠标事件。
@@ -162,11 +174,13 @@ extension CGImage {
     /// 从「整屏冻结图」里裁出 AppKit 选区。
     ///
     /// 换算逻辑在 `ScreenGeometry.pixelRect`（纯函数，已离屏测试）。
-    func cropped(fromAppKitRect rect: NSRect, on screen: NSScreen) -> CGImage? {
+    /// 参数是**屏幕矩形**而不是 `NSScreen`：调用方应当把它在冻屏时记下的那块屏的
+    /// frame 传进来，而不是在这里重新取 `NSScreen.main`（那可能已经换了一块屏）。
+    func cropped(fromAppKitRect rect: NSRect, screenFrame: NSRect) -> CGImage? {
         let pixelRect = ScreenGeometry.pixelRect(
             appKitRect: rect,
             imageSize: CGSize(width: width, height: height),
-            appKitScreenFrame: screen.frame
+            appKitScreenFrame: screenFrame
         )
         guard !pixelRect.isNull else { return nil }
         return cropping(to: pixelRect)

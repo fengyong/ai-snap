@@ -54,7 +54,12 @@ final class PinWindow: NSPanel {
             self?.continueDrag(with: event)
         }
         content.onScroll = { [weak self] event in
-            self?.zoom(by: event.scrollingDeltaY, at: event.locationInWindow)
+            // 归一化「自然滚动」偏好：不归一化的话，同一个手势在两种系统设置下
+            // 得到相反的缩放方向 —— 用户只会觉得"滚轮有时正有时反"，
+            // 而且换台机器、或者改一次系统设置才复现，极难归因。
+            let raw = event.scrollingDeltaY
+            let delta = event.isDirectionInvertedFromDevice ? -raw : raw
+            self?.zoom(by: delta)
         }
         content.onDoubleClick = { [weak self] in
             self?.close()
@@ -110,7 +115,10 @@ final class PinWindow: NSPanel {
     // MARK: - 缩放
 
     /// 滚轮缩放。锚点保持在窗口中心：直接改 frame 会从左上角长，看起来在"跑"。
-    private func zoom(by delta: CGFloat, at pointInWindow: NSPoint) {
+    ///
+    /// 参数只收 delta —— 原先还带一个 `at pointInWindow`，但实现里从头到尾没用过
+    /// （注释自己写的也是"锚点在中心"）。留着一个不读的参数只会让人以为锚点可配。
+    private func zoom(by delta: CGFloat) {
         guard delta != 0 else { return }
         // 触控板一次滚动的 delta 很小（个位数），滚轮鼠标则常常是 ±1 一格。
         // 用指数映射让两者手感接近，并限制单次步进避免突变。
@@ -205,17 +213,42 @@ final class PinWindow: NSPanel {
         panel.nameFieldStringValue = "pinned.png"
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url, let self = self else { return }
-            // 转成 sRGB 再编码：直接对源图取 tiffRepresentation 在非 RGB 空间下可能失败
+            // 经 TIFF 再包成 NSBitmapImageRep：它能吃下任意来源的图像（含非 RGB
+            // 色彩空间），不必先拿到 CGImage。
+            //
+            // 订正一处注释：这里原先写"转成 sRGB 再编码"，但代码并没有做任何色彩空间
+            // 转换，实际就是原样编码 —— 注释与实现不符，且不需要转，所以改注释。
             guard let tiff = self.image.tiffRepresentation,
                   let rep = NSBitmapImageRep(data: tiff),
-                  let data = rep.representation(using: .png, properties: [:]) else { return }
-            try? data.write(to: url)
+                  let data = rep.representation(using: .png, properties: [:]) else {
+                self.reportSaveFailure("无法把图像编码为 PNG。")
+                return
+            }
+            do {
+                try data.write(to: url, options: .atomic)
+            } catch {
+                // 原先用 `try?` 吞掉所有错误：磁盘满或没有写权限时，用户点了保存
+                // 什么都没发生、也没有任何提示 —— 与 AnnotationWindow 里修过的
+                // 是同一个缺陷，这里一并修掉。
+                self.reportSaveFailure("写入失败：\(error.localizedDescription)\n\n\(url.path)")
+            }
         }
     }
 
     @objc private func setOpacity(_ sender: NSMenuItem) {
         alphaValue = CGFloat(sender.tag) / 100.0
         sender.menu?.items.forEach { $0.state = ($0 === sender) ? .on : .off }
+    }
+
+    /// 保存失败要说出来。
+    private func reportSaveFailure(_ reason: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "保存贴图失败"
+        alert.informativeText = reason
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 
     @objc private func resetZoom() { applyZoom(1) }

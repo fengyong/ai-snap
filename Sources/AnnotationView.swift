@@ -523,6 +523,11 @@ class AnnotationView: NSView {
         case "c":
             (window as? AnnotationWindow)?.copyImage()
             return true
+        case "d":
+            // ⌘D：显示/隐藏 Layer B 调试面板。它是开发期工具、默认隐藏 ——
+            // 普通用户看到右侧一块莫名的深色分屏只会困惑。
+            (window as? AnnotationWindow)?.toggleDebugPanel()
+            return true
         default:
             return false
         }

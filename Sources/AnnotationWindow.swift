@@ -23,6 +23,24 @@ class AnnotationWindow: NSWindow {
     /// 工具栏顶部那条通栏分隔线，窗口最终宽度确定后需要跟着调整。
     private var toolbarTopSeparator: NSBox?
 
+    /// 工具栏挂在画布上方还是下方。
+    ///
+    /// 默认在下方（`origin.y = 选区底边 − 工具栏高度`）。但选区贴屏幕最底部时
+    /// 那个值是负的、整条工具栏会沉出屏，于是翻到画布上方 ——
+    /// 这样画布仍精确压在选区上，只是工具栏换了一侧。判定见 `AnchoredPlacement`。
+    private var toolbarAtTop = false
+
+    // MARK: 调试面板（默认隐藏，⌘D 开关）
+    //
+    // 视图一开始就建好、只是隐藏着：打开时不必重建，也不会因为"隐藏时干脆不建"
+    // 而让 annotationView.debugImageView 为 nil。
+    private weak var containerView: NSView?
+    private weak var toolbarView: NSView?
+    private var debugPanelView: NSImageView?
+    private var debugLabelView: NSTextField?
+    private var canvasWidth: CGFloat = 0
+    private var debugPanelWidth: CGFloat = 0
+
     /// 就地编辑模式下要覆盖的选区（AppKit 屏幕坐标）。非 nil 时窗口不允许被居中搬走。
     private var anchoredRect: NSRect?
 
@@ -58,11 +76,14 @@ class AnnotationWindow: NSWindow {
         let imageSize = image.size
         let toolbarHeight: CGFloat = 48
 
-        // 右侧 debug 面板 = 原图 50% 大小。就地编辑时不显示：
-        // 它会把窗口撑宽、破坏"画布正好压在选区上"的观感，而且那是开发期工具。
+        // 右侧 Layer B 调试面板的几何：尺寸按画布的一半算，但**默认不显示、也不占窗口宽度**。
+        //
+        // 它是开发期工具（实时显示命中缓冲区的唯一颜色图），普通用户看到右侧一块
+        // 莫名的深色分屏只会困惑。评审提的"默认隐藏 + ⌘D 开关"就是这个意思：
+        // 视图照建、随时可以打开，但默认不打扰人。
         let anchored = anchor
-        let debugScale: CGFloat = anchored == nil ? 0.5 : 0
-        let debugPadding: CGFloat = debugScale > 0 ? 8 : 0
+        let debugPanelScale: CGFloat = 0.5
+        let debugPadding: CGFloat = 8
 
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
@@ -74,29 +95,45 @@ class AnnotationWindow: NSWindow {
         } else {
             let maxW = screenFrame.width * 0.9
             let maxH = screenFrame.height * 0.9 - toolbarHeight
-            let naturalTotalW = imageSize.width * (1 + debugScale) + debugPadding
+            // 窗口的自然宽度不再包含调试面板 —— 它默认隐藏，不该占地方
+            let naturalTotalW = imageSize.width
             fitScale = min(1.0, min(maxW / naturalTotalW, maxH / imageSize.height))
         }
 
         let canvasW = imageSize.width * fitScale
         let canvasH = imageSize.height * fitScale
-        let debugWidth = canvasW * debugScale
-        let debugHeight = canvasH * debugScale
+        let debugWidth = canvasW * debugPanelScale
+        let debugHeight = canvasH * debugPanelScale
 
-        // 画布 + 调试面板所需的宽度
-        let contentWidth = canvasW + debugPadding + debugWidth
-        let contentHeight = max(canvasH, debugHeight) + toolbarHeight
+        // 窗口内容宽度只算画布：调试面板默认隐藏，打开时再按需要撑宽
+        let contentWidth = canvasW
+        let contentHeight = canvasH + toolbarHeight
 
         let initialWidth = max(contentWidth, 400)
-        // 就地编辑：窗口底边 = 画布底边 - 工具栏高度，于是画布正好压在选区上；
-        // 水平方向左对齐选区左边缘（工具栏比画布宽时向右溢出，不遮挡选区）
+
+        // 就地编辑的落点：画布左下角钉在选区左下角、工具栏挂在画布某侧。
+        // 具体挂哪一侧、以及贴屏幕边缘时怎么夹，都由 AnchoredPlacement 这个纯函数算 ——
+        // 那几条边界在离屏进程里走不到（NSScreen.main 是 nil），抽出去才能逐个验证。
+        let placement: AnchoredPlacement.Result?
         let initialOrigin: NSPoint
         if let anchor = anchored {
-            initialOrigin = NSPoint(x: anchor.minX, y: anchor.minY - toolbarHeight)
+            let result = AnchoredPlacement.compute(
+                anchor: anchor,
+                windowSize: NSSize(width: initialWidth, height: contentHeight),
+                toolbarHeight: toolbarHeight,
+                screenFrame: NSScreen.main?.frame ?? screenFrame)
+            placement = result
+            initialOrigin = result.origin
         } else {
+            placement = nil
             initialOrigin = NSPoint(x: screenFrame.midX - initialWidth / 2,
                                     y: screenFrame.midY - contentHeight / 2)
         }
+        let toolbarAtTop = placement?.toolbarAtTop ?? false
+        self.toolbarAtTop = toolbarAtTop
+        // 画布在容器里的下边缘：工具栏在下方时画布从 toolbarHeight 起，
+        // 工具栏翻到上方时画布从 0 起
+        let canvasBottom = toolbarAtTop ? 0 : toolbarHeight
 
         super.init(
             contentRect: NSRect(origin: initialOrigin,
@@ -126,17 +163,17 @@ class AnnotationWindow: NSWindow {
 
         // 标注画布
         annotationView = AnnotationView(image: image)
-        annotationView.frame = NSRect(x: 0, y: toolbarHeight,
+        annotationView.frame = NSRect(x: 0, y: canvasBottom,
                                       width: canvasW, height: canvasH)
         if fitScale < 1.0 {
             annotationView.setBoundsSize(imageSize)
         }
         container.addSubview(annotationView)
 
-        // Layer B 调试面板
+        // Layer B 调试面板（建好但默认隐藏，见 ⌘D）
         let debugImageView = NSImageView(frame: NSRect(
             x: canvasW + debugPadding,
-            y: toolbarHeight + (canvasH - debugHeight),
+            y: canvasBottom + (canvasH - debugHeight),
             width: debugWidth,
             height: debugHeight
         ))
@@ -146,25 +183,36 @@ class AnnotationWindow: NSWindow {
         debugImageView.layer?.borderColor = NSColor.separatorColor.cgColor
         debugImageView.layer?.borderWidth = 1
         debugImageView.layer?.cornerRadius = 4
+        debugImageView.isHidden = true
         container.addSubview(debugImageView)
 
         annotationView.debugImageView = debugImageView
 
-        let debugLabel = NSTextField(labelWithString: "Layer B (Debug)")
+        let debugLabel = NSTextField(labelWithString: "Layer B (Debug)　⌘D 隐藏")
         debugLabel.font = NSFont.systemFont(ofSize: 10, weight: .medium)
         debugLabel.textColor = .secondaryLabelColor
         debugLabel.frame = NSRect(
             x: canvasW + debugPadding,
-            y: toolbarHeight + canvasH - debugHeight - 16,
+            y: canvasBottom + canvasH - debugHeight - 16,
             width: debugWidth,
             height: 14
         )
         debugLabel.alignment = .center
+        debugLabel.isHidden = true
         container.addSubview(debugLabel)
 
-        // 底部工具栏（先按初始宽度建出来，建完就能量出它真正需要多宽）
+        debugPanelView = debugImageView
+        debugLabelView = debugLabel
+        canvasWidth = canvasW
+        debugPanelWidth = debugWidth + debugPadding
+        containerView = container
+
+        // 工具栏（可能挂在画布下方，也可能因为底部放不下而翻到上方）
         let toolbar = createToolbar(width: initialWidth, height: toolbarHeight)
+        toolbar.frame.origin.y = toolbarAtTop ? canvasH : 0
+        positionToolbarSeparator(for: toolbar)
         container.addSubview(toolbar)
+        toolbarView = toolbar
 
         // 窗口宽度 = max(画布侧需求, 工具栏内容宽度 + 右侧留白)。
         //
@@ -180,31 +228,65 @@ class AnnotationWindow: NSWindow {
         self.contentView = container
     }
 
+    /// 工具栏与画布之间那条分隔线。
+    ///
+    /// 它标的是"工具栏与画布的交界"，不是"工具栏的顶边"：工具栏在下方时画在顶边，
+    /// 翻到上方时画在底边 —— 否则翻上去之后那条线会跑到窗口最外侧，看着像窗口边框。
+    private func positionToolbarSeparator(for toolbar: NSView) {
+        let y: CGFloat = toolbarAtTop ? 0 : toolbar.frame.height - 1
+        toolbarTopSeparator?.frame = NSRect(x: 0, y: y,
+                                            width: toolbar.frame.width, height: 1)
+    }
+
+    /// ⌘D：显示 / 隐藏 Layer B 调试面板。
+    ///
+    /// 面板的视图一直在容器里（只是隐藏），所以这里只改可见性与窗口宽度，
+    /// 不重建任何东西。窗口宽度仍取「画布需求」与「工具栏需求」的较大者 ——
+    /// 工具栏本来就比画布 + 面板宽时，开关面板不会改变窗口宽度。
+    /// 开关前后保持窗口原点不动：这只是一个开发期开关，窗口跟着跳动很干扰。
+    @objc func toggleDebugPanel() {
+        guard let panel = debugPanelView, let label = debugLabelView,
+              let container = containerView, let toolbar = toolbarView else { return }
+
+        let willShow = panel.isHidden
+        panel.isHidden = !willShow
+        label.isHidden = !willShow
+        (annotationView as AnnotationView?)?.needsDisplay = true
+
+        let desired = canvasWidth + (willShow ? debugPanelWidth : 0)
+        let newWidth = max(desired, toolbarContentWidth + 8)
+        let contentHeight = contentView?.frame.height ?? frame.height
+        guard abs(newWidth - frame.width) > 0.5 else { return }
+
+        let originBefore = frame.origin
+        resizeWindow(to: NSSize(width: newWidth, height: contentHeight),
+                     container: container, toolbar: toolbar,
+                     screen: NSScreen.main?.visibleFrame ?? frame)
+        setFrameOrigin(originBefore)
+    }
+
     /// 按工具栏的实际需求调整窗口宽度，并同步容器与工具栏的框架。
     private func resizeWindow(to size: NSSize, container: NSView,
                               toolbar: NSView, screen: NSRect) {
         setContentSize(size)
         container.frame = NSRect(origin: .zero, size: size)
-        toolbar.frame = NSRect(x: 0, y: 0, width: size.width, height: toolbar.frame.height)
-        toolbarTopSeparator?.frame = NSRect(x: 0, y: toolbar.frame.height - 1,
-                                            width: size.width, height: 1)
+
+        // 纵向位置由"挂在哪一侧"决定，**不能写成 y: 0** ——
+        // 宽度调整发生在 init 里设好朝向之后，写死 0 会把"翻到上方"重置掉。
+        // 这里只改宽度，高度不变，所以朝向不可能翻转，沿用已有的 toolbarAtTop 即可。
+        let toolbarHeight = toolbar.frame.height
+        toolbar.frame = NSRect(x: 0, y: toolbarAtTop ? annotationView.frame.height : 0,
+                               width: size.width, height: toolbarHeight)
+        positionToolbarSeparator(for: toolbar)
 
         if let anchor = anchoredRect {
-            // 就地编辑：宽度变化只向右扩展，画布左下角必须钉在选区上 ——
-            // 居中会把整个窗口搬走，用户看到的选区位置就变了
-            var origin = NSPoint(x: anchor.minX, y: anchor.minY - toolbar.frame.height)
-            // 但向右扩展会顶出屏幕（工具栏内容已排到约 1.2k 点宽，而选区可以靠右）。
-            // 顶出去的是「保存 / 复制 / 贴图」这些按钮，用户点不到，比画布错位更糟。
-            // 所以超出时整体左移 —— 代价是画布不再压在选区上，这个取舍是有意的。
-            // 真正的解法是把工具栏收窄（图标化或折两行），见开发计划的工具栏容量一节。
-            if let screen = NSScreen.main {
-                let visible = screen.visibleFrame
-                let overflow = (origin.x + size.width) - visible.maxX
-                if overflow > 0 {
-                    origin.x = max(visible.minX, origin.x - overflow)
-                }
-            }
-            setFrameOrigin(origin)
+            // 宽度变了要重算落点：同一个选区，窗口更宽时可能从"放得下"变成"要左移"
+            let result = AnchoredPlacement.compute(
+                anchor: anchor,
+                windowSize: size,
+                toolbarHeight: toolbarHeight,
+                screenFrame: NSScreen.main?.frame ?? screen)
+            setFrameOrigin(result.origin)
         } else {
             setFrameOrigin(NSPoint(x: screen.midX - frame.width / 2,
                                    y: screen.midY - frame.height / 2))
@@ -917,6 +999,7 @@ class AnnotationWindow: NSWindow {
         - Esc          取消选中，回到绘制模式
         - Delete       删除选中的对象（连同挂在它上面的箭头）
         - ⌘Z / ⇧⌘Z     撤销 / 重做
+        - ⌘D           显示 / 隐藏右侧的 Layer B 调试面板（开发用，默认隐藏）
 
         【贴图（Pin）】
         点工具栏「贴图」或按 F3，图就钉在屏幕上，可以一边看着一边做别的事。
@@ -939,6 +1022,12 @@ class AnnotationWindow: NSWindow {
         - 完全本地离线（系统自带 Vision），不需要联网、不需要账号
         - 识别的是原始截图，与已经画上去的标注无关
         - 大图识别需要几百毫秒，期间界面不会卡住（在后台线程跑）
+
+        【截图历史】
+        - 每次截图都会在原图留一份（含没有保存的），最多最近 \(CaptureHistory.maximumEntries) 张
+        - 状态栏菜单 →「截图历史…」可浏览、重新编辑、复制、删除或清空
+        - 截图常含敏感内容：不需要就清空，或到「偏好设置 → 截图历史」里关掉
+          （关掉后连写盘都不发生）
 
         【设置会自动记住】
         线宽、颜色、线型、箭头样式、调色板、水印与上次使用的工具都会保存下来，

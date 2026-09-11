@@ -58,7 +58,7 @@ do {
     let history = freshHistory()
     check("开始是空的", history.entries().isEmpty)
 
-    history.record(makeImage(width: 120, height: 80, shade: 40))
+    history.record(makeImage(width: 120, height: 80, shade: 40), pixelScale: 2)
     check("记一张后有一条", waitUntil { history.entries().count == 1 },
           "\(history.entries().count) 条")
 
@@ -84,7 +84,7 @@ print("\n=== 2. 新记录排在最前 ===")
 do {
     let history = freshHistory()
     for i in 0..<3 {
-        history.record(makeImage(width: 50 + i, height: 50, shade: UInt8(20 * (i + 1))))
+        history.record(makeImage(width: 50 + i, height: 50, shade: UInt8(20 * (i + 1))), pixelScale: 2)
     }
     check("记了三张", waitUntil { history.entries().count == 3 }, "\(history.entries().count)")
     let entries = history.entries()
@@ -103,7 +103,7 @@ do {
     let cap = CaptureHistory.maximumEntries
     let extra = 3
     for i in 0..<(cap + extra) {
-        history.record(makeImage(width: 40, height: 30, shade: UInt8(i % 200)))
+        history.record(makeImage(width: 40, height: 30, shade: UInt8(i % 200)), pixelScale: 2)
     }
     check("条目数被压到上限 \(cap)",
           waitUntil { history.entries().count == cap }, "\(history.entries().count)")
@@ -126,7 +126,7 @@ do {
 print("\n=== 4. 索引能跨实例读回（换一个实例看同一目录）===")
 do {
     let history = freshHistory()
-    history.record(makeImage(width: 66, height: 44, shade: 90))
+    history.record(makeImage(width: 66, height: 44, shade: 90), pixelScale: 2)
     check("先记一张", waitUntil { history.entries().count == 1 })
 
     let reopened = CaptureHistory(directory: root)
@@ -140,8 +140,8 @@ do {
 print("\n=== 5. 文件被外部删掉后，索引不再列出它（不会出现点不开的空条目）===")
 do {
     let history = freshHistory()
-    history.record(makeImage(width: 30, height: 30, shade: 10))
-    history.record(makeImage(width: 31, height: 30, shade: 20))
+    history.record(makeImage(width: 30, height: 30, shade: 10), pixelScale: 2)
+    history.record(makeImage(width: 31, height: 30, shade: 20), pixelScale: 2)
     check("先记两张", waitUntil { history.entries().count == 2 })
 
     // 模拟用户到访达里删掉其中一个文件
@@ -160,7 +160,7 @@ do {
 print("\n=== 6. 索引文件损坏 → 回到空列表，不崩 ===")
 do {
     let history = freshHistory()
-    history.record(makeImage(width: 30, height: 30, shade: 10))
+    history.record(makeImage(width: 30, height: 30, shade: 10), pixelScale: 2)
     check("先记一张", waitUntil { history.entries().count == 1 })
 
     try? Data("这不是 JSON".utf8).write(to: root.appendingPathComponent("index.json"))
@@ -180,7 +180,7 @@ do {
 print("\n=== 7. 删除与清空 ===")
 do {
     let history = freshHistory()
-    for _ in 0..<3 { history.record(makeImage(width: 40, height: 30, shade: 60)) }
+    for _ in 0..<3 { history.record(makeImage(width: 40, height: 30, shade: 60), pixelScale: 2) }
     check("先记三张", waitUntil { history.entries().count == 3 })
 
     let one = history.entries()[1]
@@ -207,7 +207,7 @@ do {
     let nested = root.appendingPathComponent("a/b/c")
     try? FileManager.default.removeItem(at: root)
     let history = CaptureHistory(directory: nested)
-    history.record(makeImage(width: 20, height: 20, shade: 5))
+    history.record(makeImage(width: 20, height: 20, shade: 5), pixelScale: 2)
     check("自动创建了多层目录并写入",
           waitUntil {
               history.entries().count == 1

@@ -20,6 +20,9 @@ final class CaptureHistory {
         let pixelWidth: Int
         let pixelHeight: Int
         let fileName: String
+        /// 「图像像素 ÷ 逻辑点」的倍率。**可选**是为了兼容加入本字段之前写入的
+        /// index.json —— 改成非可选会让老索引整个解码失败，那等于把用户的历史清空。
+        let pixelScale: CGFloat?
     }
 
     /// 最多保留多少张。整屏 PNG 每张 1–5MB，不设上限会把磁盘慢慢吃掉。
@@ -87,7 +90,11 @@ final class CaptureHistory {
 
     /// 记录一张截图。**异步**：PNG 编码加写盘在整屏尺寸下要几百毫秒，
     /// 放主线程会让标注窗口打开时明显一顿。
-    func record(_ image: CGImage, completion: (() -> Void)? = nil) {
+    ///
+    /// `pixelScale` 是捕获方实测反推的倍率，随条目一起存下来 ——
+    /// 否则从历史里「重新编辑」时得重新猜一个倍率，猜错的后果是画布尺寸与实际
+    /// 像素不符（导出尺寸跟着错），而这种错要拿尺子量才发现。
+    func record(_ image: CGImage, pixelScale: CGFloat, completion: (() -> Void)? = nil) {
         queue.async { [weak self] in
             guard let self = self else { return }
             guard let data = Self.pngData(from: image) else { return }
@@ -99,13 +106,16 @@ final class CaptureHistory {
                 pixelWidth: image.width,
                 pixelHeight: image.height,
                 fileName: "\(Int(now.timeIntervalSince1970 * 1000))-"
-                    + "\(UUID().uuidString.prefix(8)).png"
+                    + "\(UUID().uuidString.prefix(8)).png",
+                pixelScale: pixelScale
             )
 
             let manager = FileManager.default
             try? manager.createDirectory(at: self.directory, withIntermediateDirectories: true)
             let url = self.directory.appendingPathComponent(entry.fileName)
-            guard (try? data.write(to: url)) != nil else { return }
+            // 原子写：非原子写在写盘中途崩溃会留下"文件存在但内容不全"的半张图，
+            // 而索引仍认为它有效 —— 表现是历史列表里出现一张显示不出来的破图
+            guard (try? data.write(to: url, options: .atomic)) != nil else { return }
 
             self.lock.lock()
             self.index.insert(entry, at: 0)

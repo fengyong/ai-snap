@@ -23,6 +23,7 @@ final class SettingsWindowController: NSWindowController {
     private var feedURLField: NSTextField!
     private var autoCheckBox: NSButton!
     private var launchAtLoginBox: NSButton!
+    private var recordHistoryBox: NSButton!
     private var keyMonitor: Any?
     /// 正在录制的目标：nil 表示没有在录制
     private var recordingTarget: RecordingTarget?
@@ -110,6 +111,28 @@ final class SettingsWindowController: NSWindowController {
         let separator1 = NSBox()
         separator1.boxType = .separator
         root.addArrangedSubview(separator1)
+
+        // ── 截图历史 ──
+        let historyTitle = NSTextField(labelWithString: "截图历史")
+        historyTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        root.addArrangedSubview(historyTitle)
+
+        recordHistoryBox = NSButton(checkboxWithTitle: "保留截图历史（含没有保存的）",
+                                    target: self, action: #selector(recordHistoryToggled(_:)))
+        root.addArrangedSubview(recordHistoryBox)
+
+        let historyHint = NSTextField(wrappingLabelWithString:
+            "开启后每次截图都会在原图存一份，最多保留最近 \(CaptureHistory.maximumEntries) 张，"
+            + "可以在「截图历史」窗口里重新编辑或清理。"
+            + "截图常含敏感内容，不需要就到状态栏菜单 →「截图历史…」里删掉，或在这里关掉。")
+        historyHint.font = NSFont.systemFont(ofSize: 11)
+        historyHint.textColor = .secondaryLabelColor
+        historyHint.preferredMaxLayoutWidth = 420
+        root.addArrangedSubview(historyHint)
+
+        let separatorHistory = NSBox()
+        separatorHistory.boxType = .separator
+        root.addArrangedSubview(separatorHistory)
 
         // ── 更新 ──
         let updateTitle = NSTextField(labelWithString: "更新")
@@ -205,7 +228,12 @@ final class SettingsWindowController: NSWindowController {
         windowButton.title = Preferences.shared.windowCaptureHotkey.displayString
         feedURLField.stringValue = Preferences.shared.updateFeedURL
         autoCheckBox.state = Preferences.shared.automaticallyChecksForUpdates ? .on : .off
+        recordHistoryBox.state = Preferences.shared.recordHistory ? .on : .off
         refreshLaunchAtLogin()
+    }
+
+    @objc private func recordHistoryToggled(_ sender: NSButton) {
+        Preferences.shared.recordHistory = (sender.state == .on)
     }
 
     // MARK: - 开机启动
@@ -302,7 +330,9 @@ final class SettingsWindowController: NSWindowController {
         let modifiers = HotkeyConfig.carbonModifiers(from: event.modifierFlags)
         let config = HotkeyConfig(keyCode: UInt32(event.keyCode), carbonModifiers: modifiers)
 
-        // 只按修饰键（⌘、⇧ 本身）时 keyCode 是修饰键、组合不完整 → 继续等
+        // 走到这里的只可能是"完整但不可用的组合"（如 ⇧A、⌥A）——
+        // 纯修饰键根本不会产生 keyDown（那是 flagsChanged），所以不存在
+        // "用户正在按修饰键、我们继续等"的情形。原先的注释写成那样是错的。
         guard config.isUsable else {
             statusLabel.stringValue = "组合键需包含 ⌘ 或 ⌃（只用 ⇧ / ⌥ 会抢掉正常打字），且需为字母、数字或常用符号。"
             statusLabel.isHidden = false
