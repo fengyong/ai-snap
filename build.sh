@@ -1,81 +1,196 @@
 #!/bin/bash
-set -e
+#
+# 打包成可安装的 AISnap.app 与 AISnap.dmg。
+#
+#   ./build.sh                完整打包
+#   ./build.sh --skip-dmg     只出 .app（开发时快一些）
+#
+# 环境变量：
+#   BUILD_NUMBER   构建号（默认时间戳）
+#   SWIFT_FLAGS    透传给 swift build 的额外参数。默认空。
+#                  在**已经被沙箱包裹**的环境里（CI 容器、自动化工具）SwiftPM 给清单
+#                  编译套的那层 sandbox-exec 会以 "sandbox_apply: Operation not permitted"
+#                  失败，此时用 SWIFT_FLAGS=--disable-sandbox 绕过。默认不关 ——
+#                  那层沙箱是为了防止恶意 Package.swift 在构建期乱来，能留就留。
+#
+# 与原脚本相比修掉的几处（都会在安装后暴露，编译期看不出来）：
+#   · BUILD_DIR 写死成 arm64 路径 —— 换机器 / Intel 上直接找不到产物
+#   · Info.plist 里版本写 1.0.0，而代码里 AppInfo.bundledFallbackVersion 是 0.1.0，
+#     更新检查会拿这两个数比大小（现在脚本会强制校验两者一致）
+#   · 完全不签名 —— 没有签名的 .app 在屏幕录制权限上会被系统当成"每次都是新应用"
+#   · 没有图标、没声明 NSHighResolutionCapable
+#
+set -euo pipefail
 
 APP_NAME="AISnap"
 BUNDLE_ID="com.aisnap.app"
-BUILD_DIR=".build/arm64-apple-macosx/release"
-APP_BUNDLE="${APP_NAME}.app"
+# ★ 版本号单一来源。与 Sources/Update/UpdateChecker.swift 里的
+#   AppInfo.bundledFallbackVersion 必须一致（下面会校验，不一致直接失败）。
+VERSION="0.1.0"
+# 构建号：默认用时间戳，便于区分两次构建出来的包
+BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d.%H%M)}"
 
-echo "==> 编译 Release 版本..."
-swift build -c release
+SKIP_DMG=0
+[ "${1:-}" = "--skip-dmg" ] && SKIP_DMG=1
 
-echo "==> 创建 .app 结构..."
-rm -rf "${APP_BUNDLE}"
-mkdir -p "${APP_BUNDLE}/Contents/MacOS"
-mkdir -p "${APP_BUNDLE}/Contents/Resources"
+cd "$(dirname "$0")"
 
-# 复制可执行文件
-cp "${BUILD_DIR}/${APP_NAME}" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
+step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
-# 生成 Info.plist
-cat > "${APP_BUNDLE}/Contents/Info.plist" << 'PLIST'
+# ── 0. 版本号一致性校验 ────────────────────────────────────────────────
+step "校验版本号一致"
+CODE_VERSION=$(grep -oE 'bundledFallbackVersion[[:space:]]*=[[:space:]]*"[^"]+"' \
+                 Sources/Update/UpdateChecker.swift | head -1 | sed -E 's/.*"([^"]+)"/\1/')
+if [ -z "$CODE_VERSION" ]; then
+  echo "❌ 没能从 UpdateChecker.swift 读到 bundledFallbackVersion" >&2
+  exit 1
+fi
+if [ "$CODE_VERSION" != "$VERSION" ]; then
+  cat >&2 <<EOF
+❌ 版本号不一致：
+     本脚本 VERSION          = $VERSION
+     AppInfo.bundledFallback = $CODE_VERSION
+
+   两处必须相同。否则「检查更新」会拿打包进去的版本号与代码里的兜底值互相比大小，
+   得出"有新版本"或"已是最新"的错误结论，而且不会有任何报错。
+EOF
+  exit 1
+fi
+# 注意：变量后面紧跟中文（或任何非 ASCII）字符时必须写成 ${VAR} ——
+# bash 解析变量名时会一直吃到非标识符字节，而多字节汉字的第一个字节会被它吞进去，
+# 于是报出 "VERSION\xef: unbound variable" 这种看不懂的错。
+echo "版本 ${VERSION}（构建号 ${BUILD_NUMBER}），两处一致"
+
+# ── 1. 编译 ───────────────────────────────────────────────────────────
+step "编译 Release"
+SWIFT_FLAGS="${SWIFT_FLAGS:-}"
+# shellcheck disable=SC2086  # 这里就是要让 SWIFT_FLAGS 按空格拆成多个参数
+swift build -c release $SWIFT_FLAGS
+BIN_DIR="$(swift build -c release --show-bin-path $SWIFT_FLAGS)"
+BIN_PATH="$BIN_DIR/$APP_NAME"
+[ -x "$BIN_PATH" ] || { echo "❌ 找不到可执行文件：$BIN_PATH" >&2; exit 1; }
+
+# ── 2. 组装 .app ──────────────────────────────────────────────────────
+step "组装 $APP_NAME.app"
+APP_BUNDLE="$APP_NAME.app"
+rm -rf "$APP_BUNDLE"
+mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
+cp "$BIN_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
+
+# 图标（.icns 不存在时自动生成）
+if [ ! -f "Assets/$APP_NAME.icns" ]; then
+  echo "生成图标…"
+  swift scripts/make_icon.swift Assets/AppIcon-1024.png
+  ICONSET="$(mktemp -d)/$APP_NAME.iconset"
+  mkdir -p "$ICONSET"
+  for spec in "16 16x16" "32 16x16@2x" "32 32x32" "64 32x32@2x" \
+              "128 128x128" "256 128x128@2x" "256 256x256" "512 256x256@2x" \
+              "512 512x512" "1024 512x512@2x"; do
+    px="${spec%% *}"; name="${spec##* }"
+    sips -z "$px" "$px" Assets/AppIcon-1024.png \
+         --out "$ICONSET/icon_$name.png" >/dev/null 2>&1
+  done
+  iconutil -c icns "$ICONSET" -o "Assets/$APP_NAME.icns"
+  rm -rf "$(dirname "$ICONSET")"
+fi
+cp "Assets/$APP_NAME.icns" "$APP_BUNDLE/Contents/Resources/$APP_NAME.icns"
+
+cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
     <key>CFBundleName</key>
-    <string>AISnap</string>
+    <string>$APP_NAME</string>
     <key>CFBundleDisplayName</key>
-    <string>AISnap</string>
+    <string>$APP_NAME</string>
     <key>CFBundleIdentifier</key>
-    <string>com.aisnap.app</string>
-    <key>CFBundleVersion</key>
-    <string>1.0.0</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>$BUNDLE_ID</string>
     <key>CFBundleExecutable</key>
-    <string>AISnap</string>
+    <string>$APP_NAME</string>
+    <key>CFBundleIconFile</key>
+    <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$VERSION</string>
+    <key>CFBundleVersion</key>
+    <string>$BUILD_NUMBER</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.productivity</string>
+    <!-- 常驻状态栏、不占 Dock（代码里也设了 .accessory，两处一致） -->
     <key>LSUIElement</key>
     <true/>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>AISnap 需要屏幕录制权限来进行截图</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
 </dict>
 </plist>
 PLIST
 
-echo "==> .app 打包完成"
+plutil -lint "$APP_BUNDLE/Contents/Info.plist"
+echo "已写入 Info.plist（${VERSION} / ${BUILD_NUMBER}）"
 
-# 创建 DMG
-DMG_NAME="${APP_NAME}.dmg"
-DMG_TEMP="dmg_temp"
-VOLUME_NAME="${APP_NAME}"
+# ── 3. 签名 ───────────────────────────────────────────────────────────
+#
+# 没有 Apple Developer 账号，所以只能 ad-hoc 签名（-s -）。
+# 这不是"正式签名"，但比完全不签强：
+#   · 系统会把应用当成一个有身份的包，而不是"来历不明的可执行文件"
+#   · 屏幕录制权限的授权对象是 AISnap 自己，而不是启动它的终端
+# ⚠️ ad-hoc 签名基于二进制哈希：**每次重新编译安装，屏幕录制权限可能需要重新勾一次**。
+#    要让它长期稳定，需要一张自签名的代码签名证书（也是 M5-1 的第一步）。
+step "签名（ad-hoc）"
+xattr -cr "$APP_BUNDLE" 2>/dev/null || true
+codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
+codesign --verify --strict --verbose=1 "$APP_BUNDLE"
+echo "签名校验通过"
+codesign -dv "$APP_BUNDLE" 2>&1 | grep -E "Identifier|Signature|Format" | sed 's/^/   /'
 
-echo "==> 创建 DMG..."
-rm -rf "${DMG_TEMP}" "${DMG_NAME}"
-mkdir -p "${DMG_TEMP}"
+if [ "$SKIP_DMG" = "1" ]; then
+  step "完成（已跳过 DMG）"
+  echo "  $(pwd)/$APP_BUNDLE"
+  exit 0
+fi
 
-# 复制 .app 到临时目录
-cp -r "${APP_BUNDLE}" "${DMG_TEMP}/"
+# ── 4. DMG ────────────────────────────────────────────────────────────
+step "创建 DMG"
+DMG_NAME="$APP_NAME.dmg"
+DMG_TEMP="$(mktemp -d)/dmg"
+mkdir -p "$DMG_TEMP"
+cp -R "$APP_BUNDLE" "$DMG_TEMP/"
+# 拖进「应用程序」的快捷方式 —— 安装流程就靠它
+ln -s /Applications "$DMG_TEMP/Applications"
+rm -f "$DMG_NAME"
+hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_TEMP" \
+               -ov -format UDZO -quiet "$DMG_NAME"
+rm -rf "$DMG_TEMP"
 
-# 创建指向 /Applications 的快捷方式
-ln -s /Applications "${DMG_TEMP}/Applications"
+# ── 5. 验证 DMG（这一步才是"能不能装"的真正判据）────────────────────
+step "验证 DMG"
+ATTACH_OUT=$(hdiutil attach "$DMG_NAME" -nobrowse -readonly)
+MOUNT_POINT=$(echo "$ATTACH_OUT" | grep -oE '/Volumes/.*' | head -1)
+if [ -z "$MOUNT_POINT" ] || [ ! -d "$MOUNT_POINT/$APP_NAME.app" ]; then
+  echo "❌ 挂载后找不到 $APP_NAME.app" >&2
+  exit 1
+fi
+echo "挂载点：$MOUNT_POINT"
+echo "  内含：$(ls "$MOUNT_POINT" | tr '\n' ' ')"
+codesign --verify --strict "$MOUNT_POINT/$APP_NAME.app" && echo "  包内签名校验通过"
+[ -L "$MOUNT_POINT/Applications" ] && echo "  存在指向 /Applications 的快捷方式"
+hdiutil detach "$MOUNT_POINT" -quiet
 
-# 生成 DMG
-hdiutil create \
-    -volname "${VOLUME_NAME}" \
-    -srcfolder "${DMG_TEMP}" \
-    -ov \
-    -format UDZO \
-    "${DMG_NAME}"
+step "全部完成"
+printf '  %s/%s\n     可直接 open 运行\n' "$(pwd)" "$APP_BUNDLE"
+printf '  %s/%s  (%s)\n     安装包\n' "$(pwd)" "$DMG_NAME" "$(du -h "$DMG_NAME" | cut -f1)"
+cat <<'EOF'
 
-rm -rf "${DMG_TEMP}"
-
-echo ""
-echo "==> 全部完成"
-echo "  ${APP_BUNDLE}  — 可直接 open 运行"
-echo "  ${DMG_NAME}    — 可分发的安装包"
+安装：双击 dmg → 把 AISnap 拖进「应用程序」→ 从「应用程序」启动。
+首次启动会请求「屏幕录制」权限，到 系统设置 → 隐私与安全性 → 屏幕录制
+里勾上 AISnap，然后重启一次 AISnap（权限生效需要重启应用）。
+EOF
