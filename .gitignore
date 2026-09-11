@@ -1,1 +1,8 @@
 AISnap.app
+
+# SwiftPM 构建产物（不应提交）
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
