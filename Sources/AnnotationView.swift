@@ -158,6 +158,19 @@ class AnnotationView: NSView {
             state = .moving(colorKey: colorKey, grabOffset: offset)
             selectedKey = colorKey
             dragStartCenter = obj.center
+        } else if currentTool == .step {
+            // 序号工具：单击直接放置，编号自动递增
+            let key = hitTestBuffer.generateUniqueColorKey()
+            let badge = StepBadge(center: point, number: nextStepNumber(),
+                                  color: currentColor, hitTestColorKey: key)
+            objects[key] = badge
+            zOrder.append(key)
+            hitTestBuffer.drawObject(badge)
+            refreshDebugView()
+            undoStack.append(.add(colorKey: key))
+            redoStack.removeAll()
+            selectedKey = key
+            state = .idle
         } else if case .stamp(let stampType) = currentTool {
             // Stamp 工具：单击直接放置
             let key = hitTestBuffer.generateUniqueColorKey()
@@ -337,6 +350,13 @@ class AnnotationView: NSView {
                                           lineWidth: currentLineWidth,
                                           hitTestColorKey: colorKey)
                     }
+
+                case .step:
+                    // 序号标注在 mouseDown 中直接放置，不会走到这里
+                    currentDrawEnd = nil
+                    state = .idle
+                    needsDisplay = true
+                    return
 
                 case .stamp:
                     // stamp 在 mouseDown 中直接放置，不会走到这里
@@ -550,6 +570,22 @@ class AnnotationView: NSView {
         needsDisplay = true
     }
 
+    // MARK: - 序号标注
+
+    /// 下一个序号标注的编号 = 现有最大编号 + 1。
+    ///
+    /// 取最大值而非"数量 + 1"，是为了让删除后新建的编号不会与已有的撞号；
+    /// 同时也避免删除中间某个序号时，其余序号的显示数字发生跳动。
+    private func nextStepNumber() -> Int {
+        var maxNumber = 0
+        for (_, object) in objects {
+            if let badge = object as? StepBadge {
+                maxNumber = max(maxNumber, badge.number)
+            }
+        }
+        return maxNumber + 1
+    }
+
     // MARK: - Drawing (Layer A)
 
     override func draw(_ dirtyRect: NSRect) {
@@ -714,6 +750,9 @@ class AnnotationView: NSView {
                                            hitTestColorKey: 0)
                 preview.draw(in: ctx)
             }
+
+        case .step:
+            break  // 序号标注是单击放置，不需要拖拽预览
 
         case .stamp:
             break  // stamp 是单击放置，不需要拖拽预览
