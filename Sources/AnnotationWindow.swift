@@ -177,7 +177,19 @@ class AnnotationWindow: NSWindow {
         if let anchor = anchoredRect {
             // 就地编辑：宽度变化只向右扩展，画布左下角必须钉在选区上 ——
             // 居中会把整个窗口搬走，用户看到的选区位置就变了
-            setFrameOrigin(NSPoint(x: anchor.minX, y: anchor.minY - toolbar.frame.height))
+            var origin = NSPoint(x: anchor.minX, y: anchor.minY - toolbar.frame.height)
+            // 但向右扩展会顶出屏幕（工具栏内容已排到约 1.2k 点宽，而选区可以靠右）。
+            // 顶出去的是「保存 / 复制 / 贴图」这些按钮，用户点不到，比画布错位更糟。
+            // 所以超出时整体左移 —— 代价是画布不再压在选区上，这个取舍是有意的。
+            // 真正的解法是把工具栏收窄（图标化或折两行），见开发计划的工具栏容量一节。
+            if let screen = NSScreen.main {
+                let visible = screen.visibleFrame
+                let overflow = (origin.x + size.width) - visible.maxX
+                if overflow > 0 {
+                    origin.x = max(visible.minX, origin.x - overflow)
+                }
+            }
+            setFrameOrigin(origin)
         } else {
             setFrameOrigin(NSPoint(x: screen.midX - frame.width / 2,
                                    y: screen.midY - frame.height / 2))
@@ -253,7 +265,9 @@ class AnnotationWindow: NSWindow {
         var xOffset: CGFloat = 8
 
         // ── 绘图工具（带文字标签）──
-        addGroupLabel("绘图工具", to: toolbar, at: xOffset, width: 268)
+        // 宽度只是分组标签自己的框架宽度（标签文字左对齐，写宽了不会裁掉什么），
+        // 写在这里是为了让"这一组占多宽"在代码里有个可见的数字。
+        addGroupLabel("绘图工具", to: toolbar, at: xOffset, width: 430)
         for (i, item) in Self.toolbarTools.enumerated() {
             let btn = makeToolbarButton(title: item.title, tooltip: item.tip, at: xOffset, tag: i,
                                         action: #selector(toolButtonClicked(_:)))
@@ -520,6 +534,9 @@ class AnnotationWindow: NSWindow {
         ("聚光", "聚光灯高亮区域", .spotlight),
         ("序号", "单击放置序号标注（编号自动递增）", .step),
         ("文字", "单击放置文字并直接输入（双击已有文字可再次编辑）", .text),
+        ("马赛克", "拖拽框选一块区域打马赛克（隐私打码）", .mosaic),
+        ("模糊", "拖拽框选一块区域做高斯模糊（隐私打码）", .blur),
+        ("橡皮", "拖拽抹掉经过的标注对象（整笔合并为一步撤销）", .eraser),
     ]
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
@@ -765,13 +782,22 @@ class AnnotationWindow: NSWindow {
         【绘图工具】
         - 箭头：在画布上拖拽绘制箭头标注
         - 矩形：拖拽绘制矩形边框
-        - 圆角：拖拽绘制圆角矩形（默认圆角半径 12）
-        - 圆形：拖拽绘制正圆（取宽高较大值为直径）
+        - 圆角：拖拽绘制圆角矩形（圆角随线宽放大，线宽越大圆角越明显）
         - 圆形：拖拽绘制正圆（取宽高较大值为直径）
         - 椭圆：拖拽绘制椭圆（宽高独立）
         - 聚光：拖拽框选高亮区域，其余区域变暗
         - 序号：单击放置带数字的圆形标记，编号自动递增（1、2、3…）
         - 文字：单击放置后直接打字，回车确认、Esc 取消（见下）
+        - 马赛克：拖拽框选一块区域，替换为像素化色块
+        - 模糊：拖拽框选一块区域，替换为高斯模糊
+        - 橡皮：拖拽抹掉经过的标注对象（可撤销，整笔算一步）
+
+        【隐私打码】
+        - 马赛克与模糊都直接读原始截图的像素，与画布上的其它标注无关，
+          因此"先打码、再画箭头"和"先画箭头、再打码"结果一样
+        - 选中后按 Option 拖拽可以旋转，理论上模糊区会略微错位，
+          打码区域仍完整覆盖，不会漏出原文
+        - 打码强度固定（马赛克 12 点、模糊半径 12 点），暂未提供调节入口
 
         【文字标注】
         - 单击画布即可输入，放完就能打字，不用再点第二次

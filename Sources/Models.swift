@@ -378,13 +378,17 @@ enum DrawingTool: Equatable {
     case step      // 序号标注（单击放置，编号自动递增）
     case text      // 文字标注（单击放置后原地输入）
     case spotlight
+    case mosaic    // 马赛克打码（拖拽框选）
+    case blur      // 高斯模糊打码（拖拽框选）
+    case eraser    // 橡皮擦：拖拽抹掉经过的对象，本身不产生对象
 
     static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
         switch (lhs, rhs) {
         case (.arrow, .arrow), (.rectangle, .rectangle),
              (.roundedRectangle, .roundedRectangle),
              (.circle, .circle), (.ellipse, .ellipse),
-             (.step, .step), (.text, .text), (.spotlight, .spotlight):
+             (.step, .step), (.text, .text), (.spotlight, .spotlight),
+             (.mosaic, .mosaic), (.blur, .blur), (.eraser, .eraser):
             return true
         case (.stamp, .stamp):
             return true  // 所有 stamp 视为同类工具
@@ -400,6 +404,10 @@ enum CanvasState {
     case moving(colorKey: UInt32, grabOffset: CGVector)
     case rotating(colorKey: UInt32, lastAngle: CGFloat)
     case scaling(colorKey: UInt32, lastDistance: CGFloat)
+    /// 橡皮擦拖拽中。它不是"正在画某个对象"，而是一边拖一边删，所以单独一个状态 ——
+    /// 整条拖拽路径上的删除最后合成**一步撤销**（否则按一次 ⌘Z 只撤销掉抹掉的一个对象，
+    /// 想退回原状得按十几次）。
+    case erasing
 }
 
 // MARK: - AnnotationObject Protocol

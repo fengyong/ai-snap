@@ -131,21 +131,11 @@ extension AnnotationView {
         }
     }
 
-    /// 级联删除：删除所有附着到指定父对象的箭头
-    ///
-    /// 父对象没了，附着在它上面的箭头就成了指向虚空的悬空引用，必须一起删。
-    func cascadeDelete(parentKey: UInt32) {
-        var toDelete: [UInt32] = []
-        for (key, obj) in objects {
-            guard let arrow = obj as? Arrow else { continue }
-            if (arrow.startAttachment?.parentKey == parentKey) ||
-               (arrow.endAttachment?.parentKey == parentKey) {
-                toDelete.append(key)
-            }
-        }
-        for key in toDelete {
-            objects.removeValue(forKey: key)
-            zOrder.removeAll { $0 == key }
-        }
-    }
+    // 级联删除（删除对象时一并删掉挂在它上面的箭头）的实现在
+    // `AnnotationView.takeOutOfCanvas(_:)`，不在本文件。
+    //
+    // 之所以放在画布上：它还负责「把摘下来的东西交回给调用方去记撤销」，而删除键 /
+    // 选中框叉号 / 橡皮擦三条路对撤销的粒度要求不同（一个是「一次删一个」、
+    // 一个是「整笔拖拽合成一步」）。放在画布上三条路才能共用同一份级联规则，
+    // 不必三处各写一遍 —— 漏掉一处就是画布上留下一个吊在不存在父对象上的箭头。
 }

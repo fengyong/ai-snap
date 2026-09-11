@@ -16,6 +16,11 @@ struct ToolContext {
     let canvasSize: CGSize
     /// 新建对象的命中色 key
     let colorKey: UInt32
+    /// 底图（打码工具要读它的像素）。其余工具用不到，但由画布统一注入，
+    /// 于是 handler 不必持有画布引用 —— 这正是拆分的意义。
+    let sourceImage: CGImage?
+    /// 「画布点 → 底图像素」的倍率。打码的块大小 / 模糊半径都要乘上它。
+    let pixelScale: CGFloat
 
     /// 端点吸附到已有对象（仅箭头用）。需要访问画布对象表，因此由画布注入。
     let detectAttachment: (CGPoint) -> Attachment?
@@ -77,6 +82,7 @@ enum ToolRegistry {
         SpotlightToolHandler(),
         ClickPlacementToolHandler(),
         TextToolHandler(),
+        RedactionToolHandler(),
     ]
 
     static func handler(for tool: DrawingTool) -> AnnotationToolHandler? {
