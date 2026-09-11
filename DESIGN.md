@@ -45,14 +45,31 @@ macOS 截图标注工具，支持区域截图、窗口截图，以及在截图�
 | 语言     | Swift 5.9            |
 | UI 框架  | AppKit (NSView/NSWindow) |
 | 构建系统 | Swift Package Manager |
-| 最低版本 | macOS 13 (Ventura)   |
-| 截图 API | CGWindowListCreateImage |
+| 最低版本 | macOS 14 (Sonoma)    |
+| 截图 API | **ScreenCaptureKit**（`SCScreenshotManager`） |
 
 选择 AppKit 而非 SwiftUI 的原因:
 - 需要精确控制鼠标事件 (mouseDown/mouseDragged/mouseUp)
 - 需要直接操作 CGContext 进行像素级渲染
 - 需要创建特殊窗口类型 (无边框全屏覆盖层)
 - SwiftUI 在这类底层图形交互场景中控制力不足
+
+**为什么截图 API 从 `CGWindowListCreateImage` 换成了 ScreenCaptureKit**
+
+该 API 在 CoreGraphics 头文件中的标记是 `SCREEN_CAPTURE_OBSOLETE(10.5, 14.0, 15.0)` ——
+引入于 10.5、**废弃于 14.0、15.0 起 obsolete**，编译期提示原文是
+"Please use ScreenCaptureKit instead."。在 macOS 15+ 上继续使用会触发反复的权限弹窗且随时可能失效。
+
+迁移时保留了一处关键设计：**`CGWindowListCopyWindowInfo` 并未被废弃**（`API_AVAILABLE(macos(10.5))`），
+所以「决定截哪个窗口」仍用它，只把「真正抓图」换成 ScreenCaptureKit：
+
+```
+决定「截哪个」  →  ScreenCapture.swift（CGWindowListCopyWindowInfo）
+真正「抓图」    →  CaptureProviderSCK（SCScreenshotManager）
+```
+
+两者通过 `CGWindowID` 对接（`SCWindow.windowID` 的类型就是 `CGWindowID`），
+因此窗口 Z 序命中逻辑完全无需改动。
 
 ---
 
@@ -66,7 +83,11 @@ ai-snap/
     ├── AppDelegate.swift               # 应用生命周期 + 菜单栏
     ├── Models.swift                    # 数据模型 (Arrow, CanvasState)
     ├── HitTestBuffer.swift             # 隐藏图层 (Layer B) 实现
-    ├── ScreenCapture.swift             # 屏幕捕获 (区域/窗口)
+    ├── ScreenCapture.swift             # 截图统一入口 (异步)：决定截哪个
+    ├── Capture/
+    │   ├── CaptureProviderSCK.swift    # ScreenCaptureKit 捕获实现
+    │   ├── CaptureProviderLegacy.swift # 旧 CGWindowList 实现备份 (回滚通道)
+    │   └── ScreenCaptureError.swift    # 截图失败的结构化错误
     ├── RegionSelectionWindow.swift     # 全屏覆盖选区窗口
     ├── AnnotationView.swift            # 标注画布 (核心)
     └── AnnotationWindow.swift          # 标注窗口 + 工具栏
@@ -80,7 +101,10 @@ ai-snap/
 | `AppDelegate` | 菜单栏图标、截图流程调度 | RegionSelectionWindow, ScreenCapture, AnnotationWindow |
 | `Models` | AnnotationObject 协议、Arrow/Rectangle/Circle/Stamp 类、状态枚举 | 无 |
 | `HitTestBuffer` | 离屏位图缓冲区，Color Picking 命中检测，调试可视化 | Models |
-| `ScreenCapture` | CGWindowList API 封装 | 无 |
+| `ScreenCapture` | 截图统一入口（异步）：窗口枚举 + 分派到具体 Provider | CaptureProviderSCK |
+| `CaptureProviderSCK` | ScreenCaptureKit 区域/窗口捕获，含版本路由与错误映射 | ScreenCaptureError |
+| `CaptureProviderLegacy` | 旧 `CGWindowListCreateImage` 实现（回滚用，默认不启用） | 无 |
+| `ScreenCaptureError` | 结构化错误（权限被拒 / 找不到窗口 / 捕获失败） | 无 |
 | `RegionSelectionWindow` | 全屏半透明覆盖层 + 拖拽选区 | ScreenCapture |
 | `AnnotationView` | 双图层画布渲染、鼠标交互、多形状绘制/移动 | Models, HitTestBuffer |
 | `AnnotationWindow` | 窗口容器、工具栏 (工具/颜色/保存/复制)、调试面板 | AnnotationView |
@@ -318,17 +342,23 @@ enum CanvasState {
     │  - 用户可见选区内的原始屏幕内容
     ▼
 用户释放鼠标 (选区 > 5x5 px)
-    │  - NSView 坐标 → CGWindowList 屏幕坐标 (Y 轴翻转)
+    │  - NSView 坐标 → 屏幕坐标 (左上原点，Y 轴翻转)
     │  - 关闭覆盖窗口
-    │  - 延迟 100ms 确保窗口消失
+    │  - 等待 80ms 确保窗口服务器完成合成
     ▼
-CGWindowListCreateImage(captureRect, .optionOnScreenBelowWindow, ...)
-    │
+ScreenCapture.captureRegion(captureRect)   [async]
+    │  ├─ macOS 15.2+  : SCScreenshotManager.captureImage(in: rect)
+    │  └─ macOS 14.0+  : SCContentFilter + sourceRect + captureResolution(.best)
     ▼
 打开 AnnotationWindow 进入标注阶段
 ```
 
 按 Escape 键可取消区域选择。
+
+> **坐标系**：ScreenCaptureKit 与旧 `CGWindowListCreateImage` 使用同一套屏幕坐标空间（**左上角原点**），
+> 因此上面那行 Y 轴翻转换算保持不变，无需调整。
+> 该结论已用「整屏截图 + 已知偏移处截小块 + 逐像素比对」的方式实测确认
+> （两处探针的平均绝对差均为 0.00）。
 
 ### 6.2 窗口截图流程
 
@@ -348,19 +378,36 @@ CGWindowListCopyWindowInfo 获取所有可见窗口
     │  - NSEvent.mouseLocation → 屏幕坐标 (Y 轴翻转)
     │  - 检测鼠标是否在窗口 bounds 内
     ▼
-找到目标窗口 → CGWindowListCreateImage(.optionIncludingWindow, windowID, ...)
+找到目标窗口 → 取得其 CGWindowID
     │
+    ▼
+ScreenCapture.captureWindow(windowID:)   [async]
+    │  - 在 SCShareableContent.windows 中按 windowID 精确匹配 SCWindow
+    │    （SCWindow.windowID 的类型就是 CGWindowID，可直接对接）
+    │  - SCContentFilter(desktopIndependentWindow: window)
+    │  - 配置：captureResolution(.best) / showsCursor(false)
+    │          ignoreShadowsSingleWindow(true)  ← 等价于旧的 .boundsIgnoreFraming
     ▼
 打开 AnnotationWindow 进入标注阶段
 ```
+
+> 注意：**窗口枚举仍由 `CGWindowListCopyWindowInfo` 完成**（该 API 未废弃），
+> ScreenCaptureKit 只负责最后一步抓图。这样 Z 序命中逻辑完全不必重写。
 
 ### 6.3 坐标系说明
 
 macOS 存在两套坐标系:
 - **AppKit (NSView/NSEvent)**: 原点在左下角，Y 轴向上
-- **Core Graphics (CGWindowList)**: 原点在左上角，Y 轴向下
+- **屏幕坐标 (CGWindowList / ScreenCaptureKit)**: 原点在左上角，Y 轴向下
 
-转换公式: `cgY = screenHeight - nsY - rectHeight`
+转换公式: `screenY = primaryScreenHeight - nsY - rectHeight`
+
+> ScreenCaptureKit 沿用左上原点的屏幕坐标空间（已实测确认，见 6.1 的说明），
+> 所以这两套 API 可以互换使用同一份 rect，迁移时坐标换算无需修改。
+
+> ⚠️ **已知限制**：`SCScreenshotManager.captureImage(in:)` 在矩形**跨越多块显示器**时会降级到
+> 1x 分辨率（实测：三块 2x 屏的跨屏矩形返回的像素数与点数相同）。当前选区只在主屏交互，
+> 不触及该路径；将来若做多屏交互，需按屏拆分后分别捕获再拼接。
 
 ---
 
@@ -445,8 +492,15 @@ Layer B 在以下时机重绘:
 应用需要 **屏幕录制** 权限才能正常截图:
 
 - 位置: 系统设置 → 隐私与安全 → 屏幕录制
-- 首次调用 `CGWindowListCreateImage` 时系统会弹出授权请求
-- 未授权时截图结果为空白图片
+- 应用启动时通过 `CGPreflightScreenCaptureAccess()` 预检，未授权则引导用户前往设置
+- 首次调用 ScreenCaptureKit 时系统会弹出授权请求
+- 未授权时截图会失败，`CaptureProviderSCK` 会把 `SCStreamError.Code.userDeclined`(-3801)
+  或 `.missingEntitlements`(-3803) 映射为 `ScreenCaptureError.permissionDenied`，
+  由调用方弹出引导
+
+> ⚠️ `CGPreflightScreenCaptureAccess()` 可能返回**缓存的**权限值，与实际可否捕获不一致。
+> 若出现「预检显示已授权但截图失败」，需在系统设置中移除该应用的屏幕录制权限后重新添加，
+> 并**重启应用**。
 
 ---
 
@@ -462,6 +516,8 @@ swift run AISnap
 # Release 构建
 swift build -c release
 ```
+
+**要求：** macOS 14+（ScreenCaptureKit 的 `SCScreenshotManager` 需要 14.0），Swift 5.9+
 
 运行后应用以菜单栏图标形式存在 (无 Dock 图标)，通过 `NSApp.setActivationPolicy(.accessory)` 实现。
 

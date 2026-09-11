@@ -60,12 +60,28 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
 |------|------|
 | `main.swift` | 应用入口 |
 | `AppDelegate.swift` | 状态栏菜单、截图调度 |
-| `ScreenCapture.swift` | CGWindowList API 截图捕获 |
+| `ScreenCapture.swift` | 截图统一入口（异步）：决定截哪个区域/窗口 |
+| `Capture/CaptureProviderSCK.swift` | ScreenCaptureKit 捕获实现（区域 / 窗口） |
+| `Capture/CaptureProviderLegacy.swift` | 旧 CGWindowList 实现的备份（回滚通道） |
+| `Capture/ScreenCaptureError.swift` | 截图失败的结构化错误 |
 | `RegionSelectionWindow.swift` | 全屏覆盖层区域选择 |
 | `AnnotationWindow.swift` | 标注窗口、工具栏、菜单栏 |
 | `AnnotationView.swift` | 画布核心：绘制、交互、吸附、附着、Undo/Redo |
 | `HitTestBuffer.swift` | 离屏 Hit Test 缓冲区（唯一颜色 Key 方案） |
 | `Models.swift` | 所有数据模型和标注对象类 |
+
+**截图捕获的分工**
+
+```
+决定「截哪个」  →  ScreenCapture.swift（CGWindowListCopyWindowInfo，未废弃）
+真正「抓图」    →  CaptureProviderSCK（ScreenCaptureKit）
+```
+
+两者通过 `CGWindowID` 对接（`SCWindow.windowID` 的类型就是 `CGWindowID`），
+所以窗口命中判定逻辑无需改动，只替换最终的抓图调用。
+
+> 旧的 `CGWindowListCreateImage` 自 macOS 14.0 起 deprecated、15.0 起 obsolete，
+> 因此本项目最低支持 macOS 14，抓图统一走 ScreenCaptureKit。
 
 **核心设计：双图层 Color Picking**
 - Layer A（可见层）：正常渲染所有标注对象
@@ -81,8 +97,8 @@ swift build -c release
 .build/arm64-apple-macosx/release/AISnap
 ```
 
-**要求：** macOS 13+，Swift 5.9+
+**要求：** macOS 14+，Swift 5.9+
 
 ## 代码统计
 
-约 2,860 行 Swift 代码，8 个源文件，无第三方依赖。
+约 3,460 行 Swift 代码，11 个源文件，无第三方依赖。
