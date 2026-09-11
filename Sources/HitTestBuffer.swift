@@ -110,22 +110,39 @@ class HitTestBuffer {
         }
     }
 
+    /// 复用的离屏上下文，专供调试可视化渲染。
+    ///
+    /// 不能直接用 `context` —— 那是 Layer B 本体，往里面画调试颜色会污染命中检测。
+    /// 缓存一份是为了省掉每次调用重新分配 10MB 位图的开销。
+    private lazy var debugContext: CGContext = {
+        let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        // 与 Layer B 保持同样的关键设置：关闭抗锯齿
+        ctx.setShouldAntialias(false)
+        ctx.setAllowsAntialiasing(false)
+        return ctx
+    }()
+
     /// 生成 Layer B 的可视化调试图像
     /// 真实 Layer B 的颜色极暗（#000001, #000002...），肉眼不可见。
     /// 此方法用相同的 drawHitTest 逻辑，但映射到明亮的颜色，揭示幕后的魔术。
+    ///
+    /// 刻意**不用** `NSImage.lockFocus()` 渲染。在 2560×1080 上离屏实测：
+    /// `lockFocus`/`unlockFocus` 什么都不画就要 3.86ms，加上整画布 fill 要 7.51ms，
+    /// 加 10 个对象要 10.92ms；而同样的绘制在裸 `CGContext` 上只要 0.37ms
+    /// （差约 29 倍）。本方法会被 `mouseDragged` 的三个分支调用，属于拖拽热路径，
+    /// 单次拖拽事件约 11.3ms 已越过 120Hz 的 8.33ms 帧预算 —— 因此改走裸上下文，
+    /// 最后用 `NSImage(cgImage:)` 包一层（它只持有 CGImage 引用，不复制像素）。
     func debugVisualization(objects: [UInt32: any AnnotationObject], zOrder: [UInt32]) -> NSImage {
+        let ctx = debugContext
         let size = NSSize(width: width, height: height)
-        let image = NSImage(size: size)
-        image.lockFocus()
-
-        guard let ctx = NSGraphicsContext.current?.cgContext else {
-            image.unlockFocus()
-            return image
-        }
-
-        // 模拟 Layer B 的关键设置：关闭抗锯齿
-        ctx.setShouldAntialias(false)
-        ctx.setAllowsAntialiasing(false)
 
         // 深色背景（代替 Layer B 的纯黑 #000000）
         ctx.setFillColor(NSColor(white: 0.1, alpha: 1).cgColor)
@@ -140,7 +157,9 @@ class HitTestBuffer {
             obj.drawHitTest(in: ctx, color: brightColor)
         }
 
-        image.unlockFocus()
-        return image
+        guard let cgImage = ctx.makeImage() else {
+            return NSImage(size: size)
+        }
+        return NSImage(cgImage: cgImage, size: size)
     }
 }
