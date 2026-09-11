@@ -6,7 +6,13 @@ class AnnotationWindow: NSWindow {
     private var toolButtons: [NSButton] = []
     private var colorButtons: [NSButton] = []
     private var colorButtonContainer: NSView!
-    private var paletteIndex: Int = 0
+    /// 当前调色板下标。初值取自偏好，改动时立刻写回（见 Preferences）。
+    private var paletteIndex: Int = Preferences.shared.paletteIndex {
+        didSet {
+            guard paletteIndex != oldValue else { return }
+            Preferences.shared.paletteIndex = paletteIndex
+        }
+    }
     private var watermarkField: NSTextField!
     private var lineWidthLabel: NSTextField!
 
@@ -205,7 +211,12 @@ class AnnotationWindow: NSWindow {
             toolButtons.append(btn)
             xOffset += btn.frame.width + 2
         }
-        updateToolButtonStates(selectedIndex: 0)
+        // 恢复上次使用的工具。tag 越界（比如版本更新后工具数变化）时回到第一个，
+        // 而不是让工具栏处于「一个都没选中」的状态。
+        let savedTag = Preferences.shared.lastToolTag
+        let restoredTag = (savedTag >= 0 && savedTag < Self.toolbarTools.count) ? savedTag : 0
+        annotationView.currentTool = Self.toolbarTools[restoredTag].tool
+        updateToolButtonStates(selectedIndex: restoredTag)
         xOffset += 4
 
         addSeparator(to: toolbar, at: &xOffset, height: height)
@@ -217,7 +228,8 @@ class AnnotationWindow: NSWindow {
             frame: NSRect(x: xOffset, y: 12, width: 84, height: 24), pullsDown: false)
         arrowStylePopup.font = NSFont.systemFont(ofSize: 11)
         arrowStylePopup.addItems(withTitles: ArrowStyle.presetNames)
-        arrowStylePopup.selectItem(at: 0)
+        arrowStylePopup.selectItem(at: ArrowStyle.allPresets
+            .firstIndex(of: annotationView.currentArrowStyle) ?? 0)
         arrowStylePopup.toolTip = "选择箭头样式（双向 = 两端都有箭头）"
         arrowStylePopup.target = self
         arrowStylePopup.action = #selector(arrowStyleSelected(_:))
@@ -282,7 +294,8 @@ class AnnotationWindow: NSWindow {
             frame: NSRect(x: xOffset, y: 12, width: 76, height: 24), pullsDown: false)
         lineStylePopup.font = NSFont.systemFont(ofSize: 11)
         lineStylePopup.addItems(withTitles: LineStyle.allCases.map(\.displayName))
-        lineStylePopup.selectItem(at: 0)
+        lineStylePopup.selectItem(at: LineStyle.allCases
+            .firstIndex(of: annotationView.currentLineStyle) ?? 0)
         lineStylePopup.toolTip = "新建矩形/椭圆使用的线型（箭头请用「箭头样式」）"
         lineStylePopup.target = self
         lineStylePopup.action = #selector(lineStyleSelected(_:))
@@ -311,14 +324,14 @@ class AnnotationWindow: NSWindow {
         addGroupLabel("水印", to: toolbar, at: xOffset, width: 140)
         let wmToggle = NSButton(checkboxWithTitle: "启用", target: self, action: #selector(watermarkToggled(_:)))
         wmToggle.frame = NSRect(x: xOffset, y: 14, width: 48, height: 20)
-        wmToggle.state = .off
+        wmToggle.state = annotationView.watermarkConfig.enabled ? .on : .off
         wmToggle.font = NSFont.systemFont(ofSize: 11)
         wmToggle.toolTip = "导出图片时叠加水印"
         toolbar.addSubview(wmToggle)
         xOffset += 50
 
         watermarkField = NSTextField(frame: NSRect(x: xOffset, y: 14, width: 72, height: 20))
-        watermarkField.stringValue = "AISnap"
+        watermarkField.stringValue = annotationView.watermarkConfig.text
         watermarkField.font = NSFont.systemFont(ofSize: 11)
         watermarkField.placeholderString = "水印文本"
         watermarkField.toolTip = "输入水印文本内容"
@@ -458,6 +471,7 @@ class AnnotationWindow: NSWindow {
         guard sender.tag >= 0 && sender.tag < tools.count else { return }
         annotationView.currentTool = tools[sender.tag].tool
         updateToolButtonStates(selectedIndex: sender.tag)
+        Preferences.shared.lastToolTag = sender.tag
     }
 
     @objc private func stampSelected(_ sender: NSPopUpButton) {
@@ -654,6 +668,11 @@ class AnnotationWindow: NSWindow {
         - 保存：导出为 PNG 文件
         - 复制：复制到系统剪贴板（同时写入图片内容和图片文件，
           因此既可直接粘贴到聊天窗口，也能在访达里 ⌘V 存成 .png）
+
+        【设置会自动记住】
+        线宽、颜色、线型、箭头样式、调色板、水印与上次使用的工具都会保存下来，
+        下次启动沿用，不需要每次重新调。
+        要恢复到出厂值：点状态栏图标 →「恢复默认设置」。
         """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "知道了")

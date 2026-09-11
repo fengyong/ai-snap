@@ -1,0 +1,179 @@
+import Cocoa
+
+/// 用户偏好的持久化存取。
+///
+/// **为什么单独抽一层**：此前线宽、颜色、箭头样式、线型、水印、调色板每次重启
+/// 全部重置（技术债 P1）。这些值散落在 `AnnotationView` 与 `AnnotationWindow`，
+/// 若各处直接读写 `UserDefaults`，键名、类型、缺省值就会散到三处 —— 尤其缺省值
+/// 一旦改动，老用户的已存值与代码里的初值会不一致，且没有任何编译错误提示。
+///
+/// 这里做**单一来源**：键名与缺省值只出现一次。读取统一走
+/// `object(forKey:)` + 类型判断，而不是 `double(forKey:)` / `bool(forKey:)` ——
+/// 后者对缺失键返回 0 / false，会把「从未设置过」当成一个有效的用户选择。
+///
+/// **写入时机**：由各属性的 `didSet` 触发，不需要显式保存调用。
+final class Preferences {
+    static let shared = Preferences()
+
+    private let defaults: UserDefaults
+
+    /// 允许注入其他 `UserDefaults` 实例，便于隔离与测试。
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    // MARK: - 键与缺省值
+
+    private enum Key: String {
+        case lineWidth
+        case lineStyle
+        case colorHex
+        case arrowStyleIndex
+        case paletteIndex
+        case lastToolTag
+        case watermarkEnabled
+        case watermarkText
+    }
+
+    /// 缺省值集中在这里。改动这一处即同时改变「新用户初值」与「老用户缺键回退值」。
+    enum Defaults {
+        static let lineWidth: CGFloat = 15
+        static let lineStyle: LineStyle = .solid
+        static let color: NSColor = .red
+        static let arrowStyleIndex = 0
+        static let paletteIndex = 0
+        static let lastToolTag = 0
+        static let watermarkEnabled = false
+        static let watermarkText = "AISnap"
+    }
+
+    // MARK: - 线宽
+
+    var lineWidth: CGFloat {
+        get {
+            guard let v = defaults.object(forKey: Key.lineWidth.rawValue) as? Double else {
+                return Defaults.lineWidth
+            }
+            return CGFloat(v)
+        }
+        set { defaults.set(Double(newValue), forKey: Key.lineWidth.rawValue) }
+    }
+
+    // MARK: - 线型
+
+    var lineStyle: LineStyle {
+        get {
+            guard let raw = defaults.string(forKey: Key.lineStyle.rawValue),
+                  let style = LineStyle(rawValue: raw) else {
+                return Defaults.lineStyle
+            }
+            return style
+        }
+        set { defaults.set(newValue.rawValue, forKey: Key.lineStyle.rawValue) }
+    }
+
+    // MARK: - 颜色
+
+    var color: NSColor {
+        get {
+            guard let hex = defaults.string(forKey: Key.colorHex.rawValue),
+                  let color = Preferences.color(fromHex: hex) else {
+                return Defaults.color
+            }
+            return color
+        }
+        set { defaults.set(Preferences.hexString(from: newValue), forKey: Key.colorHex.rawValue) }
+    }
+
+    // MARK: - 箭头样式（按预设下标存，预设增删时下标可能错位 → 越界即回缺省）
+
+    var arrowStyle: ArrowStyle {
+        get {
+            guard let idx = defaults.object(forKey: Key.arrowStyleIndex.rawValue) as? Int,
+                  idx >= 0, idx < ArrowStyle.allPresets.count else {
+                return ArrowStyle.allPresets[Defaults.arrowStyleIndex]
+            }
+            return ArrowStyle.allPresets[idx]
+        }
+        set {
+            guard let idx = ArrowStyle.allPresets.firstIndex(where: { $0 == newValue }) else { return }
+            defaults.set(idx, forKey: Key.arrowStyleIndex.rawValue)
+        }
+    }
+
+    // MARK: - 调色板
+
+    var paletteIndex: Int {
+        get {
+            guard let idx = defaults.object(forKey: Key.paletteIndex.rawValue) as? Int,
+                  idx >= 0, idx < ColorPalette.allPalettes.count else {
+                return Defaults.paletteIndex
+            }
+            return idx
+        }
+        set { defaults.set(newValue, forKey: Key.paletteIndex.rawValue) }
+    }
+
+    // MARK: - 上次使用的工具
+
+    /// 存的是工具栏按钮的 tag，而不是 `DrawingTool` 本身 ——
+    /// `DrawingTool` 带关联值（`.stamp(.heart)`）且不是 `RawRepresentable`，
+    /// 存下标更简单；有效性由使用方对着 `toolbarTools` 校验。
+    var lastToolTag: Int {
+        get { defaults.object(forKey: Key.lastToolTag.rawValue) as? Int ?? Defaults.lastToolTag }
+        set { defaults.set(newValue, forKey: Key.lastToolTag.rawValue) }
+    }
+
+    // MARK: - 水印
+
+    var watermarkEnabled: Bool {
+        get { defaults.object(forKey: Key.watermarkEnabled.rawValue) as? Bool ?? Defaults.watermarkEnabled }
+        set { defaults.set(newValue, forKey: Key.watermarkEnabled.rawValue) }
+    }
+
+    var watermarkText: String {
+        get { defaults.string(forKey: Key.watermarkText.rawValue) ?? Defaults.watermarkText }
+        set { defaults.set(newValue, forKey: Key.watermarkText.rawValue) }
+    }
+
+    /// 把水印配置一次性读出来（`WatermarkConfig` 里只有 text / enabled 两项是可编辑偏好，
+    /// 其余（字号、颜色、平铺、角度）目前没有 UI 入口，保持代码里的默认值）。
+    var watermarkConfig: WatermarkConfig {
+        var config = WatermarkConfig()
+        config.text = watermarkText
+        config.enabled = watermarkEnabled
+        return config
+    }
+
+    // MARK: - 恢复默认
+
+    /// 清空所有已存偏好，回到 `Defaults`。
+    func resetToDefaults() {
+        for key in [Key.lineWidth, Key.lineStyle, Key.colorHex, Key.arrowStyleIndex,
+                    Key.paletteIndex, Key.lastToolTag, Key.watermarkEnabled, Key.watermarkText] {
+            defaults.removeObject(forKey: key.rawValue)
+        }
+    }
+
+    // MARK: - 颜色与十六进制互转
+
+    /// 转换为 `#RRGGBB`。先落到 sRGB 再取分量 —— 直接用 `redComponent` 取
+    /// 非 RGB 色彩空间（如灰度、命名色）的颜色会抛异常。
+    static func hexString(from color: NSColor) -> String {
+        guard let rgb = color.usingColorSpace(.sRGB) else { return "#FF0000" }
+        let r = Int((rgb.redComponent * 255).rounded())
+        let g = Int((rgb.greenComponent * 255).rounded())
+        let b = Int((rgb.blueComponent * 255).rounded())
+        return String(format: "#%02X%02X%02X", r, g, b)
+    }
+
+    static func color(fromHex hex: String) -> NSColor? {
+        var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let value = UInt32(s, radix: 16) else { return nil }
+        return NSColor(srgbRed: CGFloat((value >> 16) & 0xFF) / 255,
+                       green: CGFloat((value >> 8) & 0xFF) / 255,
+                       blue: CGFloat(value & 0xFF) / 255,
+                       alpha: 1)
+    }
+}

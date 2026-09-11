@@ -77,7 +77,9 @@ enum ArrowTailType {
     }
 }
 
-enum LineStyle: CaseIterable {
+/// 带 String 原始值：便于持久化（见 `Preferences.lineStyle`），
+/// 也便于把「存储值」与「枚举顺序」解耦 —— 将来插入新 case 不会让老用户的已存值错位。
+enum LineStyle: String, CaseIterable {
     case solid
     case dashed
     case dotted
@@ -128,7 +130,8 @@ protocol LineStyleSupporting: AnyObject {
     var lineStyle: LineStyle { get set }
 }
 
-struct ArrowStyle {
+/// `Equatable` 是为了让 `Preferences` 能按值反查预设下标（存下标比存整个结构稳）。
+struct ArrowStyle: Equatable {
     var headType: ArrowHeadType
     var tailType: ArrowTailType
     var lineStyle: LineStyle

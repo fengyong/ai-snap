@@ -15,17 +15,56 @@ class AnnotationView: NSView {
     private var currentDrawEnd: CGPoint?
 
     // 当前工具和样式
+    //
+    // 这几项在改动时立刻写入 Preferences（didSet），因此不需要任何显式保存调用 ——
+    // 无论从工具栏、菜单还是将来的快捷键修改，持久化都自动跟上。
+    // `currentTool` 不在这里持久化：它按工具栏按钮 tag 存，由 AnnotationWindow 负责。
     var currentTool: DrawingTool = .arrow
-    var currentColor: NSColor = .red
-    var currentLineWidth: CGFloat = 15.0
+
+    var currentColor: NSColor = .red {
+        didSet {
+            guard currentColor != oldValue else { return }
+            Preferences.shared.color = currentColor
+        }
+    }
+
+    var currentLineWidth: CGFloat = 15.0 {
+        didSet {
+            guard currentLineWidth != oldValue else { return }
+            Preferences.shared.lineWidth = currentLineWidth
+        }
+    }
+
     /// 新建矩形/椭圆使用的描边线型。
     /// 箭头的线型不走这里 —— 它由 `ArrowStyle` 预设携带（「箭头样式」里已有
     /// 虚线、点菱等预设），两处各管一套就不会互相覆盖。
-    var currentLineStyle: LineStyle = .solid
-    var currentArrowStyle: ArrowStyle = .default
+    var currentLineStyle: LineStyle = .solid {
+        didSet {
+            guard currentLineStyle != oldValue else { return }
+            Preferences.shared.lineStyle = currentLineStyle
+        }
+    }
+
+    var currentArrowStyle: ArrowStyle = .default {
+        didSet {
+            guard currentArrowStyle != oldValue else { return }
+            Preferences.shared.arrowStyle = currentArrowStyle
+        }
+    }
 
     // 水印配置
-    var watermarkConfig = WatermarkConfig()
+    var watermarkConfig = WatermarkConfig() {
+        didSet {
+            // WatermarkConfig 里只有 text / enabled 有 UI 入口，逐项写回；
+            // 其余（字号、颜色、平铺、角度）保持代码默认值，不写入也不用读回。
+            if watermarkConfig.text != oldValue.text {
+                Preferences.shared.watermarkText = watermarkConfig.text
+            }
+            if watermarkConfig.enabled != oldValue.enabled {
+                Preferences.shared.watermarkEnabled = watermarkConfig.enabled
+            }
+        }
+    }
 
     // 当前被选中的对象 key
     private(set) var selectedKey: UInt32?
@@ -52,6 +91,19 @@ class AnnotationView: NSView {
         let size = image.size
         self.hitTestBuffer = HitTestBuffer(size: size)
         super.init(frame: NSRect(origin: .zero, size: size))
+
+        // 从偏好恢复上次使用的样式。
+        //
+        // 不恢复的：currentTool（由 AnnotationWindow 按工具栏 tag 恢复）、
+        // 选区 / 撤销栈 / 已画对象 —— 那些属于单次会话，跨会话恢复反而突兀。
+        //
+        // 注意：属性观察器在初始化期间不会触发，所以这里不会把刚读出来的值又写回去。
+        let prefs = Preferences.shared
+        currentColor = prefs.color
+        currentLineWidth = prefs.lineWidth
+        currentLineStyle = prefs.lineStyle
+        currentArrowStyle = prefs.arrowStyle
+        watermarkConfig = prefs.watermarkConfig
     }
 
     required init?(coder: NSCoder) {
