@@ -7,11 +7,14 @@ class HitTestBuffer {
     let width: Int
     let height: Int
 
+    /// 位图与所有 ID 色共用的色彩空间（DeviceRGB）。
+    /// 见 `colorFromKey(_:)` 的说明：ID 色必须在这个空间里构造，避免转换导致分量偏移。
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+
     init(size: CGSize) {
         width = Int(size.width)
         height = Int(size.height)
 
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
         context = CGContext(
             data: nil,
             width: width,
@@ -40,11 +43,26 @@ class HitTestBuffer {
         return key
     }
 
-    /// 将 UInt32 key 转换为 NSColor (用于在 Layer B 绘制)
-    static func colorFromKey(_ key: UInt32) -> NSColor {
+    /// 将 UInt32 key 转换为 NSColor（用于在 Layer B 绘制）。
+    ///
+    /// 在**本缓冲区自身的色彩空间**里构造 `CGColor`，而不是用
+    /// `NSColor(red:green:blue:)` —— 后者产出的 `cgColor` 落在 sRGB，
+    /// 与位图的 DeviceRGB 不是同一个空间，绘制时要经过一次色彩空间转换。
+    /// 这种转换在显示器色彩配置偏离 sRGB 时可能让某个分量偏移 ±1，
+    /// 而 `pickColorKey` 是按精确值查字典的 —— 一旦偏移，命中检测会**静默整体失灵**。
+    ///
+    /// 实测当前（sRGB 输入）未发生偏移，但这里改为构造性正确，
+    /// 不再依赖「转换恰好是恒等」这一未被保证的行为。
+    func colorFromKey(_ key: UInt32) -> NSColor {
         let r = CGFloat((key >> 16) & 0xFF) / 255.0
         let g = CGFloat((key >> 8) & 0xFF) / 255.0
         let b = CGFloat(key & 0xFF) / 255.0
+
+        if let cg = CGColor(colorSpace: colorSpace, components: [r, g, b, 1.0]),
+           let color = NSColor(cgColor: cg) {
+            return color
+        }
+        // 兜底：极不可能走到（DeviceRGB + 4 分量必定可构造）
         return NSColor(red: r, green: g, blue: b, alpha: 1.0)
     }
 
@@ -78,7 +96,7 @@ class HitTestBuffer {
 
     /// 在 Layer B 上绘制任意标注对象 (使用其唯一颜色，关闭抗锯齿)
     func drawObject(_ object: any AnnotationObject) {
-        let pickColor = HitTestBuffer.colorFromKey(object.hitTestColorKey)
+        let pickColor = colorFromKey(object.hitTestColorKey)
         object.drawHitTest(in: context, color: pickColor)
     }
 
