@@ -23,23 +23,45 @@ class AnnotationWindow: NSWindow {
     /// 工具栏顶部那条通栏分隔线，窗口最终宽度确定后需要跟着调整。
     private var toolbarTopSeparator: NSBox?
 
-    init(image: NSImage) {
+    /// 就地编辑模式下要覆盖的选区（AppKit 屏幕坐标）。非 nil 时窗口不允许被居中搬走。
+    private var anchoredRect: NSRect?
+
+    /// 关闭时回调（AppDelegate 用它把冻结的覆盖层收掉）。
+    var onClose: (() -> Void)?
+
+    override func close() {
+        super.close()
+        onClose?()
+        onClose = nil
+    }
+
+    /// 区域截图「就地编辑」模式下，画布精确覆盖在刚才的选区上。
+    ///
+    /// - Parameter anchor: 选区在 AppKit 屏幕坐标下的矩形；传 nil 则按普通方式居中开窗
+    ///   （窗口截图走这条路）。
+    init(image: NSImage, anchor: NSRect? = nil) {
         let imageSize = image.size
         let toolbarHeight: CGFloat = 48
 
-        // 右侧 debug 面板 = 原图 50% 大小
-        let debugScale: CGFloat = 0.5
-        let debugPadding: CGFloat = 8
+        // 右侧 debug 面板 = 原图 50% 大小。就地编辑时不显示：
+        // 它会把窗口撑宽、破坏"画布正好压在选区上"的观感，而且那是开发期工具。
+        let anchored = anchor
+        let debugScale: CGFloat = anchored == nil ? 0.5 : 0
+        let debugPadding: CGFloat = debugScale > 0 ? 8 : 0
 
-        // 计算自适应缩放：确保窗口不超过屏幕可见区域的 90%
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let maxW = screenFrame.width * 0.9
-        let maxH = screenFrame.height * 0.9 - toolbarHeight
 
-        let naturalTotalW = imageSize.width * (1 + debugScale) + debugPadding
-        let naturalTotalH = imageSize.height
-
-        let fitScale = min(1.0, min(maxW / naturalTotalW, maxH / naturalTotalH))
+        let fitScale: CGFloat
+        if anchored != nil {
+            // 就地编辑：画布就是选区本身，不做任何缩放适配
+            // （选区必然在屏幕内，而且它已经在屏幕上被用户看到过了，缩放会"跳"一下）
+            fitScale = 1
+        } else {
+            let maxW = screenFrame.width * 0.9
+            let maxH = screenFrame.height * 0.9 - toolbarHeight
+            let naturalTotalW = imageSize.width * (1 + debugScale) + debugPadding
+            fitScale = min(1.0, min(maxW / naturalTotalW, maxH / imageSize.height))
+        }
 
         let canvasW = imageSize.width * fitScale
         let canvasH = imageSize.height * fitScale
@@ -50,24 +72,35 @@ class AnnotationWindow: NSWindow {
         let contentWidth = canvasW + debugPadding + debugWidth
         let contentHeight = max(canvasH, debugHeight) + toolbarHeight
 
-        // 先用画布侧的宽度初始化。窗口的最终宽度还要看工具栏需要多宽，而工具栏
-        // 需要 self 才能创建，所以只能先建窗口、建完工具栏再调宽度（见下方）。
         let initialWidth = max(contentWidth, 400)
-        let initialOrigin = NSPoint(
-            x: screenFrame.midX - initialWidth / 2,
-            y: screenFrame.midY - contentHeight / 2
-        )
+        // 就地编辑：窗口底边 = 画布底边 - 工具栏高度，于是画布正好压在选区上；
+        // 水平方向左对齐选区左边缘（工具栏比画布宽时向右溢出，不遮挡选区）
+        let initialOrigin: NSPoint
+        if let anchor = anchored {
+            initialOrigin = NSPoint(x: anchor.minX, y: anchor.minY - toolbarHeight)
+        } else {
+            initialOrigin = NSPoint(x: screenFrame.midX - initialWidth / 2,
+                                    y: screenFrame.midY - contentHeight / 2)
+        }
 
         super.init(
             contentRect: NSRect(origin: initialOrigin,
                                 size: NSSize(width: initialWidth, height: contentHeight)),
-            styleMask: [.titled, .closable, .miniaturizable],
+            // 就地编辑用无边框：带标题栏会让 contentRect 比 frame 内缩，
+            // 画布就没法精确对齐选区了
+            styleMask: anchored == nil ? [.titled, .closable, .miniaturizable] : [.borderless],
             backing: .buffered,
             defer: false
         )
 
         self.title = "AISnap - 标注"
         self.isReleasedWhenClosed = false
+        self.anchoredRect = anchored
+
+        if anchored != nil {
+            // 压在冻结覆盖层之上（覆盖层是 .statusBar + 1）
+            self.level = .statusBar + 2
+        }
 
         // 设置应用菜单栏
         setupMainMenu()
@@ -140,8 +173,15 @@ class AnnotationWindow: NSWindow {
         toolbar.frame = NSRect(x: 0, y: 0, width: size.width, height: toolbar.frame.height)
         toolbarTopSeparator?.frame = NSRect(x: 0, y: toolbar.frame.height - 1,
                                             width: size.width, height: 1)
-        setFrameOrigin(NSPoint(x: screen.midX - frame.width / 2,
-                               y: screen.midY - frame.height / 2))
+
+        if let anchor = anchoredRect {
+            // 就地编辑：宽度变化只向右扩展，画布左下角必须钉在选区上 ——
+            // 居中会把整个窗口搬走，用户看到的选区位置就变了
+            setFrameOrigin(NSPoint(x: anchor.minX, y: anchor.minY - toolbar.frame.height))
+        } else {
+            setFrameOrigin(NSPoint(x: screen.midX - frame.width / 2,
+                                   y: screen.midY - frame.height / 2))
+        }
     }
 
     // MARK: - Main Menu Bar

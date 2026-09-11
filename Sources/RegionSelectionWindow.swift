@@ -15,17 +15,25 @@ import Cocoa
 ///
 /// 多屏：每块屏各一张冻结图、各一个覆盖层；但只有主屏可交互（与原先一致）。
 class RegionSelectionWindow: NSWindow {
-    private let completionHandler: (CGImage?) -> Void
+    /// 选区完成时回调。
+    ///
+    /// 除了裁好的图，还回传**选区在 AppKit 屏幕坐标下的矩形** ——
+    /// 调用方据此把标注窗口「就地」摆在选区上。图或矩形为 nil 表示取消 / 失败。
+    private let completionHandler: (CGImage?, NSRect?) -> Void
     private var selectionView: RegionSelectionView!
     private var overlayWindows: [NSWindow] = []
 
     /// 主屏的冻结帧，选区确定后从它裁剪。
     private var frozenMainImage: CGImage?
 
-    init(completion: @escaping (CGImage?) -> Void) {
+    /// 交互屏（主屏）的框架，用于把视图坐标换算成屏幕坐标。
+    private let mainScreenFrame: NSRect
+
+    init(completion: @escaping (CGImage?, NSRect?) -> Void) {
         self.completionHandler = completion
 
         let screenFrame = NSScreen.main?.frame ?? .zero
+        self.mainScreenFrame = screenFrame
         super.init(
             contentRect: screenFrame,
             styleMask: .borderless,
@@ -103,23 +111,41 @@ class RegionSelectionWindow: NSWindow {
     }
 
     private func finishSelection(rect: NSRect) {
-        hideOverlays()
+        // 视图坐标 → AppKit 屏幕坐标（覆盖层是无边框窗，视图原点即屏原点，但副屏可为负，
+        // 所以显式偏移一次而不是假定主屏在 (0,0)）
+        let screenRect = rect.offsetBy(dx: mainScreenFrame.minX, dy: mainScreenFrame.minY)
+
+        // 不再立刻收掉覆盖层：它要留着当「就地编辑」的背景（周围保持变暗），
+        // 等标注窗口关闭时由调用方调 hideOverlays() 收掉。
+        // 但必须停止接收鼠标事件，否则它会挡住标注窗口的交互。
+        stopInteracting()
 
         guard let frozen = frozenMainImage, let screen = NSScreen.main,
-              let cropped = frozen.cropped(fromAppKitRect: rect, on: screen) else {
-            completionHandler(nil)
+              let cropped = frozen.cropped(fromAppKitRect: screenRect, on: screen) else {
+            hideOverlays()
+            completionHandler(nil, nil)
             return
         }
         // 纯裁剪，没有异步等待 —— 这正是「先截后选」换来的收益
-        completionHandler(cropped)
+        completionHandler(cropped, screenRect)
     }
 
     private func cancelSelection() {
         hideOverlays()
-        completionHandler(nil)
+        completionHandler(nil, nil)
     }
 
-    private func hideOverlays() {
+    /// 保留冻结画面，但不再吃鼠标事件。
+    private func stopInteracting() {
+        NSCursor.pop()
+        ignoresMouseEvents = true
+        for overlay in overlayWindows {
+            overlay.ignoresMouseEvents = true
+        }
+    }
+
+    /// 收掉全部覆盖层。标注窗口关闭时由 AppDelegate 调用。
+    func hideOverlays() {
         NSCursor.pop()
         orderOut(nil)
         for overlay in overlayWindows {
