@@ -10,6 +10,13 @@ class AnnotationWindow: NSWindow {
     private var watermarkField: NSTextField!
     private var lineWidthLabel: NSTextField!
 
+    /// 工具栏实际排布出来的内容宽度（在 `createToolbar` 末尾由布局游标写入）。
+    /// 窗口宽度据此决定，而不是用硬编码常量 —— 否则新增控件会被静默裁掉。
+    private var toolbarContentWidth: CGFloat = 0
+
+    /// 工具栏顶部那条通栏分隔线，窗口最终宽度确定后需要跟着调整。
+    private var toolbarTopSeparator: NSBox?
+
     init(image: NSImage) {
         let imageSize = image.size
         let toolbarHeight: CGFloat = 48
@@ -33,19 +40,21 @@ class AnnotationWindow: NSWindow {
         let debugWidth = canvasW * debugScale
         let debugHeight = canvasH * debugScale
 
-        let totalWidth = canvasW + debugPadding + debugWidth
-        // 最小宽度需容纳底部工具栏（工具栏用绝对坐标排布，超出窗口宽度的按钮会被裁掉）
-        let minimumWidth: CGFloat = 1060
-        let windowSize = NSSize(width: max(totalWidth, minimumWidth),
-                                height: max(canvasH, debugHeight) + toolbarHeight)
+        // 画布 + 调试面板所需的宽度
+        let contentWidth = canvasW + debugPadding + debugWidth
+        let contentHeight = max(canvasH, debugHeight) + toolbarHeight
 
-        let origin = NSPoint(
-            x: screenFrame.midX - windowSize.width / 2,
-            y: screenFrame.midY - windowSize.height / 2
+        // 先用画布侧的宽度初始化。窗口的最终宽度还要看工具栏需要多宽，而工具栏
+        // 需要 self 才能创建，所以只能先建窗口、建完工具栏再调宽度（见下方）。
+        let initialWidth = max(contentWidth, 400)
+        let initialOrigin = NSPoint(
+            x: screenFrame.midX - initialWidth / 2,
+            y: screenFrame.midY - contentHeight / 2
         )
 
         super.init(
-            contentRect: NSRect(origin: origin, size: windowSize),
+            contentRect: NSRect(origin: initialOrigin,
+                                size: NSSize(width: initialWidth, height: contentHeight)),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -57,7 +66,9 @@ class AnnotationWindow: NSWindow {
         // 设置应用菜单栏
         setupMainMenu()
 
-        let container = NSView(frame: NSRect(origin: .zero, size: windowSize))
+        let container = NSView(frame: NSRect(origin: .zero,
+                                             size: NSSize(width: initialWidth,
+                                                          height: contentHeight)))
 
         // 标注画布
         annotationView = AnnotationView(image: image)
@@ -97,11 +108,34 @@ class AnnotationWindow: NSWindow {
         debugLabel.alignment = .center
         container.addSubview(debugLabel)
 
-        // 底部工具栏
-        let toolbar = createToolbar(width: windowSize.width, height: toolbarHeight)
+        // 底部工具栏（先按初始宽度建出来，建完就能量出它真正需要多宽）
+        let toolbar = createToolbar(width: initialWidth, height: toolbarHeight)
         container.addSubview(toolbar)
 
+        // 窗口宽度 = max(画布侧需求, 工具栏内容宽度 + 右侧留白)。
+        //
+        // 工具栏用绝对坐标排布、不换行不滚动，以前靠一个硬编码的最小宽度（1060）
+        // 兜着；但工具栏内容已排到约 1050px，余量只有 10px，再加一个控件就会被
+        // 静默裁掉（按钮直接消失，界面上没有任何提示）。改为按实际排布结果定宽。
+        let requiredWidth = max(contentWidth, toolbarContentWidth + 8)
+        if abs(requiredWidth - initialWidth) > 0.5 {
+            resizeWindow(to: NSSize(width: requiredWidth, height: contentHeight),
+                         container: container, toolbar: toolbar, screen: screenFrame)
+        }
+
         self.contentView = container
+    }
+
+    /// 按工具栏的实际需求调整窗口宽度，并同步容器与工具栏的框架。
+    private func resizeWindow(to size: NSSize, container: NSView,
+                              toolbar: NSView, screen: NSRect) {
+        setContentSize(size)
+        container.frame = NSRect(origin: .zero, size: size)
+        toolbar.frame = NSRect(x: 0, y: 0, width: size.width, height: toolbar.frame.height)
+        toolbarTopSeparator?.frame = NSRect(x: 0, y: toolbar.frame.height - 1,
+                                            width: size.width, height: 1)
+        setFrameOrigin(NSPoint(x: screen.midX - frame.width / 2,
+                               y: screen.midY - frame.height / 2))
     }
 
     // MARK: - Main Menu Bar
@@ -158,6 +192,7 @@ class AnnotationWindow: NSWindow {
         let separator = NSBox(frame: NSRect(x: 0, y: height - 1, width: width, height: 1))
         separator.boxType = .separator
         toolbar.addSubview(separator)
+        toolbarTopSeparator = separator
 
         var xOffset: CGFloat = 8
 
@@ -305,6 +340,12 @@ class AnnotationWindow: NSWindow {
         let helpBtn = makeToolbarButton(title: "帮助", tooltip: "查看使用帮助", at: xOffset, tag: 400,
                                          action: #selector(showHelp))
         toolbar.addSubview(helpBtn)
+
+        // 记录工具栏真正需要的宽度 = 布局游标 + 最后一个控件的宽度。
+        //
+        // 刻意不用「容器里最靠右的子视图」来量：colorButtonContainer 的框架宽度是
+        // 固定值（200），与实际色块数量无关，用它会量宽。
+        toolbarContentWidth = xOffset + helpBtn.frame.width
 
         return toolbar
     }
