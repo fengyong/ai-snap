@@ -22,7 +22,15 @@ class AnnotationView: NSView {
     // 这几项在改动时立刻写入 Preferences（didSet），因此不需要任何显式保存调用 ——
     // 无论从工具栏、菜单还是将来的快捷键修改，持久化都自动跟上。
     // `currentTool` 不在这里持久化：它按工具栏按钮 tag 存，由 AnnotationWindow 负责。
-    var currentTool: DrawingTool = .arrow
+    var currentTool: DrawingTool = .arrow {
+        didSet {
+            // 切走橡皮擦时收掉笔刷圆环，否则屏幕上会一直留着一个圈
+            if currentTool != .eraser {
+                eraseCursor = nil
+                needsDisplay = true
+            }
+        }
+    }
 
     var currentColor: NSColor = .red {
         didSet {
@@ -90,6 +98,21 @@ class AnnotationView: NSView {
     // 调试面板：外部挂载的 NSImageView，用于实时显示 Layer B 可视化
     weak var debugImageView: NSImageView?
 
+    // MARK: 橡皮擦状态
+    //
+    // 橡皮擦不是"拖拽构造一个对象"，而是边拖边删，所以它有自己的一组状态，
+    // 走的也是 `.erasing` 而不是 `.drawing`。整条拖拽路径上的删除最后合并成一步撤销。
+    /// 这一笔已经抹掉的对象（连同它们挂着的箭头），攒到 mouseUp 一起记撤销
+    private var eraseDeleted: [(UInt32, any AnnotationObject)] = []
+    /// 这一笔开始前的 z 序：撤销时要连叠放次序一起还原
+    private var eraseZOrderBefore: [UInt32] = []
+    private var lastErasePoint: CGPoint?
+    /// 笔刷半径（点）。**预览画的圆环与真实判定范围共用这一个值** ——
+    /// 分两处写，圆环就会变成骗人的：画得很大却擦不掉环内的对象。
+    let eraserRadius: CGFloat = 6
+    /// 笔刷圆环的位置（鼠标当前点）
+    private var eraseCursor: CGPoint?
+
     // MARK: 文字标注的行内编辑
     //
     // 这三个必须存在类里而不是扩展文件里（extension 不能加实例存储属性），
@@ -125,6 +148,24 @@ class AnnotationView: NSView {
         fatalError("init(coder:) not implemented")
     }
 
+    // MARK: - 底图的像素访问（打码用）
+
+    /// 底图的 `CGImage` 形式。只转一次：`cgImage(forProposedRect:context:hints:)`
+    /// 每次调用都要走一遍 NSImage 的图像表示，放进每帧的绘制路径里是白给的开销。
+    private(set) lazy var baseCGImage: CGImage? = {
+        var rect = CGRect(origin: .zero, size: baseImage.size)
+        return baseImage.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+    }()
+
+    /// 「画布点 → 底图像素」的倍率（Retina 上通常是 2）。
+    ///
+    /// 用两者**实测尺寸相除**反推，而不是取 `backingScaleFactor`：
+    /// 万一捕获返回的尺寸与屏幕倍率不一致（跨屏、降级 1x），除法仍然是对的。
+    private(set) lazy var pixelScale: CGFloat = {
+        guard let cg = baseCGImage, baseImage.size.width > 0 else { return 1 }
+        return CGFloat(cg.width) / baseImage.size.width
+    }()
+
     // MARK: - Tracking Area (for passive snap on hover)
 
     override func updateTrackingAreas() {
@@ -143,6 +184,14 @@ class AnnotationView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+
+        // 橡皮擦：跟随鼠标画笔刷圆环，让用户看得见"擦得到哪里"
+        if currentTool == .eraser {
+            eraseCursor = point
+            needsDisplay = true
+            return
+        }
+
         // 仅在空闲状态下进行被动端点捕捉检测
         if case .idle = state {
             if let snap = findNearestSnapPoint(to: point, excludeKey: nil) {
@@ -162,6 +211,13 @@ class AnnotationView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let flags = event.modifierFlags
 
+        // 橡皮擦优先于下面所有分支：选中态、⌥ 旋转、⇧ 缩放都不该在这个工具下生效 ——
+        // 否则会变成「选了橡皮擦，一拖却在转对象」。
+        if currentTool == .eraser {
+            beginEraseStroke(at: point)
+            return
+        }
+
         // 检测是否点击了选中对象的删除叉号按钮
         if let key = selectedKey, let obj = objects[key] {
             let box = obj.boundingBox
@@ -172,27 +228,9 @@ class AnnotationView: NSView {
                                         y: selRect.maxY + deleteSize * 0.3)
             let distToDelete = hypot(point.x - deleteCenter.x, point.y - deleteCenter.y)
             if distToDelete <= deleteSize / 2 + 4 {
-                // 记录被删除的对象（包含级联删除的箭头）
-                let zOrderBefore = zOrder
-                var deletedObjects: [(UInt32, any AnnotationObject)] = []
-                if let obj = objects[key] { deletedObjects.append((key, obj)) }
-                // 收集级联删除的子箭头
-                for (k, o) in objects {
-                    if let arrow = o as? Arrow,
-                       (arrow.startAttachment?.parentKey == key || arrow.endAttachment?.parentKey == key) {
-                        deletedObjects.append((k, o))
-                    }
-                }
-                undoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderBefore))
-                redoStack.removeAll()
-
-                cascadeDelete(parentKey: key)
-                objects.removeValue(forKey: key)
-                zOrder.removeAll { $0 == key }
-                selectedKey = nil
-                hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
-                refreshDebugView()
-                needsDisplay = true
+                // 与 Delete 键、菜单「删除选中」走同一条路（原先这里是一份复制粘贴的
+                // 实现，三处各自维护"收集级联箭头 + 记撤销 + 重绘"迟早会漏掉一步）
+                deleteSelectedObject()
                 return
             }
         }
@@ -315,6 +353,10 @@ class AnnotationView: NSView {
             currentDrawEnd = applySnap(to: point, excludeKey: nil)
             needsDisplay = true
 
+        case .erasing:
+            eraseCursor = point
+            continueEraseStroke(to: point)
+
         case .idle:
             break
         }
@@ -368,6 +410,18 @@ class AnnotationView: NSView {
                 undoStack.append(.scale(colorKey: colorKey, factor: scaleStartFactor))
                 redoStack.removeAll()
             }
+
+        case .erasing:
+            // 整笔拖拽合并成一步撤销：否则按一次 ⌘Z 只退回一个对象，
+            // 想退回原状得按十几次 —— 那等于撤销功能对橡皮擦不可用。
+            if !eraseDeleted.isEmpty {
+                undoStack.append(.delete(objects: eraseDeleted,
+                                         zOrderSnapshot: eraseZOrderBefore))
+                redoStack.removeAll()
+            }
+            eraseDeleted = []
+            eraseZOrderBefore = []
+            lastErasePoint = nil
 
         case .idle:
             break
@@ -459,29 +513,122 @@ class AnnotationView: NSView {
 
     /// 删除当前选中的对象（含挂在它上面的箭头），并记录一步撤销。
     ///
-    /// 抽成方法是因为它有多个入口：这里的 Delete 键，以及菜单的「删除选中」。
+    /// 抽成方法是因为它有多个入口：Delete 键、菜单的「删除选中」、以及选中框右上角的叉号。
     func deleteSelectedObject() {
         guard let key = selectedKey else { return }
 
         let zOrderBefore = zOrder
-        var deletedObjects: [(UInt32, any AnnotationObject)] = []
-        if let obj = objects[key] { deletedObjects.append((key, obj)) }
-        for (k, o) in objects {
-            if let arrow = o as? Arrow,
-               (arrow.startAttachment?.parentKey == key || arrow.endAttachment?.parentKey == key) {
-                deletedObjects.append((k, o))
-            }
-        }
-        undoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderBefore))
-        redoStack.removeAll()
+        let taken = takeOutOfCanvas(key)
+        guard !taken.isEmpty else { return }
 
-        cascadeDelete(parentKey: key)
-        objects.removeValue(forKey: key)
-        zOrder.removeAll { $0 == key }
+        undoStack.append(.delete(objects: taken, zOrderSnapshot: zOrderBefore))
+        redoStack.removeAll()
         selectedKey = nil
+
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
         refreshDebugView()
         needsDisplay = true
+    }
+
+    /// 把对象（连同挂在它上面的箭头）从画布上摘下来，返回被摘掉的东西。
+    ///
+    /// **不记撤销** —— 因为不同调用方要的撤销粒度不同：删除键是"一次删一个"，
+    /// 橡皮擦是"整笔拖拽合成一步"。把"摘除"和"怎么记撤销"分开，两条路才能共用同一份
+    /// 级联逻辑；否则「删除时要连箭头一起删」这条规则会在三处各写一遍，漏一处就是
+    /// 画布上留下一个吊在不存在父对象上的箭头。
+    @discardableResult
+    private func takeOutOfCanvas(_ key: UInt32) -> [(UInt32, any AnnotationObject)] {
+        var taken: [(UInt32, any AnnotationObject)] = []
+        if let obj = objects[key] { taken.append((key, obj)) }
+        for (k, o) in objects {
+            guard k != key, let arrow = o as? Arrow else { continue }
+            if arrow.startAttachment?.parentKey == key || arrow.endAttachment?.parentKey == key {
+                taken.append((k, o))
+            }
+        }
+        let removedKeys = Set(taken.map { $0.0 })
+        for k in removedKeys { objects.removeValue(forKey: k) }
+        zOrder.removeAll { removedKeys.contains($0) }
+        return taken
+    }
+
+    // MARK: - 橡皮擦
+
+    private func beginEraseStroke(at point: CGPoint) {
+        // 记下这一笔开始前的 z 序：撤销要连叠放次序一起还原，否则撤销之后
+        // 对象会跑到别的对象上面去，看着像"撤销把它挪了位置"
+        eraseZOrderBefore = zOrder
+        eraseDeleted = []
+        lastErasePoint = point
+        eraseCursor = point
+        state = .erasing
+        erase(at: point)
+        needsDisplay = true
+    }
+
+    private func continueEraseStroke(to point: CGPoint) {
+        // 沿路径补点采样：鼠标移动事件是离散的，快速拖动时相邻两个事件可能隔了几十点，
+        // 只按当前位置判定会漏掉中间掠过的对象 —— 表现是"擦过去却没擦掉"。
+        let step: CGFloat = 3
+        let from = lastErasePoint ?? point
+        let distance = hypot(point.x - from.x, point.y - from.y)
+        if distance > step {
+            let count = Int(distance / step)
+            for i in 1...count {
+                let t = CGFloat(i) / CGFloat(count + 1)
+                erase(at: CGPoint(x: from.x + (point.x - from.x) * t,
+                                  y: from.y + (point.y - from.y) * t))
+            }
+        }
+        erase(at: point)
+        lastErasePoint = point
+        needsDisplay = true
+    }
+
+    /// 抹掉笔刷范围内的对象。
+    ///
+    /// 取「中心 + 半径 R 上八个方向」共 9 个采样点，而不是只取中心一点：
+    /// 预览画的是一个半径 R 的圆环，若只按中心判定，那个圆环就是**骗人的** ——
+    /// 环里的对象擦不掉，用户会以为橡皮擦坏了。
+    private func erase(at point: CGPoint) {
+        var picked: Set<UInt32> = []
+        let center = hitTestBuffer.pickColorKey(at: point)
+        if center != 0 { picked.insert(center) }
+        for i in 0..<8 {
+            let angle = CGFloat(i) * .pi / 4
+            let sample = CGPoint(x: point.x + cos(angle) * eraserRadius,
+                                 y: point.y + sin(angle) * eraserRadius)
+            let key = hitTestBuffer.pickColorKey(at: sample)
+            if key != 0 { picked.insert(key) }
+        }
+        guard !picked.isEmpty else { return }
+
+        // 先在 Layer B 上把所有采样点都取完、再动手删：边删边取会让后面的采样
+        // 落到"已经被删掉的位置"，同一笔里的判定结果就取决于顺序了。
+        var taken: [(UInt32, any AnnotationObject)] = []
+        for key in picked where objects[key] != nil {
+            taken.append(contentsOf: takeOutOfCanvas(key))
+        }
+        guard !taken.isEmpty else { return }
+
+        eraseDeleted.append(contentsOf: taken)
+        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+        refreshDebugView()
+    }
+
+    /// 橡皮擦的笔刷圆环。半径与真实判定范围共用 `eraserRadius`。
+    private func drawEraseCursor(in ctx: CGContext) {
+        guard let cursor = eraseCursor else { return }
+        let r = eraserRadius
+        let rect = CGRect(x: cursor.x - r, y: cursor.y - r, width: r * 2, height: r * 2)
+        ctx.saveGState()
+        ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.9).cgColor)
+        ctx.setFillColor(NSColor.systemRed.withAlphaComponent(0.15).cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.setLineDash(phase: 0, lengths: [4, 3])
+        ctx.fillEllipse(in: rect)
+        ctx.strokeEllipse(in: rect)
+        ctx.restoreGState()
     }
 
     // MARK: - Undo / Redo
@@ -539,6 +686,11 @@ class AnnotationView: NSView {
         if let snapPt = activeSnapPoint {
             drawSnapIndicator(at: snapPt, in: ctx)
         }
+
+        // 6. 橡皮擦的笔刷圆环（悬停时也显示，让用户先看清作用范围再下笔）
+        if currentTool == .eraser {
+            drawEraseCursor(in: ctx)
+        }
     }
 
     // MARK: - 工具上下文与对象登记
@@ -557,6 +709,8 @@ class AnnotationView: NSView {
             drawingFromCenter: drawingFromCenter,
             canvasSize: baseImage.size,
             colorKey: colorKey,
+            sourceImage: baseCGImage,
+            pixelScale: pixelScale,
             detectAttachment: { [weak self] point in
                 self?.detectAttachment(at: point, excludeKey: colorKey)
             },
