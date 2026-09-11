@@ -1,6 +1,6 @@
 import Cocoa
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     private var regionSelectionWindow: RegionSelectionWindow?
     private var annotationWindow: AnnotationWindow?
@@ -111,6 +111,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // 标上 ⌘, 会让人以为随时可用，不如不标。
         menu.addItem(NSMenuItem(title: "偏好设置…", action: #selector(showPreferences), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        // 没有贴图时置灰（见 validateMenuItem）
+        menu.addItem(NSMenuItem(title: "关闭全部贴图", action: #selector(closeAllPins), keyEquivalent: ""))
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quitApp), keyEquivalent: "q"))
 
         for item in menu.items {
@@ -171,6 +174,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - 贴图
+
+    @objc private func closeAllPins() {
+        PinManager.shared.closeAll()
+    }
+
+    /// 「关闭全部贴图」在没有贴图时置灰 —— 否则点了没反应，像是坏了。
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(closeAllPins) {
+            return PinManager.shared.hasPins
+        }
+        return true
     }
 
     // MARK: - Annotation

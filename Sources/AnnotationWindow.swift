@@ -363,6 +363,11 @@ class AnnotationWindow: NSWindow {
                                          action: #selector(copyImage))
         toolbar.addSubview(copyBtn)
         xOffset += copyBtn.frame.width + 2
+
+        let pinBtn = makeToolbarButton(title: "贴图", tooltip: "钉在屏幕上 (F3)",
+                                        at: xOffset, tag: 302, action: #selector(pinImage))
+        toolbar.addSubview(pinBtn)
+        xOffset += pinBtn.frame.width + 2
         xOffset += 4
 
         addSeparator(to: toolbar, at: &xOffset, height: height)
@@ -535,6 +540,15 @@ class AnnotationWindow: NSWindow {
     /// Enter：复制到剪贴板并关闭标注窗口（Snipaste 的一步到位行为）。
     func copyAndClose() {
         copyImage()
+        close()
+    }
+
+    /// 把当前画布钉在屏幕上，并关闭标注窗口。
+    ///
+    /// 关窗的理由和 Enter 一样：贴图是「留在屏幕上继续看」的产物，
+    /// 标注窗口再开着就重复占地方了。
+    @objc func pinImage() {
+        PinManager.shared.pin(annotationView.compositeImage())
         close()
     }
 
@@ -755,6 +769,7 @@ class AnnotationWindow: NSWindow {
         【键盘】
         标注阶段可以全程不碰鼠标：
         - Enter        复制到剪贴板并关闭窗口（最常用，一步到位）
+        - F3           把这张图钉在屏幕上，然后关闭窗口
         - ⌘C           复制到剪贴板（不关窗口）
         - ⌘S           保存为 PNG 文件
         - Tab / ⇧Tab   循环切换绘图工具
@@ -763,6 +778,15 @@ class AnnotationWindow: NSWindow {
         - Delete       删除选中的对象（连同挂在它上面的箭头）
         - ⌘Z / ⇧⌘Z     撤销 / 重做
 
+        【贴图（Pin）】
+        点工具栏「贴图」或按 F3，图就钉在屏幕上，可以一边看着一边做别的事。
+        - 拖动：直接拖
+        - 缩放：滚轮，或右键菜单的放大/缩小/实际大小
+        - 双击：关闭这张贴图
+        - 右键：复制 / 保存 / 不透明度 / 关闭这张 / 关闭全部
+        - Esc：关闭当前贴图（点过它之后生效）
+        贴图会跟随你切换桌面和全屏应用，并且不会被后续截图拍进去。
+        
         【导出】
         - 保存：导出为 PNG 文件
         - 复制：复制到系统剪贴板（同时写入图片内容和图片文件，

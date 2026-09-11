@@ -537,6 +537,10 @@ class AnnotationView: NSView {
                 .cycleTool(reverse: event.modifierFlags.contains(.shift))
             return true
 
+        case 99: // F3 → 贴到屏幕上（沿用 Snipaste 的习惯键位）
+            (window as? AnnotationWindow)?.pinImage()
+            return true
+
         default:
             break
         }
