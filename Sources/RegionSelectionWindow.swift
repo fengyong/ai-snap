@@ -51,6 +51,10 @@ class RegionSelectionWindow: NSWindow {
     }
 
     func beginSelection() {
+        // 从全局快捷键唤起时本应用并非前台，不主动激活的话覆盖层拿不到键盘焦点
+        // （Esc 取消会失效、拖拽也可能不响应）。从菜单点进来时这行无害。
+        NSApp.activate(ignoringOtherApps: true)
+
         makeKeyAndOrderFront(nil)
         for overlay in overlayWindows {
             overlay.orderFront(nil)

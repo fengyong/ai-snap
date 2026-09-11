@@ -1,4 +1,5 @@
 import Cocoa
+import Carbon.HIToolbox
 
 /// 用户偏好的持久化存取。
 ///
@@ -33,6 +34,8 @@ final class Preferences {
         case lastToolTag
         case watermarkEnabled
         case watermarkText
+        case hotkeyRegion
+        case hotkeyWindow
     }
 
     /// 缺省值集中在这里。改动这一处即同时改变「新用户初值」与「老用户缺键回退值」。
@@ -45,6 +48,12 @@ final class Preferences {
         static let lastToolTag = 0
         static let watermarkEnabled = false
         static let watermarkText = "AISnap"
+
+        /// 默认快捷键避开系统截图的 ⌘⇧3 / 4 / 5 / 6。
+        static let regionCaptureHotkey = HotkeyConfig(keyCode: UInt32(kVK_ANSI_A),
+                                                     carbonModifiers: UInt32(cmdKey | shiftKey))
+        static let windowCaptureHotkey = HotkeyConfig(keyCode: UInt32(kVK_ANSI_W),
+                                                     carbonModifiers: UInt32(cmdKey | shiftKey))
     }
 
     // MARK: - 线宽
@@ -145,12 +154,43 @@ final class Preferences {
         return config
     }
 
+    // MARK: - 全局快捷键
+
+    var regionCaptureHotkey: HotkeyConfig {
+        get { hotkey(Key.hotkeyRegion, fallback: Defaults.regionCaptureHotkey) }
+        set { setHotkey(newValue, Key.hotkeyRegion) }
+    }
+
+    var windowCaptureHotkey: HotkeyConfig {
+        get { hotkey(Key.hotkeyWindow, fallback: Defaults.windowCaptureHotkey) }
+        set { setHotkey(newValue, Key.hotkeyWindow) }
+    }
+
+    /// 存成 `"keyCode:modifiers"` 单个字符串，而不是两个键 ——
+    /// 一次读写的原子性更好，且校验只需一处。
+    private func hotkey(_ key: Key, fallback: HotkeyConfig) -> HotkeyConfig {
+        guard let raw = defaults.string(forKey: key.rawValue) else { return fallback }
+        let parts = raw.split(separator: ":")
+        guard parts.count == 2,
+              let keyCode = UInt32(String(parts[0])),
+              let modifiers = UInt32(String(parts[1])) else { return fallback }
+        let config = HotkeyConfig(keyCode: keyCode, carbonModifiers: modifiers)
+        // 已存值也可能是坏的（手改 plist、旧版本格式）→ 不可用就回缺省，
+        // 否则会注册一个「只有一个修饰键」之类的组合出来
+        return config.isUsable ? config : fallback
+    }
+
+    private func setHotkey(_ config: HotkeyConfig, _ key: Key) {
+        defaults.set("\(config.keyCode):\(config.carbonModifiers)", forKey: key.rawValue)
+    }
+
     // MARK: - 恢复默认
 
     /// 清空所有已存偏好，回到 `Defaults`。
     func resetToDefaults() {
         for key in [Key.lineWidth, Key.lineStyle, Key.colorHex, Key.arrowStyleIndex,
-                    Key.paletteIndex, Key.lastToolTag, Key.watermarkEnabled, Key.watermarkText] {
+                    Key.paletteIndex, Key.lastToolTag, Key.watermarkEnabled, Key.watermarkText,
+                    Key.hotkeyRegion, Key.hotkeyWindow] {
             defaults.removeObject(forKey: key.rawValue)
         }
     }

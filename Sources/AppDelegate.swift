@@ -4,12 +4,60 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var regionSelectionWindow: RegionSelectionWindow?
     private var annotationWindow: AnnotationWindow?
+    private var settingsWindowController: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         setupStatusBar()
+        setupHotkeys()
         // 首次启动时请求屏幕录制权限
         requestScreenCapturePermission()
+    }
+
+    // MARK: - Hotkeys
+
+    /// 注册全局快捷键。改动后（设置窗口）也走这里。
+    private func setupHotkeys() {
+        let problems = HotkeyRegistration.applyAll(
+            regionHandler: { [weak self] in self?.startRegionCapture() },
+            windowHandler: { [weak self] in self?.startWindowCapture() }
+        )
+
+        guard !problems.isEmpty else { return }
+
+        // 注册失败要主动说 —— 否则用户按快捷键没反应，会以为是应用坏了。
+        // 快捷键被占用通常会持续存在，所以每次启动都提醒，直到改掉。
+        DispatchQueue.main.async { [weak self] in
+            self?.presentHotkeyProblemAlert(problems)
+        }
+    }
+
+    private func presentHotkeyProblemAlert(_ problems: [String]) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "全局快捷键未能全部生效"
+        alert.informativeText = problems.joined(separator: "\n") + "\n\n可在「偏好设置」里改键。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "打开偏好设置")
+        alert.addButton(withTitle: "稍后")
+        if alert.runModal() == .alertFirstButtonReturn {
+            showPreferences()
+        }
+    }
+
+    @objc private func showPreferences() {
+        if settingsWindowController == nil {
+            let controller = SettingsWindowController()
+            // 改键后重新注册，并把问题回传给设置窗口显示
+            controller.onHotkeysChanged = { [weak self] in
+                HotkeyRegistration.applyAll(
+                    regionHandler: { [weak self] in self?.startRegionCapture() },
+                    windowHandler: { [weak self] in self?.startWindowCapture() }
+                )
+            }
+            settingsWindowController = controller
+        }
+        settingsWindowController?.present()
     }
 
     // MARK: - Screen Recording Permission
@@ -59,8 +107,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "区域截图", action: #selector(startRegionCapture), keyEquivalent: "1"))
         menu.addItem(NSMenuItem(title: "窗口截图", action: #selector(startWindowCapture), keyEquivalent: "2"))
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "恢复默认设置",
-                                action: #selector(resetPreferences), keyEquivalent: ""))
+        // 不给 keyEquivalent：状态栏菜单只在菜单展开时响应按键，
+        // 标上 ⌘, 会让人以为随时可用，不如不标。
+        menu.addItem(NSMenuItem(title: "偏好设置…", action: #selector(showPreferences), keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "退出", action: #selector(quitApp), keyEquivalent: "q"))
 
@@ -122,28 +171,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quitApp() {
         NSApp.terminate(nil)
-    }
-
-    /// 清空已存的偏好，回到出厂默认值。
-    ///
-    /// 只影响**之后**新建的标注窗口：已经打开的窗口里，控件与画布仍持有旧值，
-    /// 用户一动它们就会把偏好又写回去。所以这里明确告知影响范围，
-    /// 而不是假装「立即全部生效」。
-    @objc private func resetPreferences() {
-        Preferences.shared.resetToDefaults()
-
-        // 附件型应用（无 Dock 图标）不主动激活的话，弹窗会被压在其它窗口后面
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "已恢复默认设置"
-        alert.informativeText = """
-            线宽、颜色、线型、箭头样式、调色板、水印与默认工具已恢复为出厂值。
-
-            已打开的标注窗口不受影响，下次截图时生效。
-            """
-        alert.alertStyle = .informational
-        alert.addButton(withTitle: "好")
-        alert.runModal()
     }
 
     // MARK: - Annotation
