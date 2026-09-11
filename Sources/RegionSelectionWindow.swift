@@ -1,15 +1,30 @@
 import Cocoa
 
-/// 全屏半透明覆盖窗口，用于区域选择
+/// 全屏冰结覆盖层，用于区域选择。
+///
+/// **设计：先冻结屏幕，再在冻结帧上选区。**
+///
+/// 原实现是「先让用户拖框 → 关掉覆盖层 → 等 80ms → 再截图」，有两个后果：
+/// 1. 必须等窗口服务器把覆盖层合成掉，否则覆盖层会被拍进图里 —— 于是有个
+///    说不清道不明的魔法延迟，快一点慢一点都要靠试；
+/// 2. 用户拖框时看到的是**活着的**屏幕（选区里是实时画面），拖的过程中内容会变。
+///
+/// 现在改成：显示覆盖层**之前**先把每块屏幕各截一张，覆盖层显示这张冻结图，
+/// 用户看到的是静止画面。选区确定后只需要把冻结图**裁一刀** ——
+/// 不调用捕获 API、不需要等待、也不会拍到覆盖层。
+///
+/// 多屏：每块屏各一张冻结图、各一个覆盖层；但只有主屏可交互（与原先一致）。
 class RegionSelectionWindow: NSWindow {
     private let completionHandler: (CGImage?) -> Void
     private var selectionView: RegionSelectionView!
     private var overlayWindows: [NSWindow] = []
 
+    /// 主屏的冻结帧，选区确定后从它裁剪。
+    private var frozenMainImage: CGImage?
+
     init(completion: @escaping (CGImage?) -> Void) {
         self.completionHandler = completion
 
-        // 覆盖主屏幕
         let screenFrame = NSScreen.main?.frame ?? .zero
         super.init(
             contentRect: screenFrame,
@@ -18,9 +33,10 @@ class RegionSelectionWindow: NSWindow {
             defer: false
         )
 
+        // 冻结图会铺满整个窗口，所以不再需要半透明背景
         self.level = .statusBar + 1
-        self.isOpaque = false
-        self.backgroundColor = NSColor.black.withAlphaComponent(0.3)
+        self.isOpaque = true
+        self.backgroundColor = .black
         self.ignoresMouseEvents = false
         self.acceptsMouseMovedEvents = true
         self.hasShadow = false
@@ -34,7 +50,7 @@ class RegionSelectionWindow: NSWindow {
         }
         self.contentView = selectionView
 
-        // 为其他屏幕创建覆盖窗口
+        // 其他屏幕：各一个不可交互的覆盖层，同样画自己的冻结帧
         for screen in NSScreen.screens where screen != NSScreen.main {
             let overlay = NSWindow(
                 contentRect: screen.frame,
@@ -43,11 +59,35 @@ class RegionSelectionWindow: NSWindow {
                 defer: false
             )
             overlay.level = .statusBar + 1
-            overlay.isOpaque = false
-            overlay.backgroundColor = NSColor.black.withAlphaComponent(0.3)
+            overlay.isOpaque = true
+            overlay.backgroundColor = .black
             overlay.hasShadow = false
+            overlay.ignoresMouseEvents = true
+            overlay.contentView = FrozenScreenView(frame: NSRect(origin: .zero, size: screen.frame.size))
             overlayWindows.append(overlay)
         }
+    }
+
+    /// 冻结屏幕。
+    ///
+    /// 必须在**显示覆盖层之前**调用，否则拍到的就是覆盖层自己。
+    /// 返回 false 表示主屏冻结失败，调用方应放弃本次截屏（与旧流程的失败语义相同：
+    /// 旧流程抓不到图同样只会得到 nil）。
+    @discardableResult
+    func freezeScreens() async -> Bool {
+        guard let mainScreen = NSScreen.main else { return false }
+
+        let mainImage = try? await ScreenCapture.captureRegion(ScreenCapture.quartzRect(for: mainScreen))
+        guard let mainImage = mainImage else { return false }
+        frozenMainImage = mainImage
+        selectionView.frozenImage = mainImage
+
+        for (index, screen) in NSScreen.screens.filter({ $0 != NSScreen.main }).enumerated() {
+            guard index < overlayWindows.count else { break }
+            let image = try? await ScreenCapture.captureRegion(ScreenCapture.quartzRect(for: screen))
+            (overlayWindows[index].contentView as? FrozenScreenView)?.frozenImage = image
+        }
+        return true
     }
 
     func beginSelection() {
@@ -63,57 +103,65 @@ class RegionSelectionWindow: NSWindow {
     }
 
     private func finishSelection(rect: NSRect) {
-        NSCursor.pop()
-        orderOut(nil)
-        for overlay in overlayWindows {
-            overlay.orderOut(nil)
-        }
+        hideOverlays()
 
-        // NSView 坐标 → 屏幕坐标（左上角原点，ScreenCaptureKit 与旧 CGWindowList 同语义）
-        //
-        // 注意翻转基准必须用「主显示器高度」而不是本覆盖层所在屏的高度：
-        // AppKit 全局原点在主显示器左下、Quartz 全局原点在主显示器左上，
-        // 因此 quartzY = 主显示器高度 - appKitY 对所有屏幕都成立。
-        let captureRect = CGRect(
-            x: rect.origin.x,
-            y: ScreenCapture.primaryScreenHeight - rect.origin.y - rect.height,
-            width: rect.width,
-            height: rect.height
-        )
-
-        Task { @MainActor [weak self] in
-            // 给窗口服务器一点合成时间，确保覆盖层不出现在截图里。
-            //
-            // 为什么需要这个等待：macOS 15.2+ 的首选路径 `captureImage(in:)` **没有 filter 参数**，
-            // 无法像 filter 路径那样显式排除自身窗口，所以只能靠「先 orderOut、等合成完成」。
-            // （旧实现用 200ms，这里降到 80ms —— SCK 的就绪时机比旧 API 快。）
-            // 根治办法是「先截全屏、再在冻结帧上选区」的重构，届时这个等待可以完全去掉。
-            try? await Task.sleep(for: .milliseconds(80))
-            let image = try? await ScreenCapture.captureRegion(captureRect)
-            self?.completionHandler(image)
+        guard let frozen = frozenMainImage, let screen = NSScreen.main,
+              let cropped = frozen.cropped(fromAppKitRect: rect, on: screen) else {
+            completionHandler(nil)
+            return
         }
+        // 纯裁剪，没有异步等待 —— 这正是「先截后选」换来的收益
+        completionHandler(cropped)
     }
 
     private func cancelSelection() {
+        hideOverlays()
+        completionHandler(nil)
+    }
+
+    private func hideOverlays() {
         NSCursor.pop()
         orderOut(nil)
         for overlay in overlayWindows {
             overlay.orderOut(nil)
         }
-        completionHandler(nil)
     }
 
     override var canBecomeKey: Bool { true }
 }
 
+// MARK: - 冻结帧裁剪
+
+extension CGImage {
+    /// 从「整屏冻结图」里裁出 AppKit 选区。
+    ///
+    /// 换算逻辑在 `ScreenGeometry.pixelRect`（纯函数，已离屏测试）。
+    func cropped(fromAppKitRect rect: NSRect, on screen: NSScreen) -> CGImage? {
+        let pixelRect = ScreenGeometry.pixelRect(
+            appKitRect: rect,
+            imageSize: CGSize(width: width, height: height),
+            appKitScreenFrame: screen.frame
+        )
+        guard !pixelRect.isNull else { return nil }
+        return cropping(to: pixelRect)
+    }
+}
+
 // MARK: - Selection View
 
+/// 主屏的可交互覆盖层：画冻结帧 + 变暗，并处理拖拽选区。
 class RegionSelectionView: NSView {
     var onSelectionComplete: ((NSRect) -> Void)?
     var onCancel: (() -> Void)?
 
+    /// 本屏的冻结帧。**不是可选装饰** —— 没有它，选区内部会露出真实屏幕，
+    /// 而真实屏幕上的画面可能已经变了，看起来就像选区没生效。
+    var frozenImage: CGImage?
+
     private var dragStart: NSPoint?
     private var dragEnd: NSPoint?
+
+    private let dimAlpha: CGFloat = 0.35
 
     override func mouseDown(with event: NSEvent) {
         dragStart = convert(event.locationInWindow, from: nil)
@@ -148,21 +196,64 @@ class RegionSelectionView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext,
-              let start = dragStart, let end = dragEnd else { return }
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
 
+        // 1. 冻结帧铺底
+        if let frozen = frozenImage {
+            ctx.draw(frozen, in: bounds)
+        }
+
+        // 2. 整体压暗一层
+        ctx.setFillColor(NSColor.black.withAlphaComponent(dimAlpha).cgColor)
+        ctx.fill(bounds)
+
+        guard let start = dragStart, let end = dragEnd else { return }
         let selectionRect = rectFromPoints(start, end)
 
-        // 半透明遮罩已由 window 背景提供，这里只画选区边框
+        // 3. 选区内把冻结帧**再画一遍**（而不是用 .clear 挖洞）。
+        //    挖洞会露出覆盖层后面的真实屏幕 —— 那就不是冻结画面了。
+        ctx.saveGState()
+        ctx.clip(to: selectionRect)
+        if let frozen = frozenImage {
+            ctx.draw(frozen, in: bounds)
+        }
+        ctx.restoreGState()
+
+        // 4. 虚线边框
         ctx.setStrokeColor(NSColor.white.cgColor)
         ctx.setLineWidth(1.5)
         ctx.setLineDash(phase: 0, lengths: [6, 3])
         ctx.stroke(selectionRect)
+        ctx.setLineDash(phase: 0, lengths: [])
 
-        // 选区内部清除遮罩效果（显示原始屏幕内容）
-        ctx.setBlendMode(.clear)
-        ctx.fill(selectionRect)
-        ctx.setBlendMode(.normal)
+        // 5. 尺寸提示：贴在选区上方（太靠上时改放下方）
+        drawSizeLabel(ctx: ctx, for: selectionRect)
+    }
+
+    private func drawSizeLabel(ctx: CGContext, for rect: NSRect) {
+        let text = "\(Int(rect.width)) × \(Int(rect.height))"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: NSColor.white,
+        ]
+        let size = (text as NSString).size(withAttributes: attributes)
+        let padding: CGFloat = 6
+        let labelSize = NSSize(width: size.width + padding * 2, height: size.height + padding)
+
+        var origin = NSPoint(x: rect.minX, y: rect.maxY + 4)
+        if origin.y + labelSize.height > bounds.maxY {
+            origin.y = rect.minY - labelSize.height - 4
+        }
+        origin.x = min(max(origin.x, bounds.minX), max(bounds.maxX - labelSize.width, bounds.minX))
+        origin.y = min(max(origin.y, bounds.minY), max(bounds.maxY - labelSize.height, bounds.minY))
+
+        let box = NSRect(origin: origin, size: labelSize)
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.65).cgColor)
+        ctx.fill(box)
+        (text as NSString).draw(
+            at: NSPoint(x: box.minX + padding, y: box.minY + padding / 2),
+            withAttributes: attributes
+        )
     }
 
     private func rectFromPoints(_ a: NSPoint, _ b: NSPoint) -> NSRect {
@@ -172,5 +263,21 @@ class RegionSelectionView: NSView {
             width: abs(a.x - b.x),
             height: abs(a.y - b.y)
         )
+    }
+}
+
+// MARK: - 非主屏覆盖层
+
+/// 只负责把本屏的冻结帧画出来并压暗，不参与交互。
+private final class FrozenScreenView: NSView {
+    var frozenImage: CGImage?
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        if let frozen = frozenImage {
+            ctx.draw(frozen, in: bounds)
+        }
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.35).cgColor)
+        ctx.fill(bounds)
     }
 }

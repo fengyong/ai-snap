@@ -51,6 +51,15 @@ enum ScreenCapture {
 
     // MARK: - 窗口枚举
 
+    // MARK: - 坐标换算
+
+    /// 把一块屏幕的 AppKit 框架转成 Quartz 矩形（左上角原点），用于整屏捕获。
+    /// 换算在 `ScreenGeometry.quartzRect`（纯函数，已离屏测试）。
+    static func quartzRect(for screen: NSScreen) -> CGRect {
+        ScreenGeometry.quartzRect(appKitScreenFrame: screen.frame,
+                                  primaryScreenHeight: primaryScreenHeight)
+    }
+
     /// Y 轴翻转的基准高度 = **主显示器**（Quartz 原点所在、`frame.origin == .zero` 的那块）的高度。
     ///
     /// 这里不能用 `NSScreen.main`：它表示「当前 key window 所在屏，无 key window 时为菜单栏所在屏」，
