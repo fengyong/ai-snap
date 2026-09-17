@@ -52,7 +52,7 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
 - **直观工具栏** - 中文文字按钮 + 分组标签 + 悬浮提示
 - **帮助对话框** - 详细的功能使用说明
 - **窗口自适应** - 截图超出屏幕时自动缩放适配
-- **Debug 面板** - 右侧实时显示 Layer B (Hit Test) 可视化
+- **Debug 面板** - 默认关闭；`视图 → 显示 Layer B 调试面板`(⇧⌘D) 可实时查看命中检测层的可视化
 
 ## 技术架构
 
@@ -74,12 +74,18 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
 ## 构建与运行
 
 ```bash
-# 构建 release 版本
-swift build -c release
+# 构建 .app（含图标与签名），并安装到 /Applications
+./build.sh --install
 
-# 运行
-.build/arm64-apple-macosx/release/AISnap
+# 只构建不安装
+./build.sh
+
+# 生成可分发的 DMG
+./build.sh --dmg
 ```
+
+> 直接运行 SPM 裸二进制（`swift run`）会让「屏幕录制」权限被记到终端头上，
+> 且没有 bundle 标识，请用 `build.sh` 产出的 `AISnap.app`。
 
 **要求：** macOS 13+，Swift 5.9+
 

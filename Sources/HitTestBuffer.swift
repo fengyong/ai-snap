@@ -72,14 +72,28 @@ class HitTestBuffer {
 
     /// 清空缓冲区 (全部置为 0 = 背景)
     func clear() {
+        context.saveGState()
+        context.setLineDash(phase: 0, lengths: [])          // 不继承上一个对象的线型
+        context.setLineWidth(1)
+        context.setShouldAntialias(false)                   // 防止被对象改掉
+        context.setAllowsAntialiasing(false)
+        context.setBlendMode(.normal)
         context.setFillColor(NSColor.black.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.restoreGState()
     }
 
     /// 在 Layer B 上绘制任意标注对象 (使用其唯一颜色，关闭抗锯齿)
+    ///
+    /// 用 save/restore 把每个对象的状态（线型、线宽、颜色、混合模式）隔离开，
+    /// 这样新增图形类型时不会把状态泄漏给下一个对象。
     func drawObject(_ object: any AnnotationObject) {
         let pickColor = HitTestBuffer.colorFromKey(object.hitTestColorKey)
+        context.saveGState()
+        context.setShouldAntialias(false)
+        context.setAllowsAntialiasing(false)
         object.drawHitTest(in: context, color: pickColor)
+        context.restoreGState()
     }
 
     /// 按 Z 序重绘所有对象到 Layer B
