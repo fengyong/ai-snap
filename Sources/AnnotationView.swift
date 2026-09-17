@@ -4,6 +4,8 @@ import Cocoa
 class AnnotationView: NSView {
     // Layer O: 原始截图
     private let baseImage: NSImage
+    /// 源截图的像素尺寸（由 AppDelegate 传入，用于固定导出分辨率）
+    private let sourcePixelSize: CGSize?
     // Map<唯一颜色Key, AnnotationObject>
     private var objects: [UInt32: any AnnotationObject] = [:]
     // Z 序：从底到顶的 colorKey 数组
@@ -23,12 +25,83 @@ class AnnotationView: NSView {
     // 水印配置
     var watermarkConfig = WatermarkConfig()
 
-    // 当前被选中的对象 key
-    private(set) var selectedKey: UInt32?
+    // 当前被选中的对象 key（变化时通知外部，便于工具栏同步高亮）
+    private(set) var selectedKey: UInt32? {
+        didSet { if selectedKey != oldValue { onSelectionChanged?() } }
+    }
+
+    /// 选中对象发生变化时回调（用于把调色板/线宽控件同步成该对象的样式）
+    var onSelectionChanged: (() -> Void)?
+
+    /// 当前选中对象的颜色（无选中时为 nil）
+    var selectedObjectColor: NSColor? {
+        guard let key = selectedKey, let obj = objects[key] else { return nil }
+        return obj.color
+    }
+
+    /// 当前选中对象的线宽（不支持线宽的对象返回 nil）
+    var selectedObjectLineWidth: CGFloat? {
+        guard let key = selectedKey, let obj = objects[key] else { return nil }
+        return AnnotationView.lineWidth(of: obj)
+    }
+
+    private static func lineWidth(of obj: any AnnotationObject) -> CGFloat? {
+        if let a = obj as? Arrow { return a.lineWidth }
+        if let r = obj as? RectangleShape { return r.lineWidth }
+        if let c = obj as? CircleShape { return c.lineWidth }
+        return nil
+    }
+
+    private static func setLineWidth(_ value: CGFloat, on obj: any AnnotationObject) {
+        if let a = obj as? Arrow { a.lineWidth = value }
+        else if let r = obj as? RectangleShape { r.lineWidth = value }
+        else if let c = obj as? CircleShape { c.lineWidth = value }
+    }
+
+    /// 把选中对象的样式改成给定值（可撤销）。返回是否真的发生了变化。
+    @discardableResult
+    func restyleSelection(color newColor: NSColor? = nil, lineWidth newLineWidth: CGFloat? = nil) -> Bool {
+        guard let key = selectedKey, let obj = objects[key] else { return false }
+
+        let oldColor = obj.color
+        let oldLineWidth = AnnotationView.lineWidth(of: obj)
+
+        var changed = false
+        if let c = newColor, !colorsEqual(c, obj.color) {
+            obj.color = c
+            changed = true
+        }
+        if let w = newLineWidth, let current = oldLineWidth, abs(current - w) > 0.01 {
+            AnnotationView.setLineWidth(w, on: obj)
+            changed = true
+        }
+        guard changed else { return false }
+
+        undoStack.append(.restyle(colorKey: key,
+                                  oldColor: oldColor, newColor: obj.color,
+                                  oldLineWidth: oldLineWidth,
+                                  newLineWidth: AnnotationView.lineWidth(of: obj)))
+        redoStack.removeAll()
+        refreshDebugView()
+        needsDisplay = true
+        return true
+    }
+
+    private func colorsEqual(_ a: NSColor, _ b: NSColor) -> Bool {
+        guard let x = a.usingColorSpace(.deviceRGB), let y = b.usingColorSpace(.deviceRGB) else {
+            return a == b
+        }
+        return abs(x.redComponent - y.redComponent) < 0.002
+            && abs(x.greenComponent - y.greenComponent) < 0.002
+            && abs(x.blueComponent - y.blueComponent) < 0.002
+            && abs(x.alphaComponent - y.alphaComponent) < 0.002
+    }
 
     // 点捕捉：当前活跃的吸附点（用于可视化）
     private var activeSnapPoint: CGPoint?
     private let snapThreshold: CGFloat = 12.0
+    // 附着与吸附共用同一个阈值：两者不一致时，拖拽预览会停在落点、松手后却被吸走（端点"跳一下"）
+    private var attachThreshold: CGFloat { snapThreshold }
     // 起始点是否吸附到了 snap point → 以该点为中心绘制
     private var drawingFromCenter: Bool = false
 
@@ -37,14 +110,24 @@ class AnnotationView: NSView {
     private var redoStack: [UndoAction] = []
     // 拖拽操作前的起始中心，用于计算总 delta
     private var dragStartCenter: CGPoint?
+    // 移动箭头时会解除附着，这里记下解除前的状态供撤销使用
+    private var pendingDetach: DetachedAttachments?
     private var rotateStartAngle: CGFloat = 0
     private var scaleStartFactor: CGFloat = 1
 
-    // 调试面板：外部挂载的 NSImageView，用于实时显示 Layer B 可视化
+    // 调试面板：外部挂载的 NSImageView，用于实时显示 Layer B 可视化。
+    // 为 nil 时 refreshDebugView() 直接返回 —— 这是"关闭调试面板"能真正省掉开销的关键。
     weak var debugImageView: NSImageView?
 
-    init(image: NSImage) {
+    /// 是否已有标注（用于关闭/重新截图前提示会丢失内容）
+    var hasEdits: Bool { !undoStack.isEmpty }
+
+    /// - Parameter pixelSize: 源图像的像素尺寸。导出时以此为准，
+    ///   避免导出分辨率随"当前显示器"变化（NSImage(cgImage:size:) 的
+    ///   representation 往往报不出可靠的像素尺寸）。
+    init(image: NSImage, pixelSize: CGSize? = nil) {
         self.baseImage = image
+        self.sourcePixelSize = pixelSize
         let size = image.size
         self.hitTestBuffer = HitTestBuffer(size: size)
         super.init(frame: NSRect(origin: .zero, size: size))
@@ -126,8 +209,11 @@ class AnnotationView: NSView {
             }
         }
 
-        // 已选中对象时，修饰键触发旋转/缩放
-        if let key = selectedKey, let obj = objects[key] {
+        // 已选中对象时，修饰键触发旋转/缩放。
+        // 必须要求按下的位置落在该对象上：否则在画布空白处按 Option/Shift 拖拽会莫名其妙地
+        // 改动一个远处的对象，而用户的本意是"画个新图形"。
+        if let key = selectedKey, let obj = objects[key],
+           obj.boundingBox.insetBy(dx: -8, dy: -8).contains(point) {
             if flags.contains(.option) {
                 // Option+拖拽 → 旋转
                 let angle = atan2(point.y - obj.center.y, point.x - obj.center.x)
@@ -158,6 +244,13 @@ class AnnotationView: NSView {
             state = .moving(colorKey: colorKey, grabOffset: offset)
             selectedKey = colorKey
             dragStartCenter = obj.center
+            if let arrow = obj as? Arrow {
+                pendingDetach = DetachedAttachments(key: colorKey,
+                                                    start: arrow.startAttachment,
+                                                    end: arrow.endAttachment)
+            } else {
+                pendingDetach = nil
+            }
         } else if case .stamp(let stampType) = currentTool {
             // Stamp 工具：单击直接放置
             let key = hitTestBuffer.generateUniqueColorKey()
@@ -221,6 +314,7 @@ class AnnotationView: NSView {
             obj.rotate(by: deltaAngle)
             rotateStartAngle += deltaAngle
             state = .rotating(colorKey: colorKey, lastAngle: currentAngle)
+            updateAttachedArrows(forParent: colorKey)      // 附着的箭头必须一起转
 
             hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
             refreshDebugView()
@@ -237,6 +331,7 @@ class AnnotationView: NSView {
                     obj.scale(by: factor)
                     scaleStartFactor *= factor
                     state = .scaling(colorKey: colorKey, lastDistance: currentDist)
+                    updateAttachedArrows(forParent: colorKey)   // 附着的箭头必须一起缩放
                 }
             }
 
@@ -368,11 +463,13 @@ class AnnotationView: NSView {
                 let totalDelta = CGVector(dx: obj.center.x - startCenter.x,
                                           dy: obj.center.y - startCenter.y)
                 if abs(totalDelta.dx) > 0.5 || abs(totalDelta.dy) > 0.5 {
-                    undoStack.append(.move(colorKey: colorKey, delta: totalDelta))
+                    undoStack.append(.move(colorKey: colorKey, delta: totalDelta,
+                                           detached: pendingDetach))
                     redoStack.removeAll()
                 }
             }
             dragStartCenter = nil
+            pendingDetach = nil
 
         case .rotating(let colorKey, _):
             if abs(rotateStartAngle) > 0.001 {
@@ -467,12 +564,13 @@ class AnnotationView: NSView {
             zOrder = zOrderSnapshot
             redoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderWithout))
 
-        case .move(let colorKey, let delta):
+        case .move(let colorKey, let delta, let detached):
             if let obj = objects[colorKey] {
                 let reverseDelta = CGVector(dx: -delta.dx, dy: -delta.dy)
                 obj.move(by: reverseDelta)
+                restoreDetachedAttachments(detached)        // 撤销移动时把附着关系一起还原
                 updateAttachedArrows(forParent: colorKey)
-                redoStack.append(.move(colorKey: colorKey, delta: delta))
+                redoStack.append(.move(colorKey: colorKey, delta: delta, detached: detached))
             }
 
         case .rotate(let colorKey, let angle):
@@ -487,6 +585,15 @@ class AnnotationView: NSView {
                 obj.scale(by: 1.0 / factor)
                 updateAttachedArrows(forParent: colorKey)
                 redoStack.append(.scale(colorKey: colorKey, factor: factor))
+            }
+
+        case .restyle(let colorKey, let oldColor, let newColor, let oldLineWidth, let newLineWidth):
+            if let obj = objects[colorKey] {
+                obj.color = oldColor
+                if let w = oldLineWidth { AnnotationView.setLineWidth(w, on: obj) }
+                redoStack.append(.restyle(colorKey: colorKey,
+                                          oldColor: oldColor, newColor: newColor,
+                                          oldLineWidth: oldLineWidth, newLineWidth: newLineWidth))
             }
         }
 
@@ -523,11 +630,16 @@ class AnnotationView: NSView {
                 undoStack.append(.add(colorKey: firstKey))
             }
 
-        case .move(let colorKey, let delta):
+        case .move(let colorKey, let delta, let detached):
             if let obj = objects[colorKey] {
                 obj.move(by: delta)
+                if let d = detached, let arrow = obj as? Arrow {   // 重做时同样要解除附着
+                    arrow.startAttachment = nil
+                    arrow.endAttachment = nil
+                    _ = d
+                }
                 updateAttachedArrows(forParent: colorKey)
-                undoStack.append(.move(colorKey: colorKey, delta: delta))
+                undoStack.append(.move(colorKey: colorKey, delta: delta, detached: detached))
             }
 
         case .rotate(let colorKey, let angle):
@@ -542,6 +654,15 @@ class AnnotationView: NSView {
                 obj.scale(by: factor)
                 updateAttachedArrows(forParent: colorKey)
                 undoStack.append(.scale(colorKey: colorKey, factor: factor))
+            }
+
+        case .restyle(let colorKey, let oldColor, let newColor, let oldLineWidth, let newLineWidth):
+            if let obj = objects[colorKey] {
+                obj.color = newColor
+                if let w = newLineWidth { AnnotationView.setLineWidth(w, on: obj) }
+                undoStack.append(.restyle(colorKey: colorKey,
+                                          oldColor: oldColor, newColor: newColor,
+                                          oldLineWidth: oldLineWidth, newLineWidth: newLineWidth))
             }
         }
 
@@ -723,29 +844,15 @@ class AnnotationView: NSView {
             let spotRect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
                                   width: abs(end.x - start.x), height: abs(end.y - start.y))
             let spotPath = CGPath(roundedRect: spotRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
-            // 周围变暗
-            ctx.saveGState()
-            let fullPath = CGMutablePath()
-            fullPath.addRect(imageRect)
-            fullPath.addPath(spotPath)
-            ctx.addPath(fullPath)
-            ctx.clip(using: .evenOdd)
-            ctx.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
-            ctx.fill(imageRect)
-            ctx.restoreGState()
-            // 中心提亮
-            ctx.saveGState()
-            ctx.addPath(spotPath)
-            ctx.clip()
-            ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
-            ctx.fill(imageRect)
-            ctx.restoreGState()
+            drawSpotlightMask(in: ctx, paths: [spotPath], imageRect: imageRect)
             // 边框
+            ctx.saveGState()
             ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.8).cgColor)
             ctx.setLineWidth(2)
             ctx.setLineDash(phase: 0, lengths: [6, 3])
             ctx.addPath(spotPath)
             ctx.strokePath()
+            ctx.restoreGState()
         }
     }
 
@@ -802,63 +909,62 @@ class AnnotationView: NSView {
         ctx.strokePath()
     }
 
-    /// 绘制 Spotlight 遮罩：全图半透明遮盖，挖空所有 SpotlightShape 区域
-    private func drawSpotlightOverlay(in ctx: CGContext) {
-        var spotlights: [SpotlightShape] = []
-        for key in zOrder {
-            if let spot = objects[key] as? SpotlightShape {
-                spotlights.append(spot)
-            }
-        }
-        guard !spotlights.isEmpty else { return }
+    /// Spotlight 的圆角矩形路径（世界坐标）
+    private func spotlightPath(_ spot: SpotlightShape) -> CGPath {
+        var transform = CGAffineTransform.identity
+            .translatedBy(x: spot.center.x, y: spot.center.y)
+            .rotated(by: spot.rotation)
+        let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
+                               width: spot.width, height: spot.height)
+        return CGPath(roundedRect: localRect,
+                      cornerWidth: spot.cornerRadius, cornerHeight: spot.cornerRadius,
+                      transform: &transform)
+    }
 
-        let imageRect = CGRect(origin: .zero, size: baseImage.size)
+    /// 绘制遮罩：全图半透明压暗，再把聚光灯区域"挖空"。
+    ///
+    /// 关键点：挖空必须在 `beginTransparencyLayer` 里用 `.clear` 做。
+    /// - 直接 `.clear` 会把已经画好的底图一起擦掉；
+    /// - 用 `.evenOdd` 裁剪虽然能挖空，但**多个聚光灯重叠处会被重新算成"要压暗"**，
+    ///   于是两块聚光灯的交集反而变黑（README 明确宣称支持叠加）。
+    private func drawSpotlightMask(in ctx: CGContext, paths: [CGPath], imageRect: CGRect) {
+        guard !paths.isEmpty else { return }
 
-        // 1. 周围区域变暗（even-odd 挖空高亮区域）
         ctx.saveGState()
-        let fullPath = CGMutablePath()
-        fullPath.addRect(imageRect)
-        for spot in spotlights {
-            var transform = CGAffineTransform.identity
-                .translatedBy(x: spot.center.x, y: spot.center.y)
-                .rotated(by: spot.rotation)
-            let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
-                                   width: spot.width, height: spot.height)
-            let roundedPath = CGPath(roundedRect: localRect,
-                                     cornerWidth: spot.cornerRadius,
-                                     cornerHeight: spot.cornerRadius,
-                                     transform: &transform)
-            fullPath.addPath(roundedPath)
-        }
-        ctx.addPath(fullPath)
-        ctx.clip(using: .evenOdd)
+        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
         ctx.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
         ctx.fill(imageRect)
+        ctx.setBlendMode(.clear)
+        for path in paths {
+            ctx.addPath(path)
+            ctx.fillPath()
+        }
+        ctx.setBlendMode(.normal)
+        ctx.endTransparencyLayer()
         ctx.restoreGState()
 
-        // 2. 中心高亮区域提亮（白色半透明叠加）
-        for spot in spotlights {
-            ctx.saveGState()
-            var transform = CGAffineTransform.identity
-                .translatedBy(x: spot.center.x, y: spot.center.y)
-                .rotated(by: spot.rotation)
-            let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
-                                   width: spot.width, height: spot.height)
-            let roundedPath = CGPath(roundedRect: localRect,
-                                     cornerWidth: spot.cornerRadius,
-                                     cornerHeight: spot.cornerRadius,
-                                     transform: &transform)
-            ctx.addPath(roundedPath)
-            ctx.clip()
-            ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
-            ctx.fill(imageRect)
-            ctx.restoreGState()
-        }
+        // 高亮区提亮：把所有路径并成一条子路径一次填充，
+        // 非零环绕规则下重叠子路径算并集 —— 重叠处只叠加一次白光。
+        let union = CGMutablePath()
+        for path in paths { union.addPath(path) }
+        ctx.saveGState()
+        ctx.addPath(union)
+        ctx.clip()
+        ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+        ctx.fill(imageRect)
+        ctx.restoreGState()
+    }
+
+    /// 绘制 Spotlight 遮罩：全图半透明遮盖，挖空所有 SpotlightShape 区域
+    private func drawSpotlightOverlay(in ctx: CGContext) {
+        let spotlights = zOrder.compactMap { objects[$0] as? SpotlightShape }
+        guard !spotlights.isEmpty else { return }
+        drawSpotlightMask(in: ctx,
+                          paths: spotlights.map { spotlightPath($0) },
+                          imageRect: CGRect(origin: .zero, size: baseImage.size))
     }
 
     // MARK: - Object Attachment
-
-    private let attachThreshold: CGFloat = 15.0
 
     /// 检测一个点附近是否有可附着的形状，返回 Attachment 或 nil
     private func detectAttachment(at point: CGPoint, excludeKey: UInt32?) -> Attachment? {
@@ -867,8 +973,9 @@ class AnnotationView: NSView {
 
         for (key, obj) in objects {
             if key == excludeKey { continue }
-            // 箭头不作为父对象
-            if obj is Arrow { continue }
+            // 箭头不作为父对象；聚光灯也不作父对象 ——
+            // 它没有 pointOnPerimeter，附着上去之后端点永远不会跟随。
+            if obj is Arrow || obj is SpotlightShape { continue }
 
             // 先检查 snap points
             for (index, snap) in obj.snapPoints().enumerated() {
@@ -957,6 +1064,19 @@ class AnnotationView: NSView {
         }
     }
 
+    /// 撤销"移动箭头"时把当初被解除的附着装回去
+    private func restoreDetachedAttachments(_ snapshot: DetachedAttachments?) {
+        guard let snapshot = snapshot, let arrow = objects[snapshot.key] as? Arrow else { return }
+        arrow.startAttachment = snapshot.start
+        arrow.endAttachment = snapshot.end
+        if let att = arrow.startAttachment, let pos = resolveAttachmentPosition(att) {
+            arrow.startPoint = pos
+        }
+        if let att = arrow.endAttachment, let pos = resolveAttachmentPosition(att) {
+            arrow.endPoint = pos
+        }
+    }
+
     /// 更新所有附着到指定父对象的箭头端点
     private func updateAttachedArrows(forParent parentKey: UInt32) {
         for (_, obj) in objects {
@@ -992,8 +1112,8 @@ class AnnotationView: NSView {
 
     // MARK: - Debug Visualization
 
-    /// 刷新右侧的 Layer B 调试面板
-    private func refreshDebugView() {
+    /// 刷新 Layer B 调试面板（未挂载调试面板时零开销）
+    func refreshDebugView() {
         guard let imageView = debugImageView else { return }
         let debugImage = hitTestBuffer.debugVisualization(objects: objects, zOrder: zOrder)
         imageView.image = debugImage
@@ -1001,28 +1121,72 @@ class AnnotationView: NSView {
 
     // MARK: - Export
 
+    /// 源图像的像素尺寸（导出分辨率以此为准，避免导出分辨率随"当前显示器"变化）
+    private var basePixelSize: CGSize {
+        if let explicit = sourcePixelSize, explicit.width >= 1, explicit.height >= 1 {
+            return explicit
+        }
+        let best = baseImage.representations
+            .filter { $0.pixelsWide > 0 && $0.pixelsHigh > 0 }
+            .max { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh }
+        if let best = best {
+            return CGSize(width: best.pixelsWide, height: best.pixelsHigh)
+        }
+        // 兜底（正常路径不会走到：AppDelegate 一定会传 pixelSize）：
+        // 不再依赖任何"当前屏幕"，按 2x 估算，保证导出分辨率与显示器无关。
+        let scale: CGFloat = 2
+        return CGSize(width: baseImage.size.width * scale, height: baseImage.size.height * scale)
+    }
+
     /// 生成最终合成图片（底图 + 所有标注对象）
+    ///
+    /// 用显式的 `NSBitmapImageRep` 而不是 `NSImage.lockFocus()`：
+    /// lockFocus 的分辨率取决于**当前显示器**的 backingScaleFactor，
+    /// 在 1x 外接屏上标注 2x 截图时导出的 PNG 会掉一半像素。
     func compositeImage() -> NSImage {
-        let size = baseImage.size
-        let image = NSImage(size: size)
-        image.lockFocus()
+        let pointSize = baseImage.size
+        let pixels = basePixelSize
+        let scale = max(pixels.width / max(pointSize.width, 1), 0.01)
+
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                         pixelsWide: max(Int(pixels.width), 1),
+                                         pixelsHigh: max(Int(pixels.height), 1),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else {
+            let fallback = NSImage(size: pointSize)
+            fallback.lockFocus()
+            if let ctx = NSGraphicsContext.current?.cgContext { render(into: ctx, pointSize: pointSize) }
+            fallback.unlockFocus()
+            return fallback
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         if let ctx = NSGraphicsContext.current?.cgContext {
-            let rect = CGRect(origin: .zero, size: size)
-            baseImage.draw(in: rect)
-            // Spotlight 遮罩
-            drawSpotlightOverlay(in: ctx)
-            for key in zOrder {
-                if let obj = objects[key] {
-                    obj.draw(in: ctx)
-                }
-            }
-            // 水印（最后绘制，覆盖在所有内容之上）
-            if watermarkConfig.enabled && !watermarkConfig.text.isEmpty {
-                drawWatermark(in: ctx, size: size)
+            ctx.scaleBy(x: scale, y: scale)          // 之后依旧按"点"坐标绘制
+            render(into: ctx, pointSize: pointSize)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+
+        let image = NSImage(size: pointSize)
+        image.addRepresentation(rep)
+        return image
+    }
+
+    /// 把底图、聚光灯遮罩、所有标注对象、水印渲染进给定上下文（坐标为"点"）
+    private func render(into ctx: CGContext, pointSize: NSSize) {
+        let rect = CGRect(origin: .zero, size: pointSize)
+        baseImage.draw(in: rect)
+        drawSpotlightOverlay(in: ctx)
+        for key in zOrder {
+            if let obj = objects[key] {
+                obj.draw(in: ctx)
             }
         }
-        image.unlockFocus()
-        return image
+        if watermarkConfig.enabled && !watermarkConfig.text.isEmpty {
+            drawWatermark(in: ctx, size: pointSize)
+        }
     }
 
     /// 绘制水印

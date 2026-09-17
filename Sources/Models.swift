@@ -196,17 +196,27 @@ let defaultStamps: [(StampType, String)] = [
 
 // MARK: - Undo Action
 
+/// 移动箭头时会解除它的附着关系；这里保存解除前的状态，好让撤销能真正还原
+struct DetachedAttachments {
+    let key: UInt32
+    let start: Attachment?
+    let end: Attachment?
+}
+
 enum UndoAction {
     /// 添加了一个对象（撤销 = 删除它）
     case add(colorKey: UInt32)
     /// 删除了对象（撤销 = 重新添加，包含被级联删除的子箭头）
     case delete(objects: [(UInt32, any AnnotationObject)], zOrderSnapshot: [UInt32])
-    /// 移动了对象（撤销 = 反向移动）
-    case move(colorKey: UInt32, delta: CGVector)
+    /// 移动了对象（撤销 = 反向移动）；`detached` 记录被解除的附着，撤销时一并恢复
+    case move(colorKey: UInt32, delta: CGVector, detached: DetachedAttachments?)
     /// 旋转了对象
     case rotate(colorKey: UInt32, angle: CGFloat)
     /// 缩放了对象
     case scale(colorKey: UInt32, factor: CGFloat)
+    /// 改了选中对象的样式（颜色 / 线宽）。同时带新旧值，撤销取旧、重做取新。
+    case restyle(colorKey: UInt32, oldColor: NSColor, newColor: NSColor,
+                 oldLineWidth: CGFloat?, newLineWidth: CGFloat?)
 }
 
 // MARK: - Drawing Tool & Canvas State
@@ -312,8 +322,15 @@ class Arrow: AnnotationObject {
         atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x)
     }
 
+    /// 箭头头部长度。**必须随线宽缩放**：头部固定 14pt 而线宽 15px 时，
+    /// 三角形的宽度（2·headLength·sin(headAngle) = 14）比箭杆（15）还窄，
+    /// 画出来就是一根没有头的圆头粗棒 —— 默认参数下正好命中这个情况。
+    var effectiveHeadLength: CGFloat {
+        max(style.headLength, lineWidth * 3.2)
+    }
+
     var boundingBox: CGRect {
-        let padding = lineWidth + style.headLength
+        let padding = lineWidth + effectiveHeadLength
         let minX = min(startPoint.x, endPoint.x) - padding
         let minY = min(startPoint.y, endPoint.y) - padding
         let maxX = max(startPoint.x, endPoint.x) + padding
@@ -328,11 +345,16 @@ class Arrow: AnnotationObject {
     }
 
     func drawHitTest(in ctx: CGContext, color: NSColor) {
-        drawArrow(in: ctx, withColor: color, lw: lineWidth + 6)
+        // 命中层用"整条粗线 + 圆头端帽"覆盖，且箭杆一直画到尖端：
+        // 可见层的三角头尖端是亚像素宽的尖角，Layer B 又关闭了抗锯齿，
+        // 若照着可见层收短箭杆，端点附近会采不到任何像素 → 箭头端点抓不住。
+        drawArrow(in: ctx, withColor: color, lw: lineWidth + 6, fullShaft: true)
     }
 
-    private func drawArrow(in ctx: CGContext, withColor drawColor: NSColor, lw: CGFloat) {
+    private func drawArrow(in ctx: CGContext, withColor drawColor: NSColor, lw: CGFloat,
+                           fullShaft: Bool = false) {
         ctx.setStrokeColor(drawColor.cgColor)
+        ctx.setFillColor(drawColor.cgColor)
         ctx.setLineWidth(lw)
         ctx.setLineCap(.round)
         ctx.setLineJoin(.round)
@@ -347,26 +369,40 @@ class Arrow: AnnotationObject {
             ctx.setLineDash(phase: 0, lengths: [2, 4])
         }
 
+        let dx = endPoint.x - startPoint.x
+        let dy = endPoint.y - startPoint.y
+        let length = hypot(dx, dy)
+        guard length > 0.001 else { return }
+        let ux = dx / length, uy = dy / length          // 单位方向
+        let angle = atan2(dy, dx)
+
+        let headLen = effectiveHeadLength
+        // 箭杆终点：
+        //  · 实心三角 / 菱形头部有实体能盖住接缝 → 箭杆提前结束，
+        //    否则 .round 端帽会从尖端多伸出一个半圆（半个线宽）；
+        //  · 开放头部（两条线）没有实体覆盖 → 箭杆必须画到尖端，否则会看到明显断口；
+        //  · 无头部 → 自然画到尖端。
+        let hasSolidHead = (style.headType == .triangle || style.headType == .diamond)
+        let shaftEnd: CGPoint = (hasSolidHead && !fullShaft)
+            ? CGPoint(x: endPoint.x - ux * headLen * 0.85,
+                      y: endPoint.y - uy * headLen * 0.85)
+            : endPoint
+
         // Shaft
         ctx.move(to: startPoint)
-        ctx.addLine(to: endPoint)
+        ctx.addLine(to: shaftEnd)
         ctx.strokePath()
 
         // Reset dash for head/tail
         ctx.setLineDash(phase: 0, lengths: [])
 
-        let angle = atan2(endPoint.y - startPoint.y, endPoint.x - startPoint.x)
-
         // Head
         switch style.headType {
         case .triangle:
-            let p1 = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle - style.headAngle),
-                y: endPoint.y - style.headLength * sin(angle - style.headAngle))
-            let p2 = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle + style.headAngle),
-                y: endPoint.y - style.headLength * sin(angle + style.headAngle))
-            ctx.setFillColor(drawColor.cgColor)
+            let p1 = CGPoint(x: endPoint.x - headLen * cos(angle - style.headAngle),
+                             y: endPoint.y - headLen * sin(angle - style.headAngle))
+            let p2 = CGPoint(x: endPoint.x - headLen * cos(angle + style.headAngle),
+                             y: endPoint.y - headLen * sin(angle + style.headAngle))
             ctx.move(to: endPoint)
             ctx.addLine(to: p1)
             ctx.addLine(to: p2)
@@ -374,31 +410,23 @@ class Arrow: AnnotationObject {
             ctx.fillPath()
 
         case .open:
-            let p1 = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle - style.headAngle),
-                y: endPoint.y - style.headLength * sin(angle - style.headAngle))
-            let p2 = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle + style.headAngle),
-                y: endPoint.y - style.headLength * sin(angle + style.headAngle))
+            let p1 = CGPoint(x: endPoint.x - headLen * cos(angle - style.headAngle),
+                             y: endPoint.y - headLen * sin(angle - style.headAngle))
+            let p2 = CGPoint(x: endPoint.x - headLen * cos(angle + style.headAngle),
+                             y: endPoint.y - headLen * sin(angle + style.headAngle))
+            ctx.setLineWidth(max(lw * 0.8, 1.5))
             ctx.move(to: p1)
             ctx.addLine(to: endPoint)
             ctx.addLine(to: p2)
             ctx.strokePath()
 
         case .diamond:
-            let mid = CGPoint(
-                x: endPoint.x - style.headLength * 0.5 * cos(angle),
-                y: endPoint.y - style.headLength * 0.5 * sin(angle))
-            let p1 = CGPoint(
-                x: mid.x - style.headLength * 0.4 * cos(angle - .pi / 2),
-                y: mid.y - style.headLength * 0.4 * sin(angle - .pi / 2))
-            let p2 = CGPoint(
-                x: mid.x + style.headLength * 0.4 * cos(angle - .pi / 2),
-                y: mid.y + style.headLength * 0.4 * sin(angle - .pi / 2))
-            let back = CGPoint(
-                x: endPoint.x - style.headLength * cos(angle),
-                y: endPoint.y - style.headLength * sin(angle))
-            ctx.setFillColor(drawColor.cgColor)
+            let halfW = headLen * 0.42
+            let mid = CGPoint(x: endPoint.x - ux * headLen * 0.5,
+                              y: endPoint.y - uy * headLen * 0.5)
+            let p1 = CGPoint(x: mid.x - halfW * uy, y: mid.y + halfW * ux)
+            let p2 = CGPoint(x: mid.x + halfW * uy, y: mid.y - halfW * ux)
+            let back = CGPoint(x: endPoint.x - ux * headLen, y: endPoint.y - uy * headLen)
             ctx.move(to: endPoint)
             ctx.addLine(to: p1)
             ctx.addLine(to: back)
@@ -415,18 +443,15 @@ class Arrow: AnnotationObject {
         case .none:
             break
         case .circle:
-            let r: CGFloat = 4
+            let r = max(4, lw * 0.55)          // 也随线宽缩放，否则粗线上是个小点
             let rect = CGRect(x: startPoint.x - r, y: startPoint.y - r,
                               width: r * 2, height: r * 2)
-            ctx.setFillColor(drawColor.cgColor)
             ctx.fillEllipse(in: rect)
         case .perpendicular:
-            let perpAngle = angle + .pi / 2
-            let halfLen: CGFloat = 6
-            let p1 = CGPoint(x: startPoint.x + halfLen * cos(perpAngle),
-                             y: startPoint.y + halfLen * sin(perpAngle))
-            let p2 = CGPoint(x: startPoint.x - halfLen * cos(perpAngle),
-                             y: startPoint.y - halfLen * sin(perpAngle))
+            let halfLen = max(6, lw * 0.6)
+            let p1 = CGPoint(x: startPoint.x - halfLen * uy, y: startPoint.y + halfLen * ux)
+            let p2 = CGPoint(x: startPoint.x + halfLen * uy, y: startPoint.y - halfLen * ux)
+            ctx.setLineWidth(max(lw * 0.8, 1.5))
             ctx.move(to: p1)
             ctx.addLine(to: p2)
             ctx.strokePath()
@@ -739,15 +764,15 @@ class CircleShape: AnnotationObject {
         let local = rotatePoint(point, around: center, by: -rotation)
         let dx = local.x - center.x
         let dy = local.y - center.y
-        // 椭圆上最近点的近似：沿方向射线与椭圆的交点
-        let dist = hypot(dx / radiusX, dy / radiusY)
-        guard dist > 0 else {
+        // 椭圆上最近点的近似：沿方向射线与椭圆的交点。
+        // 取 t = hypot(dx/rx, dy/ry)，则 (t·dx/rx)² + (t·dy/ry)² = 1 ⇒ 交点 = center + (dx/t, dy/t)。
+        // 注意：分母是 t，不能再乘一次半径（旧实现多乘了一次，导致返回值离椭圆上千像素）。
+        let t = hypot(dx / radiusX, dy / radiusY)
+        guard t > 0 else {
             return rotatePoint(CGPoint(x: center.x + radiusX, y: center.y),
                                around: center, by: rotation)
         }
-        let nx = dx / dist
-        let ny = dy / dist
-        let localNearest = CGPoint(x: center.x + radiusX * nx, y: center.y + radiusY * ny)
+        let localNearest = CGPoint(x: center.x + dx / t, y: center.y + dy / t)
         return rotatePoint(localNearest, around: center, by: rotation)
     }
 
@@ -981,7 +1006,7 @@ class SpotlightShape: AnnotationObject {
     var cornerRadius: CGFloat
 
     init(center: CGPoint, width: CGFloat, height: CGFloat,
-         color: NSColor = NSColor.black.withAlphaComponent(0.5),
+         color: NSColor = .systemYellow,
          cornerRadius: CGFloat = 8, hitTestColorKey: UInt32) {
         self.id = UUID()
         self.center = center
@@ -994,7 +1019,7 @@ class SpotlightShape: AnnotationObject {
     }
 
     convenience init(from pointA: CGPoint, to pointB: CGPoint,
-                     color: NSColor = NSColor.black.withAlphaComponent(0.5),
+                     color: NSColor = .systemYellow,
                      cornerRadius: CGFloat = 8, hitTestColorKey: UInt32) {
         let cx = (pointA.x + pointB.x) / 2
         let cy = (pointA.y + pointB.y) / 2
@@ -1036,7 +1061,8 @@ class SpotlightShape: AnnotationObject {
         ctx.rotate(by: rotation)
         let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
         let path = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
-        ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.8).cgColor)
+        // 用对象自身的颜色，这样"选中后换色"对聚光灯也生效
+        ctx.setStrokeColor(color.withAlphaComponent(0.8).cgColor)
         ctx.setLineWidth(2)
         ctx.setLineDash(phase: 0, lengths: [6, 3])
         ctx.addPath(path)
