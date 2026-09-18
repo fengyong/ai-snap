@@ -582,7 +582,7 @@ class AnnotationView: NSView {
             // 变换进行中先把它**回退**掉。此刻手势还没走到 mouseUp，
             // 若只是把 state 清成 .idle，mouseUp 就会落进 .idle 分支 ——
             // 半途的位移 / 旋转 / 缩放被留下却没有任何撤销记录，无法挽回。
-            cancelActiveTransform()
+            cancelActiveGesture()
             selectedKey = nil
             state = .idle
             // 识别结果框也一并收掉：它是"看一眼就好"的临时信息，
@@ -624,11 +624,11 @@ class AnnotationView: NSView {
         return false
     }
 
-    /// 把进行中的移动 / 旋转 / 缩放**回退**掉，并归还在拖拽期间被解除的附着关系。
+    /// 把进行中的移动 / 旋转 / 缩放 / 橡皮擦**回退**掉，并归还在拖拽期间被解除的附着关系。
     ///
     /// 只在手势被意外中断时调用（目前是 Esc）。正常路径由 mouseUp 负责记账、
     /// 不经过这里 —— 它存在的意义是维持"画布变了就一定有撤销记录"这个不变量。
-    private func cancelActiveTransform() {
+    private func cancelActiveGesture() {
         switch state {
         case .moving(let colorKey, _):
             if let obj = objects[colorKey], let start = dragStartCenter {
@@ -656,13 +656,40 @@ class AnnotationView: NSView {
             }
             scaleStartFactor = 1
 
+        case .erasing:
+            // 橡皮擦在**拖拽途中就已经真删了**对象（见 erase(at:)），而 Esc 会把 state
+            // 置成 .idle，于是 mouseUp 落进 .idle 分支 —— 这一笔既不入撤销栈，
+            // 也无法 ⌘Z 找回，等于凭空丢标注。Esc 的语义是"取消"，那就真的取消。
+            restoreEraseStroke()
+
         default:
-            return      // idle / drawing / erasing / picking：没有需要回退的变换
+            return      // idle / drawing / picking：没有需要回退的改动
         }
 
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
         refreshDebugView()
         needsDisplay = true
+    }
+
+    /// 把本笔橡皮擦已经摘掉的对象放回画布。
+    ///
+    /// `eraseDeleted` 里是 `takeOutOfCanvas` 的完整产出，**包含随父对象一起被摘掉的箭头**，
+    /// 所以直接放回 + 还原 z 序即可（与 `performUndo` 的 `.delete` 分支同一套做法）。
+    /// 不碰 `eraseCursor`：那个圆环是按 `currentTool == .eraser` 门控的悬停指示器，
+    /// 不属于笔画状态。
+    private func restoreEraseStroke() {
+        guard !eraseDeleted.isEmpty else {
+            eraseZOrderBefore = []
+            lastErasePoint = nil
+            return
+        }
+        for (key, obj) in eraseDeleted {
+            objects[key] = obj
+        }
+        zOrder = eraseZOrderBefore
+        eraseDeleted = []
+        eraseZOrderBefore = []
+        lastErasePoint = nil
     }
 
     /// 撤销"移动箭头"时，把当初被解除的附着关系装回去（并把端点吸回父对象周长）
