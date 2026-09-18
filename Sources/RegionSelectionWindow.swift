@@ -102,13 +102,23 @@ class RegionSelectionWindow {
         // 因此无需等待窗口消失。
         let windowNumber = overlays.first { $0.screen === screen }
             .map { CGWindowID($0.window.windowNumber) }
-        let image = ScreenCapture.captureRegion(quartz, belowWindow: windowNumber)
+        var image = ScreenCapture.captureRegion(quartz, belowWindow: windowNumber)
+
+        if image == nil {
+            // 回退路径不做 below-window 排除，会连压暗遮罩一起拍进去，
+            // 所以必须**先撤掉覆盖层**再重试（原来的注释说"调用方保证覆盖层已隐藏"，
+            // 但调用方其实是在截图之后才 teardown，注释与事实不符）。
+            teardown()
+            image = ScreenCapture.captureRegion(quartz, belowWindow: nil)
+        }
 
         teardown()
         completionHandler(image.map { CaptureResult(image: $0, screen: screen) })
     }
 
+    /// 撤掉所有覆盖窗口。**幂等**：重复调用不会重复 `NSCursor.pop()`。
     private func teardown() {
+        guard !overlays.isEmpty else { return }
         NSCursor.pop()
         for entry in overlays {
             entry.window.orderOut(nil)

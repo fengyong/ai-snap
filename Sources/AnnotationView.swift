@@ -82,9 +82,36 @@ class AnnotationView: NSView {
                                   oldLineWidth: oldLineWidth,
                                   newLineWidth: AnnotationView.lineWidth(of: obj)))
         redoStack.removeAll()
+        contentDidChange()
         refreshDebugView()
         needsDisplay = true
         return true
+    }
+
+    /// 滑块拖动过程中实时改线宽，但**不记账**。
+    ///
+    /// 一整段拖动由 `commitSelectionLineWidth` 在松手时记成一条 undo。
+    /// 旧实现每来一次连续 action 就 append 一条 `.restyle`，
+    /// 拖一次滑块会产生几十条撤销记录，Cmd+Z 要按几十次才回得去。
+    func previewSelectionLineWidth(_ value: CGFloat) {
+        guard let key = selectedKey, let obj = objects[key],
+              AnnotationView.lineWidth(of: obj) != nil else { return }
+        AnnotationView.setLineWidth(value, on: obj)
+        refreshDebugView()
+        needsDisplay = true
+    }
+
+    /// 把一整段滑块拖动记成**一条** undo。
+    /// - Parameter old: 按下滑块之前的线宽（松手时的当前值即拖动结果）
+    func commitSelectionLineWidth(from old: CGFloat) {
+        guard let key = selectedKey, let obj = objects[key],
+              let current = AnnotationView.lineWidth(of: obj),
+              abs(old - current) > 0.01 else { return }
+        undoStack.append(.restyle(colorKey: key,
+                                  oldColor: obj.color, newColor: obj.color,
+                                  oldLineWidth: old, newLineWidth: current))
+        redoStack.removeAll()
+        contentDidChange()
     }
 
     private func colorsEqual(_ a: NSColor, _ b: NSColor) -> Bool {
@@ -119,8 +146,22 @@ class AnnotationView: NSView {
     // 为 nil 时 refreshDebugView() 直接返回 —— 这是"关闭调试面板"能真正省掉开销的关键。
     weak var debugImageView: NSImageView?
 
-    /// 是否已有标注（用于关闭/重新截图前提示会丢失内容）
-    var hasEdits: Bool { !undoStack.isEmpty }
+    /// 画布内容版本号：任何真正改变画布的操作 +1
+    private var contentVersion = 0
+    /// 最近一次导出时对应的内容版本（-1 = 从未导出）
+    private var exportedVersion = -1
+
+    /// 标记"画布内容变了"。所有改动画布的地方都要调一次。
+    private func contentDidChange() { contentVersion += 1 }
+
+    /// 是否还有**未导出的、且确实存在于画布上的**标注
+    /// （用于关闭/重新截图前提示会丢失内容）。
+    ///
+    /// 语义是"有没有东西会丢"，而不是"撤销栈非不非空"：
+    ///  · 画完又全部删掉 → 画布和原图一致，没有东西会丢；
+    ///  · 刚导出过又没再改 → 同样没有什么可丢的。
+    /// 旧的 `!undoStack.isEmpty` 在这两种情况下都会弹无谓的确认框。
+    var hasEdits: Bool { !objects.isEmpty && contentVersion != exportedVersion }
 
     /// - Parameter pixelSize: 源图像的像素尺寸。导出时以此为准，
     ///   避免导出分辨率随"当前显示器"变化（NSImage(cgImage:size:) 的
@@ -205,6 +246,7 @@ class AnnotationView: NSView {
                 hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
                 refreshDebugView()
                 needsDisplay = true
+                contentDidChange()
                 return
             }
         }
@@ -262,6 +304,7 @@ class AnnotationView: NSView {
             refreshDebugView()
             undoStack.append(.add(colorKey: key))
             redoStack.removeAll()
+            contentDidChange()
             selectedKey = key
             state = .idle
         } else {
@@ -294,11 +337,10 @@ class AnnotationView: NSView {
 
             obj.move(by: delta)
 
-            // 如果移动的是箭头，解除附着
-            if let arrow = obj as? Arrow {
-                arrow.startAttachment = nil
-                arrow.endAttachment = nil
-            }
+            // 注意：**这里不解除箭头附着**。
+            // 解除动作推迟到 mouseUp —— 只有确认这是一次"会被记账的真实移动"时才解。
+            // 否则 2x 屏上 1 物理像素（0.5pt）的手抖就会解除附着，
+            // 而 mouseUp 的记账阈值是"严格大于 0.5pt"，于是附着被清空却没有任何撤销记录。
             // 如果移动的是形状，更新附着的箭头端点
             updateAttachedArrows(forParent: colorKey)
 
@@ -451,6 +493,7 @@ class AnnotationView: NSView {
                 // 记录 undo
                 undoStack.append(.add(colorKey: colorKey))
                 redoStack.removeAll()
+                contentDidChange()
 
                 // 在 Layer B 上绘制新对象
                 hitTestBuffer.drawObject(obj)
@@ -463,9 +506,23 @@ class AnnotationView: NSView {
                 let totalDelta = CGVector(dx: obj.center.x - startCenter.x,
                                           dy: obj.center.y - startCenter.y)
                 if abs(totalDelta.dx) > 0.5 || abs(totalDelta.dy) > 0.5 {
+                    // 确认是一次真实移动 → 此时才解除附着，并把"解除前的状态"一并记账
+                    if let arrow = obj as? Arrow {
+                        arrow.startAttachment = nil
+                        arrow.endAttachment = nil
+                    }
                     undoStack.append(.move(colorKey: colorKey, delta: totalDelta,
                                            detached: pendingDetach))
                     redoStack.removeAll()
+                    contentDidChange()
+                } else if totalDelta.dx != 0 || totalDelta.dy != 0 {
+                    // 亚像素抖动：不足以记账，就把它完整回退，
+                    // 维持"没有记录 ⇔ 没有变化"这个不变量（否则附着丢了却撤不回来）
+                    obj.move(by: CGVector(dx: -totalDelta.dx, dy: -totalDelta.dy))
+                    restoreDetachedAttachments(pendingDetach)
+                    updateAttachedArrows(forParent: colorKey)
+                    hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+                    refreshDebugView()
                 }
             }
             dragStartCenter = nil
@@ -475,12 +532,25 @@ class AnnotationView: NSView {
             if abs(rotateStartAngle) > 0.001 {
                 undoStack.append(.rotate(colorKey: colorKey, angle: rotateStartAngle))
                 redoStack.removeAll()
+                contentDidChange()
+            } else if rotateStartAngle != 0, let obj = objects[colorKey] {
+                // 同 .moving：没记账就把旋转回退掉
+                obj.rotate(by: -rotateStartAngle)
+                updateAttachedArrows(forParent: colorKey)
+                hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+                refreshDebugView()
             }
 
         case .scaling(let colorKey, _):
             if abs(scaleStartFactor - 1) > 0.001 {
                 undoStack.append(.scale(colorKey: colorKey, factor: scaleStartFactor))
                 redoStack.removeAll()
+                contentDidChange()
+            } else if scaleStartFactor != 1, let obj = objects[colorKey] {
+                obj.scale(by: 1.0 / scaleStartFactor)
+                updateAttachedArrows(forParent: colorKey)
+                hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+                refreshDebugView()
             }
 
         case .idle:
@@ -534,6 +604,7 @@ class AnnotationView: NSView {
                 hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
                 refreshDebugView()
                 needsDisplay = true
+                contentDidChange()
             }
         }
     }
@@ -597,6 +668,7 @@ class AnnotationView: NSView {
             }
         }
 
+        contentDidChange()
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
         refreshDebugView()
         needsDisplay = true
@@ -666,6 +738,7 @@ class AnnotationView: NSView {
             }
         }
 
+        contentDidChange()
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
         refreshDebugView()
         needsDisplay = true
@@ -681,7 +754,11 @@ class AnnotationView: NSView {
         baseImage.draw(in: imageRect)
 
         // 2. 绘制 Spotlight 遮罩（半透明遮盖 + 挖空高亮区域）
-        drawSpotlightOverlay(in: ctx)
+        //
+        // 遮罩**只在这一处**铺。正在拖拽的聚光灯也并入同一批路径，
+        // 而不是留给 drawPreview 再铺一层 —— 否则两层 0.55 黑会叠成 0.20，
+        // 预览比松手后的成品黑一倍（实测 0.204 vs 0.451）。
+        drawSpotlightOverlay(in: ctx, includingPreview: previewSpotlightPath())
 
         // 3. 按 Z 序绘制所有对象
         for key in zOrder {
@@ -840,12 +917,9 @@ class AnnotationView: NSView {
             break  // stamp 是单击放置，不需要拖拽预览
 
         case .spotlight:
-            let imageRect = CGRect(origin: .zero, size: baseImage.size)
-            let spotRect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
-                                  width: abs(end.x - start.x), height: abs(end.y - start.y))
-            let spotPath = CGPath(roundedRect: spotRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
-            drawSpotlightMask(in: ctx, paths: [spotPath], imageRect: imageRect)
-            // 边框
+            // 遮罩已在 draw(_:) 的 drawSpotlightOverlay 里连同预览路径一次铺好，
+            // 这里只补那条虚线边框（边框属于编辑器提示，导出时会被 drawForExport 去掉）
+            guard let spotPath = previewSpotlightPath() else { break }
             ctx.saveGState()
             ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.8).cgColor)
             ctx.setLineWidth(2)
@@ -955,13 +1029,26 @@ class AnnotationView: NSView {
         ctx.restoreGState()
     }
 
-    /// 绘制 Spotlight 遮罩：全图半透明遮盖，挖空所有 SpotlightShape 区域
-    private func drawSpotlightOverlay(in ctx: CGContext) {
-        let spotlights = zOrder.compactMap { objects[$0] as? SpotlightShape }
-        guard !spotlights.isEmpty else { return }
+    /// 绘制 Spotlight 遮罩：全图半透明遮盖，挖空所有 SpotlightShape 区域。
+    ///
+    /// `includingPreview` 用于把"正在拖拽的那一个"并入同一批路径 —— 遮罩必须一次铺完，
+    /// 分两次铺会叠加压暗。
+    private func drawSpotlightOverlay(in ctx: CGContext, includingPreview preview: CGPath? = nil) {
+        var paths = zOrder.compactMap { objects[$0] as? SpotlightShape }.map { spotlightPath($0) }
+        if let preview = preview { paths.append(preview) }
+        guard !paths.isEmpty else { return }
         drawSpotlightMask(in: ctx,
-                          paths: spotlights.map { spotlightPath($0) },
+                          paths: paths,
                           imageRect: CGRect(origin: .zero, size: baseImage.size))
+    }
+
+    /// 正在拖拽中的聚光灯路径（未松手时才有值）
+    private func previewSpotlightPath() -> CGPath? {
+        guard case .drawing(let tool, let start) = state, tool == .spotlight,
+              let end = currentDrawEnd else { return nil }
+        let rect = CGRect(x: min(start.x, end.x), y: min(start.y, end.y),
+                          width: abs(end.x - start.x), height: abs(end.y - start.y))
+        return CGPath(roundedRect: rect, cornerWidth: 8, cornerHeight: 8, transform: nil)
     }
 
     // MARK: - Object Attachment
@@ -1144,6 +1231,9 @@ class AnnotationView: NSView {
     /// lockFocus 的分辨率取决于**当前显示器**的 backingScaleFactor，
     /// 在 1x 外接屏上标注 2x 截图时导出的 PNG 会掉一半像素。
     func compositeImage() -> NSImage {
+        // 这次导出覆盖了当前内容 → 之后再关窗就不必再问"要不要放弃标注"
+        exportedVersion = contentVersion
+
         let pointSize = baseImage.size
         let pixels = basePixelSize
         let scale = max(pixels.width / max(pointSize.width, 1), 0.01)
@@ -1181,7 +1271,9 @@ class AnnotationView: NSView {
         drawSpotlightOverlay(in: ctx)
         for key in zOrder {
             if let obj = objects[key] {
-                obj.draw(in: ctx)
+                // 用 drawForExport 而不是 draw：聚光灯的虚线边框是编辑器 UI，
+                // 不能出现在导出图里（其余类型默认行为与 draw 相同）
+                obj.drawForExport(in: ctx)
             }
         }
         if watermarkConfig.enabled && !watermarkConfig.text.isEmpty {

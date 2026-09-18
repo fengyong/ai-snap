@@ -33,6 +33,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private enum CaptureIntent { case region, window }
     private var pendingCaptureIntent: CaptureIntent?
+    /// 等待 0.5s 后执行的那次窗口截图（用于防重入）
+    private var pendingWindowCapture: DispatchWorkItem?
 
     // MARK: - Screen Recording Permission
 
@@ -122,15 +124,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard closeAnnotationIfNeeded() else { return }
 
+        // 防重入：0.5s 内被触发两次会产生两个标注窗口，
+        // 而 annotationWindow 只记得住最后一个 —— 前一个会变成无人托管、
+        // 既不会被关掉也不会被确认丢弃的游离窗口（区域截图那条路径已有等价保护）
+        pendingWindowCapture?.cancel()
+
         // 给用户一点时间把鼠标移到目标窗口（菜单栏菜单还没完全收起）
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+        let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
+            self.pendingWindowCapture = nil
             if let result = ScreenCapture.captureWindowUnderMouse() {
                 self.openAnnotationWindow(with: result)
             } else {
                 self.showCaptureFailureAlert()
             }
         }
+        pendingWindowCapture = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     @objc private func quitApp() {
@@ -146,6 +156,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.delegate = nil          // 避免 close() 再弹一次确认
         window.close()
         annotationWindow = nil
+        // 激活策略由 AnnotationWindow.close() 统一恢复为 .accessory ——
+        // 放在那边才能覆盖"delegate 被置空因而收不到 windowWillClose"这条路径。
         return true
     }
 

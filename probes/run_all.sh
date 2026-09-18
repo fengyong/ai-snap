@@ -105,6 +105,7 @@ want probe_watermark       && run_swift_probe probe_watermark       "${WINDOW[@]
 want probe_screens         && run_swift_probe probe_screens         "${CAPTURE[@]}"
 want probe_region          && run_swift_probe probe_region          "${CAPTURE[@]}"
 want probe_signing         && run_shell_probe probe_signing.sh
+want probe_post_fix_audit  && run_swift_probe probe_post_fix_audit  "${WINDOW[@]}" Sources/ScreenCapture.swift
 want render_arrows        && run_swift_probe render_arrows        "${CORE[@]}"
 want probe_colors         && run_swift_probe probe_colors         "${WINDOW[@]}"
 
