@@ -64,10 +64,21 @@ extension AnnotationView {
         ctx.strokePath()
     }
 
+    /// 单个聚光灯在画布坐标下的圆角矩形路径。
+    /// 对象可能被旋转过，所以路径必须逐对象现算，不能预先合并成静态路径。
+    func spotlightPath(_ spot: SpotlightShape) -> CGPath {
+        var transform = CGAffineTransform.identity
+            .translatedBy(x: spot.center.x, y: spot.center.y)
+            .rotated(by: spot.rotation)
+        let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
+                               width: spot.width, height: spot.height)
+        return CGPath(roundedRect: localRect,
+                      cornerWidth: spot.cornerRadius,
+                      cornerHeight: spot.cornerRadius,
+                      transform: &transform)
+    }
+
     /// 绘制 Spotlight 遮罩：全图半透明遮盖，挖空所有 SpotlightShape 区域。
-    ///
-    /// 两个步骤都依赖变换后的圆角路径（对象可能被旋转过），所以路径是逐对象现算的，
-    /// 不能预先合并成一个静态路径。
     func drawSpotlightOverlay(in ctx: CGContext) {
         var spotlights: [SpotlightShape] = []
         for key in zOrder {
@@ -78,46 +89,42 @@ extension AnnotationView {
         guard !spotlights.isEmpty else { return }
 
         let imageRect = CGRect(origin: .zero, size: baseImage.size)
+        let paths = spotlights.map { spotlightPath($0) }
 
-        // 1. 周围区域变暗（even-odd 挖空高亮区域）
+        // 遮罩浓淡取自聚光灯自身的颜色（含 alpha）。
+        // 模型里 color 的默认值就是"带 alpha 的黑"，而渲染以前写死 0.55，
+        // 等于这个字段完全没被使用。"周围压暗"本身是全局的一件事，
+        // 多个聚光灯时取 z 序最下面那个的颜色作为代表。
+        let dimColor = spotlights.first?.color ?? NSColor.black.withAlphaComponent(0.55)
+
+        // 1. 周围变暗 + 挖空高亮区。
+        //
+        // 必须在 transparency layer 里用 `.clear` 挖，**不能**用 `.evenOdd` 裁剪：
+        // 偶奇规则下"同时落在两个聚光灯内"的像素穿越数是 3（奇数）→ 又被算作要压暗，
+        // 于是两块聚光灯的交集反而变黑 —— 而 README 明确宣称支持叠加。
         ctx.saveGState()
-        let fullPath = CGMutablePath()
-        fullPath.addRect(imageRect)
-        for spot in spotlights {
-            var transform = CGAffineTransform.identity
-                .translatedBy(x: spot.center.x, y: spot.center.y)
-                .rotated(by: spot.rotation)
-            let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
-                                   width: spot.width, height: spot.height)
-            let roundedPath = CGPath(roundedRect: localRect,
-                                     cornerWidth: spot.cornerRadius,
-                                     cornerHeight: spot.cornerRadius,
-                                     transform: &transform)
-            fullPath.addPath(roundedPath)
-        }
-        ctx.addPath(fullPath)
-        ctx.clip(using: .evenOdd)
-        ctx.setFillColor(NSColor.black.withAlphaComponent(0.55).cgColor)
+        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+        ctx.setFillColor(dimColor.cgColor)
         ctx.fill(imageRect)
+        ctx.setBlendMode(.clear)
+        for path in paths {
+            ctx.addPath(path)
+            ctx.fillPath()
+        }
+        ctx.setBlendMode(.normal)
+        ctx.endTransparencyLayer()
         ctx.restoreGState()
 
-        // 2. 高亮区域提亮（白色半透明叠加）
-        for spot in spotlights {
-            ctx.saveGState()
-            var transform = CGAffineTransform.identity
-                .translatedBy(x: spot.center.x, y: spot.center.y)
-                .rotated(by: spot.rotation)
-            let localRect = CGRect(x: -spot.width / 2, y: -spot.height / 2,
-                                   width: spot.width, height: spot.height)
-            let roundedPath = CGPath(roundedRect: localRect,
-                                     cornerWidth: spot.cornerRadius,
-                                     cornerHeight: spot.cornerRadius,
-                                     transform: &transform)
-            ctx.addPath(roundedPath)
-            ctx.clip()
-            ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
-            ctx.fill(imageRect)
-            ctx.restoreGState()
-        }
+        // 2. 高亮区提亮：所有路径并成一条子路径**一次**填充。
+        // 非零环绕规则下重叠子路径算并集，重叠处只叠加一次白光；
+        // 逐对象 clip + fill 会让交集被叠两次，比单块区域更亮。
+        let union = CGMutablePath()
+        for path in paths { union.addPath(path) }
+        ctx.saveGState()
+        ctx.addPath(union)
+        ctx.clip()
+        ctx.setFillColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+        ctx.fill(imageRect)
+        ctx.restoreGState()
     }
 }

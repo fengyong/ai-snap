@@ -97,6 +97,8 @@ run_probe eraser_probe           "${ALL_SOURCES[@]}"
 run_probe picker_probe           "${ALL_SOURCES[@]}"
 run_probe ocr_probe              "${ALL_SOURCES[@]}"
 run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
+# 本轮修复的回归探针：整模块（要构造真实画布与标注窗口）
+run_probe postfix_probe          "${ALL_SOURCES[@]}"
 
 # ── 清理测试偏好域 ─────────────────────────────────────────────────────
 #

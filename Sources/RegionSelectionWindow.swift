@@ -28,11 +28,23 @@ class RegionSelectionWindow: NSWindow {
 
     /// 交互屏（主屏）的框架，用于把视图坐标换算成屏幕坐标。
     private let mainScreenFrame: NSRect
+    /// 交互屏本身。**init 时冻结一次**，之后全程复用。
+    ///
+    /// 不能每次要用时重取 `NSScreen.main`：它的语义是"当前 key window 所在屏"，
+    /// 而覆盖层上屏后自己就成了 key window —— 之后再取可能换了一块屏。
+    /// 冻结帧、副屏枚举、坐标换算必须锚在同一块屏上。
+    private let mainScreen: NSScreen?
+    /// 光标是否已 push（用于让 pop 幂等，见 restoreCursorIfNeeded）
+    private var cursorPushed = false
+    private var cursorRestored = false
 
     init(completion: @escaping (CapturedImage?) -> Void) {
         self.completionHandler = completion
 
-        let screenFrame = NSScreen.main?.frame ?? .zero
+        // 只取一次 NSScreen.main，屏幕对象与它的 frame 都从这里派生
+        let screen = NSScreen.main
+        self.mainScreen = screen
+        let screenFrame = screen?.frame ?? .zero
         self.mainScreenFrame = screenFrame
         super.init(
             contentRect: screenFrame,
@@ -57,7 +69,7 @@ class RegionSelectionWindow: NSWindow {
         self.contentView = selectionView
 
         // 其他屏幕：各一个不可交互的覆盖层，同样画自己的冻结帧
-        for screen in NSScreen.screens where screen != NSScreen.main {
+        for screen in NSScreen.screens where screen !== mainScreen {
             let overlay = NSWindow(
                 contentRect: screen.frame,
                 styleMask: .borderless,
@@ -79,14 +91,17 @@ class RegionSelectionWindow: NSWindow {
     /// 旧流程抓不到图同样只会得到 nil）。
     @discardableResult
     func freezeScreens() async -> Bool {
-        guard let mainScreen = NSScreen.main else { return false }
+        // 用 init 时冻结下来的那块屏，而不是此刻重取 NSScreen.main：
+        // 覆盖层上屏后自己是 key window，重取可能换屏，导致"冻结的是 A 屏、
+        // 坐标按 B 屏算"这类错位（副屏 Y 翻转 bug 与此同源）。
+        guard let targetScreen = mainScreen else { return false }
 
-        let mainImage = try? await ScreenCapture.captureRegion(ScreenCapture.quartzRect(for: mainScreen))
+        let mainImage = try? await ScreenCapture.captureRegion(ScreenCapture.quartzRect(for: targetScreen))
         guard let mainImage = mainImage else { return false }
         frozenMainImage = mainImage
         selectionView.frozenImage = mainImage
 
-        for (index, screen) in NSScreen.screens.filter({ $0 != NSScreen.main }).enumerated() {
+        for (index, screen) in NSScreen.screens.filter({ $0 !== targetScreen }).enumerated() {
             guard index < overlayWindows.count else { break }
             let image = try? await ScreenCapture.captureRegion(ScreenCapture.quartzRect(for: screen))
             (overlayWindows[index].contentView as? FrozenScreenView)?.frozenImage = image
@@ -115,6 +130,8 @@ class RegionSelectionWindow: NSWindow {
         }
 
         NSCursor.crosshair.push()
+        cursorPushed = true
+        cursorRestored = false
     }
 
     private func finishSelection(rect: NSRect) {
@@ -156,7 +173,7 @@ class RegionSelectionWindow: NSWindow {
 
     /// 保留冻结画面，但不再吃鼠标事件。
     private func stopInteracting() {
-        NSCursor.pop()
+        restoreCursorIfNeeded()
         ignoresMouseEvents = true
         for overlay in overlayWindows {
             overlay.ignoresMouseEvents = true
@@ -165,11 +182,23 @@ class RegionSelectionWindow: NSWindow {
 
     /// 收掉全部覆盖层。标注窗口关闭时由 AppDelegate 调用。
     func hideOverlays() {
-        NSCursor.pop()
+        restoreCursorIfNeeded()
         orderOut(nil)
         for overlay in overlayWindows {
             overlay.orderOut(nil)
         }
+    }
+
+    /// 还原为十字光标之前的光标。**幂等**。
+    ///
+    /// 成功路径上 `stopInteracting()`（选区确定，转去标注）与 `hideOverlays()`
+    /// （标注窗口关闭）会先后各调一次，而 push 只发生在上屏时那一次 ——
+    /// 不做保护就会多 pop 一次，把栈里别人的光标弹掉，
+    /// 表现为"用完截图后系统光标变成了别的样子"。
+    private func restoreCursorIfNeeded() {
+        guard cursorPushed, !cursorRestored else { return }
+        NSCursor.pop()
+        cursorRestored = true
     }
 
     override var canBecomeKey: Bool { true }
