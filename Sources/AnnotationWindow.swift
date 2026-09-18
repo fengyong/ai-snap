@@ -35,6 +35,9 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     private let fitScale: CGFloat
     private var toolbarRequiredWidth: CGFloat = 780
 
+    /// 滑块整段拖动的起始线宽（松手时作为 undo 的旧值）
+    private var lineWidthGestureOldValue: CGFloat?
+
     // MARK: - Init
 
     init(image: NSImage, screen: NSScreen? = nil, pixelSize: CGSize? = nil) {
@@ -281,8 +284,10 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
             xOffset += btn.frame.width + 2
         }
         let toolList: [DrawingTool] = [.arrow, .rectangle, .circle, .ellipse, .spotlight]
-        let selectedToolIndex = toolList.firstIndex { $0 == annotationView.currentTool } ?? 0
-        updateToolButtonStates(selectedIndex: selectedToolIndex)
+        // 贴纸工具走自己的下拉框，不在这排按钮里 —— 找不到时**不能**回退到 0，
+        // 否则工具栏重建（例如点「换色」）会把「箭头」错误地点亮
+        let selectedToolIndex = toolList.firstIndex { $0 == annotationView.currentTool }
+        updateToolButtonStates(selectedIndex: selectedToolIndex ?? -1)
         xOffset += 4
 
         addSeparator(to: toolbar, at: &xOffset)
@@ -311,12 +316,14 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
         addSeparator(to: toolbar, at: &xOffset)
         addGroupLabel("线宽", to: toolbar, at: xOffset, width: 100)
-        let slider = NSSlider(frame: NSRect(x: xOffset, y: 14, width: 70, height: 20))
+        // 用能上报"松手"的子类：拖动过程中只做实时预览，整段拖动记成一条 undo（P1-2）
+        let slider = GestureReportingSlider(frame: NSRect(x: xOffset, y: 14, width: 70, height: 20))
         slider.minValue = 1
         slider.maxValue = 30
         slider.doubleValue = Double(annotationView.currentLineWidth)
         slider.target = self
         slider.action = #selector(lineWidthChanged(_:))
+        slider.onGestureEnd = { [weak self] in self?.commitLineWidthGesture() }
         slider.toolTip = "调节线条粗细 (1-30)"
         toolbar.addSubview(slider)
         lineWidthSlider = slider
@@ -336,6 +343,11 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         stampPopup.addItem(withTitle: "选择")
         for (_, display) in defaultStamps {
             stampPopup.addItem(withTitle: display)
+        }
+        // 工具栏重建时把下拉框恢复成当前贴纸，别退回「选择」
+        if case .stamp(let currentStamp) = annotationView.currentTool,
+           let index = defaultStamps.firstIndex(where: { $0.0 == currentStamp }) {
+            stampPopup.selectItem(at: index + 1)
         }
         stampPopup.toolTip = "选择表情贴纸，然后在画布上点击放置"
         stampPopup.target = self
@@ -469,8 +481,27 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     @objc private func lineWidthChanged(_ sender: NSSlider) {
         let value = CGFloat(sender.doubleValue)
         annotationView.currentLineWidth = value           // 影响之后新画的对象
-        annotationView.restyleSelection(lineWidth: value) // 有选中对象时同时改它
+
+        // 记下"按下滑块之前"的线宽，松手时用它作为 undo 的旧值
+        if lineWidthGestureOldValue == nil {
+            lineWidthGestureOldValue = annotationView.selectedObjectLineWidth
+        }
+        annotationView.previewSelectionLineWidth(value)    // 实时预览，但不记账
         lineWidthLabel.stringValue = "\(Int(value))px"
+
+        // 鼠标拖动之外的通路（方向键、无障碍、程序化 sendAction）不会产生 mouseUp，
+        // 这里直接落账，避免出现"改了样式却没有撤销记录"。
+        let type = NSApp.currentEvent?.type
+        if type != .leftMouseDown && type != .leftMouseDragged {
+            commitLineWidthGesture()
+        }
+    }
+
+    /// 滑块松手：把整段拖动记成**一条** undo
+    private func commitLineWidthGesture() {
+        guard let old = lineWidthGestureOldValue else { return }
+        lineWidthGestureOldValue = nil
+        annotationView.commitSelectionLineWidth(from: old)
     }
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
@@ -602,8 +633,15 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         confirmDiscardIfNeeded()
     }
 
-    func windowWillClose(_ notification: Notification) {
-        // 恢复纯菜单栏应用形态（P2-2）
+    /// 关窗一律恢复"纯菜单栏应用"形态（P2-2）。
+    ///
+    /// 特意放在 `close()` 而不是 `windowWillClose`：`AppDelegate.closeAnnotationIfNeeded()`
+    /// 会**先把 delegate 置 nil 再 close()**（为了不再弹一次确认框），
+    /// 那条路径不会触发任何 delegate 回调，激活策略会永远停在 `.regular` ——
+    /// 之后只要这次截图被取消 / 没找到窗口 / 权限不足，就再没有新窗口来重置它，
+    /// 表现为 Dock 图标与菜单栏永久残留。覆写 close() 才能覆盖所有关窗路径。
+    override func close() {
+        super.close()
         NSApp.setActivationPolicy(.accessory)
     }
 
@@ -663,4 +701,18 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+/// 能上报"拖拽结束"的滑块。
+///
+/// `NSSlider` 默认 `isContinuous = true`，一次拖动会连续触发很多次 action，
+/// 光靠 action 无法知道用户什么时候松手。覆写 `mouseUp` 就能拿到那个时刻，
+/// 从而把整段拖动合并成一条 undo。
+final class GestureReportingSlider: NSSlider {
+    var onGestureEnd: (() -> Void)?
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
+        onGestureEnd?()
+    }
 }

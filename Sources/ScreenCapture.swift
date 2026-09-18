@@ -131,14 +131,19 @@ enum ScreenCapture {
                 return image
             }
         }
-        // 回退：整屏合成（此时需调用方保证覆盖层已经隐藏）
+        // 回退：不做 below-window 排除，会把覆盖层自身也拍进去。
+        // **调用方必须先撤掉自己的覆盖窗口**再走这条路
+        // （见 RegionSelectionWindow.finishSelection）。
         return CGWindowListCreateImage(rect, .optionOnScreenBelowWindow, kCGNullWindowID, [.bestResolution])
     }
 
     /// 判断图像是否完全透明（用于识别"截到了空白"）
     static func isFullyTransparent(_ image: CGImage) -> Bool {
         let w = image.width, h = image.height
-        guard w > 1, h > 1 else { return true }
+        // 注意**不能**写成 `w > 1, h > 1`：权限兜底探测用的就是 1pt×1pt 的极小截图，
+        // 在 1x 屏上它正好是 1×1 像素，会被直接判成"全透明"，
+        // 于是 hasScreenCapturePermission 恒为 false（怎么授权都进不去）。
+        guard w > 0, h > 0 else { return true }
         let sampleW = min(w, 32), sampleH = min(h, 32)
         var buffer = [UInt8](repeating: 0, count: sampleW * sampleH * 4)
         guard let ctx = CGContext(data: &buffer, width: sampleW, height: sampleH,

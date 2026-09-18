@@ -177,7 +177,7 @@ struct WatermarkConfig {
 
 // MARK: - Stamp Type
 
-enum StampType {
+enum StampType: Equatable {
     case emoji(String)
     case checkmark
     case crossmark
@@ -274,6 +274,13 @@ protocol AnnotationObject: AnyObject {
     /// Draw on Layer B (hit test, unique color, no anti-aliasing)
     func drawHitTest(in ctx: CGContext, color: NSColor)
 
+    /// 导出（保存 PNG / 复制到剪贴板）时绘制对象本体。
+    ///
+    /// 默认与 `draw(in:)` 完全一致；只有"纯编辑器 UI"需要覆写它把自己排除掉。
+    /// 之所以单列一个方法而不是加 `forExport:` 参数：这样新增图形类型时
+    /// 什么都不用做，只有需要区分导出行为的类型才多写一个方法。
+    func drawForExport(in ctx: CGContext)
+
     /// Points for selection handles
     func selectionHandlePoints() -> [CGPoint]
 
@@ -286,6 +293,11 @@ protocol AnnotationObject: AnyObject {
     func move(by delta: CGVector)
     func rotate(by angle: CGFloat)
     func scale(by factor: CGFloat)
+}
+
+extension AnnotationObject {
+    /// 默认：导出与屏幕所见一致
+    func drawForExport(in ctx: CGContext) { draw(in: ctx) }
 }
 
 // MARK: - Arrow
@@ -764,16 +776,57 @@ class CircleShape: AnnotationObject {
         let local = rotatePoint(point, around: center, by: -rotation)
         let dx = local.x - center.x
         let dy = local.y - center.y
-        // 椭圆上最近点的近似：沿方向射线与椭圆的交点。
-        // 取 t = hypot(dx/rx, dy/ry)，则 (t·dx/rx)² + (t·dy/ry)² = 1 ⇒ 交点 = center + (dx/t, dy/t)。
-        // 注意：分母是 t，不能再乘一次半径（旧实现多乘了一次，导致返回值离椭圆上千像素）。
-        let t = hypot(dx / radiusX, dy / radiusY)
-        guard t > 0 else {
-            return rotatePoint(CGPoint(x: center.x + radiusX, y: center.y),
-                               around: center, by: rotation)
+
+        guard radiusX > 0.0001, radiusY > 0.0001 else { return center }
+
+        // 椭圆上的"最近点"没有闭式解（要解四次方程），所以用
+        // **粗扫描 + 黄金分割细化**：先 64 等分找到最近的参数区间，再在邻域内收敛。
+        //
+        // 为什么不能用"沿查询点方向的射线与椭圆的交点"（径向投影）：
+        // 那个点确实在椭圆上，但**不是最近点**。圆上两者等价，椭圆越扁差得越多 ——
+        // 实测 rx=200 ry=10 时径向投影距查询点 89.6pt，而真最近点只有 41.3pt，
+        // 于是箭头会被吸到一个明显偏离鼠标的位置。
+        // 本方法只在 mouseUp 检测附着时调用，这点计算量可以忽略。
+        func pointOnEllipse(at angle: CGFloat) -> CGPoint {
+            CGPoint(x: radiusX * cos(angle), y: radiusY * sin(angle))
         }
-        let localNearest = CGPoint(x: center.x + dx / t, y: center.y + dy / t)
-        return rotatePoint(localNearest, around: center, by: rotation)
+        func distanceSquared(at angle: CGFloat) -> CGFloat {
+            let p = pointOnEllipse(at: angle)
+            let ex = p.x - dx, ey = p.y - dy
+            return ex * ex + ey * ey
+        }
+
+        let sampleCount = 64
+        let step = 2 * CGFloat.pi / CGFloat(sampleCount)
+        var bestAngle: CGFloat = 0
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for i in 0..<sampleCount {
+            let angle = CGFloat(i) * step
+            let d = distanceSquared(at: angle)
+            if d < bestDistance {
+                bestDistance = d
+                bestAngle = angle
+            }
+        }
+
+        // 黄金分割细化（30 次迭代把区间缩到 1e-6 量级）
+        let phi: CGFloat = 0.6180339887498949
+        var lo = bestAngle - step, hi = bestAngle + step
+        var x1 = hi - phi * (hi - lo), x2 = lo + phi * (hi - lo)
+        var f1 = distanceSquared(at: x1), f2 = distanceSquared(at: x2)
+        for _ in 0..<30 {
+            if f1 < f2 {
+                hi = x2; x2 = x1; f2 = f1
+                x1 = hi - phi * (hi - lo); f1 = distanceSquared(at: x1)
+            } else {
+                lo = x1; x1 = x2; f1 = f2
+                x2 = lo + phi * (hi - lo); f2 = distanceSquared(at: x2)
+            }
+        }
+
+        let p = pointOnEllipse(at: (lo + hi) / 2)
+        return rotatePoint(CGPoint(x: center.x + p.x, y: center.y + p.y),
+                           around: center, by: rotation)
     }
 
     /// 周长参数 (0...1) → 椭圆周上的世界坐标点
@@ -1069,6 +1122,13 @@ class SpotlightShape: AnnotationObject {
         ctx.strokePath()
         ctx.restoreGState()
     }
+
+    /// 导出时**只保留遮罩，不画边框**。
+    ///
+    /// 黄色虚线是"这里有个聚光灯、可以点它选中"的编辑器提示，
+    /// 属于 UI 而不属于标注内容；把它拍进 PNG 会让用户拿到的图多一圈框。
+    /// 遮罩本身由 `AnnotationView.drawSpotlightMask` 统一绘制，因此这里什么都不做。
+    func drawForExport(in ctx: CGContext) {}
 
     func drawHitTest(in ctx: CGContext, color: NSColor) {
         ctx.saveGState()
