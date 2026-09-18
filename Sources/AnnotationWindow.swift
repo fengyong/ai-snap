@@ -23,6 +23,9 @@ class AnnotationWindow: NSWindow {
     /// 工具栏顶部那条通栏分隔线，窗口最终宽度确定后需要跟着调整。
     private var toolbarTopSeparator: NSBox?
 
+    /// OCR 结果面板（识别完弹出来让用户挑要哪几段）
+    private var ocrResultWindow: OCRResultWindow?
+
     /// 工具栏挂在画布上方还是下方。
     ///
     /// 默认在下方（`origin.y = 选区底边 − 工具栏高度`）。但选区贴屏幕最底部时
@@ -48,6 +51,10 @@ class AnnotationWindow: NSWindow {
     var onClose: (() -> Void)?
 
     override func close() {
+        // OCR 结果面板是独立窗口，不跟着关就会孤零零留在屏幕上
+        ocrResultWindow?.close()
+        ocrResultWindow = nil
+
         super.close()
         onClose?()
         onClose = nil
@@ -892,12 +899,35 @@ class AnnotationWindow: NSWindow {
                 self.flashHUD("未识别到文字")
                 return
             }
-            let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString(TextRecognizer.joinedText(items), forType: .string)
-            self.annotationView.showOCRHighlights(items.map(\.box))
-            self.flashHUD("已识别 \(items.count) 段文字　已复制")
+            // 识别完**不再**把整段文字直接塞进剪贴板：用户往往只想要其中一段
+            // （一个订单号、一个手机号），全量覆盖剪贴板反而把原本的内容冲掉了。
+            // 改为弹出结果面板，在那儿自由选、或者一键复制全部。
+            self.presentOCRResults(items)
         }
+    }
+
+    /// 弹出 OCR 结果面板（已有旧的就换掉）。
+    private func presentOCRResults(_ items: [RecognizedText]) {
+        ocrResultWindow?.close()          // 关闭旧面板时它的 onClose 会清掉画布上的框
+
+        let panel = OCRResultWindow(items: items)
+        panel.onHighlightChanged = { [weak self] boxes in
+            self?.annotationView.showOCRHighlights(boxes)
+        }
+        panel.onCopied = { [weak self] message in
+            self?.flashHUD(message)
+        }
+        panel.onClose = { [weak self] in
+            self?.annotationView.showOCRHighlights([])
+            self?.ocrResultWindow = nil
+        }
+        ocrResultWindow = panel
+
+        // 先摆好面板再铺识别框：旧面板关闭时会清空一次，顺序反了会把新框一起清掉
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        annotationView.showOCRHighlights(items.map(\.box))
+        flashHUD("已识别 \(items.count) 段文字　可在结果面板里选择")
     }
 
     /// Tab / ⇧Tab：按工具栏顺序循环切换绘图工具。
@@ -950,6 +980,17 @@ class AnnotationWindow: NSWindow {
     }
 
     @objc func copyImage() {
+        // ⌘C 挂在本窗口的主菜单上（应用级 key equivalent），所以焦点在 OCR 结果面板里
+        // 按 ⌘C 也会走到这里。那时用户的意图显然是"复制选中的文字"而不是"复制整张图"，
+        // 这里按 key window 分流 —— 否则在面板里选了一段字按 ⌘C，剪贴板里进的是图片。
+        if let ocr = ocrResultWindow, ocr.isKeyWindow {
+            guard let text = ocr.copySelectionOrAllToPasteboard() else { NSSound.beep(); return }
+            let selected = ocr.selectedText != nil
+            flashHUD(selected ? "已复制选中文字（\(text.count) 字）"
+                              : "已复制全部识别结果（\(text.count) 字）")
+            return
+        }
+
         let image = annotationView.compositeImage()
         let pb = NSPasteboard.general
         pb.clearContents()
