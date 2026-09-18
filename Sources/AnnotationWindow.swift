@@ -135,7 +135,7 @@ class AnnotationWindow: NSWindow {
             .colors.count
         let toolbarCursor = ToolbarCursor(
             groupWidths: Self.toolbarGroupWidths(paletteColorCount: paletteColorCount),
-            limit: ToolbarLayout.widthLimit(screenVisibleWidth: screenFrame.width))
+            limit: ToolbarLayout.effectiveLimit(screenVisibleWidth: screenFrame.width))
         let toolbarHeight = toolbarCursor.totalHeight
 
         // 右侧 Layer B 调试面板的几何：尺寸按画布的一半算，但**默认不显示、也不占窗口宽度**。

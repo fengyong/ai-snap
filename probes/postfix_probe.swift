@@ -401,6 +401,38 @@ do {
     panel.close()
 }
 
+// MARK: - 10. 工具栏自动折行
+
+print("\n=== 10. 工具栏自动折成多行（不再是一条 1500+ 的长横带）===")
+do {
+    // 用小图，让窗口宽度完全由工具栏决定
+    let window = AnnotationWindow(image: makeCanvas(120, 90))
+    let toolbar = window.contentView?.subviews.first { view in
+        view.subviews.contains { $0 is NSButton }
+    }
+
+    let rows = Int(((toolbar?.frame.height ?? 0) / ToolbarMetrics.rowHeight).rounded())
+    check("工具栏折成多行", rows >= 2, "\(rows) 行，高 \(Int(toolbar?.frame.height ?? 0))")
+
+    // 单行排到 1570 点会变成又长又密的横带，也会把窗口硬撑到 1578 宽 ——
+    // 哪怕截图只有 120 点宽。effectiveLimit 把单行上限压到 preferredRowWidth。
+    check("窗口不再被工具栏撑得过宽",
+          window.frame.width <= ToolbarLayout.preferredRowWidth + 8 + 0.5,
+          String(format: "%.0f ≤ %.0f", window.frame.width,
+                 ToolbarLayout.preferredRowWidth + 8))
+
+    // 观感上限不能盖过屏幕硬约束：极窄屏必须仍然受屏幕限制
+    check("极窄屏仍受屏幕硬约束（观感上限不会放宽它）",
+          ToolbarLayout.effectiveLimit(screenVisibleWidth: 600) == 576,
+          "\(ToolbarLayout.effectiveLimit(screenVisibleWidth: 600))")
+    check("宽屏时被观感上限收住",
+          ToolbarLayout.effectiveLimit(screenVisibleWidth: 2560)
+            == ToolbarLayout.preferredRowWidth,
+          "\(ToolbarLayout.effectiveLimit(screenVisibleWidth: 2560))")
+
+    window.close()
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)
