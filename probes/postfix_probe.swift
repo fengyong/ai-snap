@@ -199,6 +199,29 @@ do {
           "开窗前 \(beforeHex) → 开窗后 \(afterHex)")
 }
 
+// MARK: - 6. 偏好设置窗口的尺寸
+
+print("\n=== 6. 偏好设置窗口必须有个能用的尺寸 ===")
+do {
+    // 这条守的是一个很隐蔽的坑：container 的约束若缺 bottom，竖直方向无约束，
+    // fittingSize.height 退化成 0，紧随其后的 setContentSize 就把窗口压成
+    // 一条只剩标题栏的细缝（实测 440×28）——用户看到的现象是"点了偏好设置没反应"。
+    // 同一个根因还影响另外两处"出现状态提示后重新适配尺寸"的调用。
+    let controller = SettingsWindowController()
+    if let window = controller.window {
+        let fitting = window.contentView?.fittingSize ?? .zero
+        check("contentView 的 fittingSize 高度不为 0（约束完整）",
+              fitting.height > 120, "fittingSize \(fitting)")
+        check("窗口高度可用（不是只剩标题栏）",
+              window.frame.height > 120,
+              "\(Int(window.frame.width))×\(Int(window.frame.height))")
+        controller.present()
+        check("present() 之后窗口可见", window.isVisible)
+    } else {
+        check("能拿到偏好设置窗口", false)
+    }
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

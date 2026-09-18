@@ -198,9 +198,16 @@ final class SettingsWindowController: NSWindowController {
             root.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             root.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
             root.topAnchor.constraint(equalTo: container.topAnchor),
+            // 【必须有 bottom】否则 container 在竖直方向是无约束的，
+            // fittingSize.height 会退化成 0 —— 紧接着的 setContentSize 就把窗口
+            // 压成一条只剩标题栏的细缝（实测 440×28），表现为"点了偏好设置没反应"。
+            root.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         window.contentView = container
         window.setContentSize(container.fittingSize)
+        // 尺寸定下来之后再居中：构造时的 center() 用的是临时尺寸，
+        // setContentSize 之后窗口会偏。
+        window.center()
     }
 
     private func makeRecorderButton(action: Selector) -> NSButton {
