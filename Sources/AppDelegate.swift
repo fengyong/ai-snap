@@ -292,8 +292,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
 
-        annotationWindow?.close()
-        annotationWindow = nil
+        // 开新截图会把当前标注窗关掉 —— 有未保存的标注时先问一句，
+        // 用户取消就整件事都不做（否则等于用一次菜单点击静默丢掉上一张的成果）
+        if let window = annotationWindow {
+            guard window.confirmDiscardIfNeeded() else { return }
+            window.close()
+            annotationWindow = nil
+        }
 
         // 给用户一点时间切换到目标窗口
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in

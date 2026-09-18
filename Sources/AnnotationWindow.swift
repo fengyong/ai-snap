@@ -63,6 +63,38 @@ class AnnotationWindow: NSWindow {
         NSApp.setActivationPolicy(.accessory)
     }
 
+    // MARK: - 放弃 / 关闭确认
+
+    /// 有未送出的标注时先确认一次。**返回 false 表示用户选择继续编辑。**
+    ///
+    /// 标题栏的 X、工具栏的「放弃」、以及 AppDelegate 在开新截图前关掉本窗，
+    /// 三条路都走这里 —— 否则"关掉就丢"这件事会在某一条路上被漏掉。
+    func confirmDiscardIfNeeded() -> Bool {
+        guard annotationView.hasUnsavedAnnotations else { return true }
+
+        let alert = NSAlert()
+        alert.messageText = "放弃这张截图？"
+        alert.informativeText = "图上的标注还没有保存或复制，关闭会一起丢掉。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "放弃")
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// 标题栏的关闭按钮（⌘W 同理）走这里。
+    ///
+    /// 之前没有实现它 —— 于是点 X 会**静默丢掉**整张图的标注，连一句提示都没有。
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        confirmDiscardIfNeeded()
+    }
+
+    /// 工具栏「放弃」按钮：放弃这张截图并关窗。
+    /// 用 performClose 而不是 close —— 前者一定会问过 windowShouldClose，
+    /// 这样"确认放弃"就只存在一份逻辑。
+    @objc private func discardAndClose() {
+        performClose(nil)
+    }
+
     /// 取色器取到颜色：把 HEX 复制到剪贴板并提示。
     ///
     /// **顺带清掉调色板按钮的选中边框**：那些按钮用边框表示"当前用的是哪个颜色"，
@@ -584,6 +616,21 @@ class AnnotationWindow: NSWindow {
         toolbar.addSubview(helpBtn)
         cursor.endGroup()
 
+        // ── 12. 放弃 ──
+        // 单独成组放在最后：它是"离开"而不是"编辑"，混在左边的工具里容易被误点。
+        // 标题用红色 —— 这是本工具栏上唯一会丢东西的按钮。
+        baseY = openGroup("", labelWidth: 0)
+        let discardBtn = makeToolbarButton(
+            title: "放弃", tooltip: "放弃这张截图并关闭窗口（有未保存的标注时会先确认）",
+            at: cursor.place(width: ToolbarMetrics.buttonWidth("放弃"), gapAfter: 0),
+            y: baseY + 12, tag: 600, action: #selector(discardAndClose))
+        discardBtn.attributedTitle = NSAttributedString(
+            string: "放弃",
+            attributes: [.foregroundColor: NSColor.systemRed,
+                         .font: NSFont.systemFont(ofSize: 12)])
+        toolbar.addSubview(discardBtn)
+        cursor.endGroup()
+
         // 工具栏真正需要的宽度 = 各行最右端的最大值（由游标逐个控件累加得出）。
         //
         // 刻意不用「容器里最靠右的子视图」来量：colorButtonContainer 的框架宽度
@@ -615,6 +662,7 @@ class AnnotationWindow: NSWindow {
             group(118),                                   // 导出
             group(56),                                    // OCR
             group(36),                                    // 帮助
+            group(36),                                    // 放弃
         ]
     }
 
