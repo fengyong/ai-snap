@@ -35,12 +35,14 @@ extension AnnotationView {
             zOrder = zOrderSnapshot
             redoStack.append(.delete(objects: deletedObjects, zOrderSnapshot: zOrderWithout))
 
-        case .move(let colorKey, let delta):
+        case .move(let colorKey, let delta, let detached):
             if let obj = objects[colorKey] {
                 let reverseDelta = CGVector(dx: -delta.dx, dy: -delta.dy)
                 obj.move(by: reverseDelta)
+                // 撤销移动时把当初被解除的附着关系一并还原
+                restoreDetachedAttachments(detached)
                 updateAttachedArrows(forParent: colorKey)
-                redoStack.append(.move(colorKey: colorKey, delta: delta))
+                redoStack.append(.move(colorKey: colorKey, delta: delta, detached: detached))
             }
 
         case .rotate(let colorKey, let angle):
@@ -102,11 +104,16 @@ extension AnnotationView {
                 undoStack.append(.add(colorKey: firstKey))
             }
 
-        case .move(let colorKey, let delta):
+        case .move(let colorKey, let delta, let detached):
             if let obj = objects[colorKey] {
                 obj.move(by: delta)
+                // 重做这次移动 = 再次解除附着（与当初拖拽的效果保持一致）
+                if detached != nil, let arrow = obj as? Arrow {
+                    arrow.startAttachment = nil
+                    arrow.endAttachment = nil
+                }
                 updateAttachedArrows(forParent: colorKey)
-                undoStack.append(.move(colorKey: colorKey, delta: delta))
+                undoStack.append(.move(colorKey: colorKey, delta: delta, detached: detached))
             }
 
         case .rotate(let colorKey, let angle):

@@ -44,15 +44,29 @@ enum TextRecognizer {
     /// Vision 返回的顺序**没有保证**（实测同一张图多次调用结果稳定，但它并不等于
     /// 阅读顺序）。直接按数组顺序拼接，拼出来的句子会莫名其妙地前后跳。
     static func readingOrder(_ items: [RecognizedText]) -> [RecognizedText] {
-        items.sorted { a, b in
-            // 竖直中心相差不到半行高就算"同一行"：同一行里字高不一时，
-            // 不这样放宽会把一行拆成前后两段
-            let tolerance = max(min(a.box.height, b.box.height) * 0.5, 1)
-            if abs(a.box.midY - b.box.midY) > tolerance {
-                return a.box.midY > b.box.midY
+        // 先按竖直中心从上到下排，再**用锚点贪心聚成行**：每行以该行第一个元素的
+        // 竖直中心为锚点，判断后续元素是否属于本行。
+        //
+        // 不能把"半行高容差"直接写成 sorted(by:) 的比较器 —— 那个关系不可传递
+        // （A~B 同行、B~C 同行，但 A 与 C 可能差了一整个行高），
+        // 于是谓词不满足严格弱序，Swift 的排序结果取决于内部比较顺序，
+        // 属于未定义行为（同一份输入可能给出不同结果）。
+        // 用锚点聚类得到的行划分是确定的，再对每行按 x 排序，整体就是一个全序。
+        let topDown = items.sorted { $0.box.midY > $1.box.midY }
+        var lines: [[RecognizedText]] = []
+
+        for item in topDown {
+            if let anchor = lines.last?.first {
+                let tolerance = max(min(anchor.box.height, item.box.height) * 0.5, 1)
+                if abs(anchor.box.midY - item.box.midY) <= tolerance {
+                    lines[lines.count - 1].append(item)
+                    continue
+                }
             }
-            return a.box.minX < b.box.minX
+            lines.append([item])
         }
+
+        return lines.flatMap { $0.sorted { $0.box.minX < $1.box.minX } }
     }
 
     /// 拼成整段文本（按阅读顺序，每段一行）

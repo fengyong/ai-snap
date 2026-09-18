@@ -326,13 +326,20 @@ let defaultStamps: [(StampType, String)] = [
 
 // MARK: - Undo Action
 
+/// 移动箭头时会解除它的附着关系；这里保存解除前的状态，好让撤销能真正还原
+struct DetachedAttachments {
+    let key: UInt32
+    let start: Attachment?
+    let end: Attachment?
+}
+
 enum UndoAction {
     /// 添加了一个对象（撤销 = 删除它）
     case add(colorKey: UInt32)
     /// 删除了对象（撤销 = 重新添加，包含被级联删除的子箭头）
     case delete(objects: [(UInt32, any AnnotationObject)], zOrderSnapshot: [UInt32])
-    /// 移动了对象（撤销 = 反向移动）
-    case move(colorKey: UInt32, delta: CGVector)
+    /// 移动了对象（撤销 = 反向移动）；`detached` 记录被解除的附着，撤销时一并恢复
+    case move(colorKey: UInt32, delta: CGVector, detached: DetachedAttachments?)
     /// 旋转了对象
     case rotate(colorKey: UInt32, angle: CGFloat)
     /// 缩放了对象
@@ -437,6 +444,13 @@ protocol AnnotationObject: AnyObject {
     /// Draw on Layer B (hit test, unique color, no anti-aliasing)
     func drawHitTest(in ctx: CGContext, color: NSColor)
 
+    /// 导出（保存 PNG / 复制到剪贴板）时绘制对象本体。
+    ///
+    /// 默认与 `draw(in:)` 完全一致；只有"纯编辑器 UI"需要覆写它把自己排除掉。
+    /// 单列一个方法而不是加 `forExport:` 参数：这样新增图形类型什么都不用做，
+    /// 只有需要区分导出行为的类型才多写一个方法。
+    func drawForExport(in ctx: CGContext)
+
     /// Points for selection handles
     func selectionHandlePoints() -> [CGPoint]
 
@@ -449,6 +463,11 @@ protocol AnnotationObject: AnyObject {
     func move(by delta: CGVector)
     func rotate(by angle: CGFloat)
     func scale(by factor: CGFloat)
+}
+
+extension AnnotationObject {
+    /// 默认：导出与屏幕所见一致
+    func drawForExport(in ctx: CGContext) { draw(in: ctx) }
 }
 
 // MARK: - Arrow
@@ -1506,6 +1525,10 @@ class SpotlightShape: AnnotationObject {
         ctx.rotate(by: rotation)
         let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)
         let path = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+        // 边框保持黄色：`color` 在 SpotlightShape 里的默认值是"带 alpha 的黑"，
+        // 语义是**遮罩浓淡**（见 drawSpotlightOverlay），不是边框色。
+        // 若把边框也接到 color 上，默认聚光灯的虚线会变成黑色，
+        // 失去"这里有一块高亮"的辨识度。
         ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.8).cgColor)
         ctx.setLineWidth(2)
         ctx.setLineDash(phase: 0, lengths: [6, 3])
@@ -1513,6 +1536,13 @@ class SpotlightShape: AnnotationObject {
         ctx.strokePath()
         ctx.restoreGState()
     }
+
+    /// 导出时**只保留遮罩，不画边框**。
+    ///
+    /// 这条虚线是"这里有个聚光灯、可以点它选中"的编辑器提示，属于 UI 而不属于
+    /// 标注内容；拍进 PNG 会让用户拿到的图多一圈黄框。
+    /// 遮罩本身由 `AnnotationView.drawSpotlightOverlay` 统一绘制，这里什么都不做。
+    func drawForExport(in ctx: CGContext) {}
 
     func drawHitTest(in ctx: CGContext, color: NSColor) {
         ctx.saveGState()

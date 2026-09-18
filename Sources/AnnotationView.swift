@@ -98,6 +98,8 @@ class AnnotationView: NSView {
     var redoStack: [UndoAction] = []
     // 拖拽操作前的起始中心，用于计算总 delta
     private var dragStartCenter: CGPoint?
+    // 移动箭头时会解除附着，这里记下解除前的状态供撤销使用
+    private var pendingDetach: DetachedAttachments?
     private var rotateStartAngle: CGFloat = 0
     private var scaleStartFactor: CGFloat = 1
 
@@ -320,6 +322,14 @@ class AnnotationView: NSView {
             state = .moving(colorKey: colorKey, grabOffset: offset)
             selectedKey = colorKey
             dragStartCenter = obj.center
+            // 记下拖拽前的附着关系：真正发生移动时会被解除，撤销要靠它还原
+            if let arrow = obj as? Arrow {
+                pendingDetach = DetachedAttachments(key: colorKey,
+                                                    start: arrow.startAttachment,
+                                                    end: arrow.endAttachment)
+            } else {
+                pendingDetach = nil
+            }
         } else if placeClickToolObject(at: point) {
             // 序号 / 贴纸这类单击放置的工具：对象已放置并选中
         } else {
@@ -352,11 +362,10 @@ class AnnotationView: NSView {
 
             obj.move(by: delta)
 
-            // 如果移动的是箭头，解除附着
-            if let arrow = obj as? Arrow {
-                arrow.startAttachment = nil
-                arrow.endAttachment = nil
-            }
+            // 注意：**这里不解除箭头附着**。
+            // 解除动作推迟到 mouseUp —— 只有确认这是一次"会被记账的真实移动"时才解。
+            // 否则 2x 屏上 1 物理像素（0.5pt）的手抖就会解除附着，
+            // 而 mouseUp 的记账阈值是"严格大于 0.5pt"，于是附着被清空却没有任何撤销记录。
             // 如果移动的是形状，更新附着的箭头端点
             updateAttachedArrows(forParent: colorKey)
 
@@ -444,23 +453,51 @@ class AnnotationView: NSView {
                 let totalDelta = CGVector(dx: obj.center.x - startCenter.x,
                                           dy: obj.center.y - startCenter.y)
                 if abs(totalDelta.dx) > 0.5 || abs(totalDelta.dy) > 0.5 {
-                    undoStack.append(.move(colorKey: colorKey, delta: totalDelta))
+                    // 确认是一次真实移动 → 此时才解除附着，并把"解除前的状态"一并记账
+                    if let arrow = obj as? Arrow {
+                        arrow.startAttachment = nil
+                        arrow.endAttachment = nil
+                    }
+                    undoStack.append(.move(colorKey: colorKey, delta: totalDelta,
+                                           detached: pendingDetach))
                     redoStack.removeAll()
+                } else if totalDelta.dx != 0 || totalDelta.dy != 0 {
+                    // 亚像素抖动：不足以记账，就把它完整回退，
+                    // 维持"没有记录 ⇔ 没有变化"这个不变量（否则附着丢了却撤不回来）
+                    obj.move(by: CGVector(dx: -totalDelta.dx, dy: -totalDelta.dy))
+                    restoreDetachedAttachments(pendingDetach)
+                    updateAttachedArrows(forParent: colorKey)
+                    hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+                    refreshDebugView()
                 }
             }
             dragStartCenter = nil
+            pendingDetach = nil
 
         case .rotating(let colorKey, _):
             if abs(rotateStartAngle) > 0.001 {
                 undoStack.append(.rotate(colorKey: colorKey, angle: rotateStartAngle))
                 redoStack.removeAll()
+            } else if rotateStartAngle != 0, let obj = objects[colorKey] {
+                // 同理：没记账就把旋转回退掉
+                obj.rotate(by: -rotateStartAngle)
+                updateAttachedArrows(forParent: colorKey)
+                hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+                refreshDebugView()
             }
+            rotateStartAngle = 0
 
         case .scaling(let colorKey, _):
             if abs(scaleStartFactor - 1) > 0.001 {
                 undoStack.append(.scale(colorKey: colorKey, factor: scaleStartFactor))
                 redoStack.removeAll()
+            } else if scaleStartFactor != 1, let obj = objects[colorKey] {
+                obj.scale(by: 1.0 / scaleStartFactor)
+                updateAttachedArrows(forParent: colorKey)
+                hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+                refreshDebugView()
             }
+            scaleStartFactor = 1
 
         case .erasing:
             // 整笔拖拽合并成一步撤销：否则按一次 ⌘Z 只退回一个对象，
@@ -542,6 +579,10 @@ class AnnotationView: NSView {
 
         switch event.keyCode {
         case 53: // Esc → 取消选中，回到绘制模式
+            // 变换进行中先把它**回退**掉。此刻手势还没走到 mouseUp，
+            // 若只是把 state 清成 .idle，mouseUp 就会落进 .idle 分支 ——
+            // 半途的位移 / 旋转 / 缩放被留下却没有任何撤销记录，无法挽回。
+            cancelActiveTransform()
             selectedKey = nil
             state = .idle
             // 识别结果框也一并收掉：它是"看一眼就好"的临时信息，
@@ -581,6 +622,60 @@ class AnnotationView: NSView {
         }
 
         return false
+    }
+
+    /// 把进行中的移动 / 旋转 / 缩放**回退**掉，并归还在拖拽期间被解除的附着关系。
+    ///
+    /// 只在手势被意外中断时调用（目前是 Esc）。正常路径由 mouseUp 负责记账、
+    /// 不经过这里 —— 它存在的意义是维持"画布变了就一定有撤销记录"这个不变量。
+    private func cancelActiveTransform() {
+        switch state {
+        case .moving(let colorKey, _):
+            if let obj = objects[colorKey], let start = dragStartCenter {
+                let delta = CGVector(dx: obj.center.x - start.x, dy: obj.center.y - start.y)
+                if delta.dx != 0 || delta.dy != 0 {
+                    obj.move(by: CGVector(dx: -delta.dx, dy: -delta.dy))
+                }
+                restoreDetachedAttachments(pendingDetach)
+                updateAttachedArrows(forParent: colorKey)
+            }
+            dragStartCenter = nil
+            pendingDetach = nil
+
+        case .rotating(let colorKey, _):
+            if let obj = objects[colorKey], rotateStartAngle != 0 {
+                obj.rotate(by: -rotateStartAngle)
+                updateAttachedArrows(forParent: colorKey)
+            }
+            rotateStartAngle = 0
+
+        case .scaling(let colorKey, _):
+            if let obj = objects[colorKey], scaleStartFactor != 1, scaleStartFactor != 0 {
+                obj.scale(by: 1.0 / scaleStartFactor)
+                updateAttachedArrows(forParent: colorKey)
+            }
+            scaleStartFactor = 1
+
+        default:
+            return      // idle / drawing / erasing / picking：没有需要回退的变换
+        }
+
+        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+        refreshDebugView()
+        needsDisplay = true
+    }
+
+    /// 撤销"移动箭头"时，把当初被解除的附着关系装回去（并把端点吸回父对象周长）
+    func restoreDetachedAttachments(_ snapshot: DetachedAttachments?) {
+        guard let snapshot = snapshot, let arrow = objects[snapshot.key] as? Arrow else { return }
+        arrow.startAttachment = snapshot.start
+        arrow.endAttachment = snapshot.end
+        if let att = arrow.startAttachment, let pos = resolveAttachmentPosition(att) {
+            arrow.startPoint = pos
+        }
+        if let att = arrow.endAttachment, let pos = resolveAttachmentPosition(att) {
+            arrow.endPoint = pos
+        }
     }
 
     /// 删除当前选中的对象（含挂在它上面的箭头），并记录一步撤销。
@@ -1037,7 +1132,9 @@ class AnnotationView: NSView {
             drawSpotlightOverlay(in: ctx)
             for key in zOrder {
                 if let obj = objects[key] {
-                    obj.draw(in: ctx)
+                    // 用 drawForExport 而不是 draw：聚光灯的虚线边框是编辑器 UI，
+                    // 不该出现在导出图里（其余类型默认行为与 draw 相同）
+                    obj.drawForExport(in: ctx)
                 }
             }
             // 水印（最后绘制，覆盖在所有内容之上）

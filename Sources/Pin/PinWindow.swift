@@ -27,7 +27,9 @@ final class PinWindow: NSPanel {
         isFloatingPanel = true
         // 不抢焦点：点击贴图不会激活本应用，也不会打断用户正在输入的内容
         becomesKeyOnlyIfNeeded = false
-        isMovableByWindowBackground = true
+        // 拖动由 PinContentView → beginDrag/continueDrag 自己算（见下方「拖动」一节）。
+        // **不要**再打开 isMovableByWindowBackground：两套拖动机制同时启用会互相干扰 ——
+        // 系统那套会在拖动时把双击吞掉，滚轮缩放的锚点也会偏。
         isReleasedWhenClosed = false
         hasShadow = true
         isOpaque = false
@@ -164,12 +166,15 @@ final class PinWindow: NSPanel {
         // 不透明度
         let opacityItem = NSMenuItem(title: "不透明度", action: nil, keyEquivalent: "")
         let opacityMenu = NSMenu()
+        // 勾选状态要反映**当前**的 alphaValue，而不是每次重建都勾 100%
+        //（在 60% 时关掉菜单再打开，之前会错误地显示 100% 已选中）
+        let currentPercent = Int((alphaValue * 100).rounded())
         for percent in [100, 80, 60, 40, 20] {
             let item = NSMenuItem(title: "\(percent)%",
                                   action: #selector(setOpacity(_:)), keyEquivalent: "")
             item.target = self
             item.tag = percent
-            item.state = (percent == 100) ? .on : .off
+            item.state = (percent == currentPercent) ? .on : .off
             opacityMenu.addItem(item)
         }
         opacityItem.submenu = opacityMenu

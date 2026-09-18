@@ -219,8 +219,14 @@ final class HistoryWindow: NSWindow {
             NSSound.beep()
             return
         }
+        // 像素尺寸 ≠ 点尺寸：Retina 截图（pixelScale == 2）如果按"像素当点"构造
+        // NSImage，粘贴到按点解释的应用里会放大一倍。按条目的 pixelScale 折回逻辑尺寸
+        // —— 与主标注窗口的复制路径（compositeImage 出来的就是点尺寸）保持一致。
+        // 老条目没有 pixelScale，按当前屏倍率兜底。
+        let scale = entry.pixelScale ?? NSScreen.main?.backingScaleFactor ?? 2
         let nsImage = NSImage(cgImage: image,
-                              size: NSSize(width: image.width, height: image.height))
+                              size: NSSize(width: CGFloat(image.width) / scale,
+                                           height: CGFloat(image.height) / scale))
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         pasteboard.writeObjects([nsImage])

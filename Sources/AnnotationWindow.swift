@@ -51,6 +51,16 @@ class AnnotationWindow: NSWindow {
         super.close()
         onClose?()
         onClose = nil
+
+        // 关掉标注窗就退回"纯菜单栏"形态。
+        //
+        // 标注窗是**唯一**会把激活策略切成 .regular 的地方（见 setupMainMenu），
+        // 不在这里还原的话策略就永远停在 .regular —— 因为此后无论截图被取消、
+        // 没找到窗口还是权限不足，都不会再有新窗口来重置它，
+        // 表现为 Dock 图标与菜单栏永久残留。
+        // 放在 close() 而不是 windowWillClose，是为了同时覆盖"先置空 delegate
+        // 再 close"这类收不到任何 delegate 回调的关窗路径。
+        NSApp.setActivationPolicy(.accessory)
     }
 
     /// 取色器取到颜色：把 HEX 复制到剪贴板并提示。
@@ -646,7 +656,11 @@ class AnnotationWindow: NSWindow {
         view.addSubview(sep)
     }
 
-    private func rebuildColorButtons() {
+    /// 重建色点。
+    ///
+    /// - Parameter adoptFirstColor: 用户**显式切换调色板**时传 true，表示
+    ///   "我换了调色板，就用它的第一个颜色"；开窗 / 重建工具栏时**必须**传 false。
+    private func rebuildColorButtons(adoptFirstColor: Bool = false) {
         colorButtons.forEach { $0.removeFromSuperview() }
         colorButtons.removeAll()
 
@@ -668,10 +682,32 @@ class AnnotationWindow: NSWindow {
             colorButtons.append(btn)
         }
 
-        if let first = palette.colors.first {
+        if adoptFirstColor, let first = palette.colors.first {
             annotationView.currentColor = first
-            colorButtons.first?.layer?.borderColor = NSColor.controlAccentColor.cgColor
         }
+
+        // 高亮"当前正在用的颜色"对应的那个色点；调色板里没有就一个都不高亮。
+        //
+        // 这里**不能**再写成"无条件把 currentColor 设成 palette.colors.first"：
+        // 那会覆盖 AnnotationView 刚从偏好恢复出来的颜色，而且 currentColor 的
+        // didSet 会立刻把这个重置值写回 Preferences —— 于是每次打开标注窗口
+        // 都把用户存下来的颜色销毁掉，"记住上次用的颜色"等于完全失效。
+        if let index = palette.colors.firstIndex(where: {
+            AnnotationWindow.colorsMatch($0, annotationView.currentColor)
+        }) {
+            colorButtons[index].layer?.borderColor = NSColor.controlAccentColor.cgColor
+        }
+    }
+
+    /// 两个颜色在设备 RGB 下是否算同一个。
+    /// 调色板里可能有动态系统色，直接 `==` 会因为色彩空间与动态性而误判。
+    private static func colorsMatch(_ a: NSColor, _ b: NSColor) -> Bool {
+        guard let x = a.usingColorSpace(.deviceRGB),
+              let y = b.usingColorSpace(.deviceRGB) else { return a == b }
+        return abs(x.redComponent - y.redComponent) < 0.002
+            && abs(x.greenComponent - y.greenComponent) < 0.002
+            && abs(x.blueComponent - y.blueComponent) < 0.002
+            && abs(x.alphaComponent - y.alphaComponent) < 0.002
     }
 
     private func updateToolButtonStates(selectedIndex: Int) {
@@ -753,7 +789,9 @@ class AnnotationWindow: NSWindow {
 
     @objc private func cyclePalette() {
         paletteIndex = (paletteIndex + 1) % ColorPalette.allPalettes.count
-        rebuildColorButtons()
+        // 用户**显式**换了调色板 → 采用新调色板的第一个颜色。
+        // 这与"开窗时保持恢复出来的颜色"是两件事，靠参数区分开。
+        rebuildColorButtons(adoptFirstColor: true)
     }
 
     @objc private func undoAction() {
@@ -1060,7 +1098,8 @@ class AnnotationWindow: NSWindow {
         - ⌘C           复制到剪贴板（不关窗口）
         - ⌘S           保存为 PNG 文件
         - Tab / ⇧Tab   循环切换绘图工具
-        - 1 ~ 7        直接选中第 N 个绘图工具（按工具栏从左到右的顺序）
+        - 1 ~ 9        直接选中前 9 个绘图工具（按工具栏从左到右的顺序）
+                       第 10 个及以后（模糊 / 橡皮 / 取色）用 Tab 循环，或直接点按钮
         - Esc          取消选中，回到绘制模式
         - Delete       删除选中的对象（连同挂在它上面的箭头）
         - ⌘Z / ⇧⌘Z     撤销 / 重做

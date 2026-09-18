@@ -10,6 +10,8 @@ import Foundation
 struct AppVersion: Comparable, Equatable, CustomStringConvertible {
     let components: [Int]
     let isPrerelease: Bool
+    /// 预发布的标识序列（SemVer §9）：`1.0.0-beta.3` → `["beta", "3"]`；正式版为空
+    let prereleaseIdentifiers: [String]
     /// 原始字符串（去掉前导 v 之后），用于展示
     let raw: String
 
@@ -21,7 +23,11 @@ struct AppVersion: Comparable, Equatable, CustomStringConvertible {
         // 拆出「数字主体」与「预发布后缀」：1.0.0-beta.3 → 1.0.0 + beta.3
         let halves = text.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
         let core = String(halves[0])
-        self.isPrerelease = halves.count > 1 && !halves[1].isEmpty
+        let prerelease = halves.count > 1 ? String(halves[1]) : ""
+        self.isPrerelease = !prerelease.isEmpty
+        self.prereleaseIdentifiers = prerelease.isEmpty
+            ? []
+            : prerelease.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
 
         var numbers: [Int] = []
         for part in core.split(separator: ".", omittingEmptySubsequences: false) {
@@ -44,9 +50,36 @@ struct AppVersion: Comparable, Equatable, CustomStringConvertible {
             let r = i < rhs.components.count ? rhs.components[i] : 0
             if l != r { return l < r }
         }
-        // 数字部分相同：预发布版低于正式版（1.0.0-beta < 1.0.0）
-        if lhs.isPrerelease != rhs.isPrerelease { return lhs.isPrerelease }
-        return false
+        // 数字部分相同 → 按 SemVer §11.4 比较预发布标识
+        return comparePrerelease(lhs.prereleaseIdentifiers, rhs.prereleaseIdentifiers) ?? false
+    }
+
+    /// SemVer §11.4 的预发布优先级比较。返回 nil 表示"数字部分相同且预发布完全相同"。
+    ///
+    /// 之前只存了一个 `isPrerelease` 布尔量，于是 `1.0.0-alpha` 与 `1.0.0-beta`
+    /// 会被判成相等（两者都"是预发布"、数字部分又相同），
+    /// 与注释里声称遵循的 SemVer 不符 —— 后果是新预发布版发布后不提示更新。
+    private static func comparePrerelease(_ lhs: [String], _ rhs: [String]) -> Bool? {
+        if lhs.isEmpty && rhs.isEmpty { return nil }
+        if lhs.isEmpty { return false }        // 正式版 > 预发布版
+        if rhs.isEmpty { return true }         // 预发布版 < 正式版
+
+        for i in 0..<max(lhs.count, rhs.count) {
+            guard i < lhs.count else { return true }    // 前缀相同则字段少的一方优先级低
+            guard i < rhs.count else { return false }
+            let l = lhs[i], r = rhs[i]
+            switch (Int(l), Int(r)) {
+            case let (ln?, rn?):
+                if ln != rn { return ln < rn }
+            case (_?, nil):
+                return true                             // 数字标识 < 字母标识
+            case (nil, _?):
+                return false
+            default:
+                if l != r { return l < r }              // 都是字母 → ASCII 字典序
+            }
+        }
+        return nil
     }
 
     static func == (lhs: AppVersion, rhs: AppVersion) -> Bool {
