@@ -326,6 +326,81 @@ do {
     window.close()
 }
 
+// MARK: - 9. OCR 结果面板：自定义选择
+
+print("\n=== 9. OCR 结果面板：选区 ↔ 识别框联动、复制选区/全部 ===")
+do {
+    // 第二段故意放一个 emoji：它是 1 个字素簇但占 2 个 UTF-16 单元。
+    // 区间若用 String.count 算，后面的段会整体错位 —— 这条就是守这个的。
+    let items = [
+        RecognizedText(text: "第一段 订单号 A123", box: CGRect(x: 10, y: 200, width: 100, height: 20)),
+        RecognizedText(text: "第二段 👍 收货人", box: CGRect(x: 10, y: 150, width: 100, height: 20)),
+        RecognizedText(text: "第三段 13800000000", box: CGRect(x: 10, y: 100, width: 100, height: 20)),
+    ]
+    /// 第 i 段在文本里的区间（与实现同算法：UTF-16 长度 + 1 个换行）
+    func blockRange(_ i: Int) -> NSRange {
+        var location = 0
+        for j in 0..<i { location += (items[j].text as NSString).length + 1 }
+        return NSRange(location: location, length: (items[i].text as NSString).length)
+    }
+
+    let panel = OCRResultWindow(items: items)
+    var highlighted: [CGRect] = []
+    panel.onHighlightChanged = { highlighted = $0 }
+
+    func findTextView(_ v: NSView) -> NSTextView? {
+        if let t = v as? NSTextView { return t }
+        for sub in v.subviews { if let t = findTextView(sub) { return t } }
+        return nil
+    }
+    guard let textView = panel.contentView.flatMap({ findTextView($0) }) else {
+        check("结果面板里有可选文本视图", false); exit(1)
+    }
+
+    check("面板显示的是按阅读顺序拼接的全文",
+          textView.string == TextRecognizer.joinedText(items))
+
+    /// 探针里没有事件循环，委托回调不会自己来，手动触发一次
+    func selectBlock(_ range: NSRange) {
+        textView.selectedRange = range
+        (textView.delegate as? NSTextViewDelegate)?
+            .textViewDidChangeSelection?(Notification(name: NSTextView.didChangeSelectionNotification,
+                                                     object: textView))
+    }
+
+    selectBlock(blockRange(1))
+    check("只选第 2 段 → 只高亮第 2 段的识别框",
+          highlighted == [items[1].box], "高亮 \(highlighted.count) 个")
+    check("复制到的是选中的那一段",
+          panel.copySelectionOrAllToPasteboard() == items[1].text,
+          panel.selectedText ?? "nil")
+
+    selectBlock(NSUnionRange(blockRange(1), blockRange(2)))
+    check("跨段选择 → 两段都高亮",
+          highlighted == [items[1].box, items[2].box], "高亮 \(highlighted.count) 个")
+
+    // 边界用例：只选第 2 段的**最后一个字**。
+    // 第 2 段里那个 emoji 让它"字素簇数 9 ≠ UTF-16 长度 10"；区间若按 String.count
+    // 算，这一段会被当成 [13,22)，而选区是 [22,23) → 交集为空 → 高亮不出来。
+    // （"整段选择"反而抓不到这个错，因为两边一起错、交集仍然非空。）
+    selectBlock(NSRange(location: blockRange(1).upperBound - 1, length: 1))
+    check("只选第 2 段最后一个字 → 仍高亮第 2 段（UTF-16 区间算对了）",
+          highlighted == [items[1].box], "高亮 \(highlighted.count) 个")
+
+    selectBlock(NSRange(location: 0, length: 0))
+    check("没有选区时高亮全部（并提示可拖动选择）",
+          highlighted.count == items.count, "高亮 \(highlighted.count) 个")
+    check("没有选区时 ⌘C 复制全部",
+          panel.copySelectionOrAllToPasteboard() == panel.allText)
+    check("「复制全部」不受当前选区影响",
+          { selectBlock(blockRange(2)); return panel.copyAllToPasteboard() == panel.allText }())
+
+    // 面板必须是能用的尺寸（偏好设置窗口曾因约束缺 bottom 被压成标题栏）
+    check("面板尺寸可用", panel.frame.height > 150,
+          "\(Int(panel.frame.width))×\(Int(panel.frame.height))")
+    panel.close()
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)
