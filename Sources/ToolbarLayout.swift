@@ -134,8 +134,26 @@ enum ToolbarLayout {
     ///
     /// 目标是**窗口不比屏幕宽** —— 只要窗口比屏幕宽，就地编辑就一定左移，
     /// 画布就离开了选区。留 24 点余量是避免贴着边缘时窗口阴影/圆角被裁。
+    /// 这是**硬约束**；观感上的"一行别太长"由 `preferredRowWidth` 负责。
     static func widthLimit(screenVisibleWidth: CGFloat) -> CGFloat {
         max(320, screenVisibleWidth - 24)
+    }
+
+    /// 单行工具栏的**观感**宽度上限。
+    ///
+    /// `widthLimit` 只保证"不比屏幕宽"，可屏幕有 2000 点时一行就能排到 1500+ ——
+    /// 变成一条又长又密的横带：分组标签挤在一起、找工具要横扫整个屏幕，
+    /// 而且窗口宽度会被工具栏撑到 1500 以上（哪怕截图只有 200 点宽）。
+    /// 超过这个宽度就交给 `wrap` 折行 —— 它做的是均衡分割，
+    /// 两行宽度接近，不会出现"第一行塞满、第二行孤零零一个组"。
+    ///
+    /// 900 这个数：12 个组总宽约 1570，折两行后每行约 790–840，
+    /// 既能一眼扫完，也不至于矮到一行只放两三个组。
+    static let preferredRowWidth: CGFloat = 900
+
+    /// 排版时**真正**使用的单行上限 = 屏幕硬约束与观感上限取小。
+    static func effectiveLimit(screenVisibleWidth: CGFloat) -> CGFloat {
+        min(widthLimit(screenVisibleWidth: screenVisibleWidth), preferredRowWidth)
     }
 }
 

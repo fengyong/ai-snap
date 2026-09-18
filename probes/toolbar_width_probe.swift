@@ -35,7 +35,7 @@ guard let container = window.contentView,
 let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 let rowHeight: CGFloat = 48
 let rows = Int((toolbar.frame.height / rowHeight).rounded())
-let limit = ToolbarLayout.widthLimit(screenVisibleWidth: screen.width)
+let limit = ToolbarLayout.effectiveLimit(screenVisibleWidth: screen.width)
 
 print("=== 1. 尺寸 ===\n")
 print(String(format: "  窗口      %.0f × %.0f", window.frame.width, window.frame.height))
@@ -50,6 +50,11 @@ check("窗口宽度 ≤ 屏幕可见宽度",
 check("窗口宽度 ≤ 折行上限 + 余量",
       window.frame.width <= limit + 8 + 0.5,
       String(format: "%.0f vs %.0f", window.frame.width, limit + 8))
+// 单行排到 1500+ 会变成一条又长又密的横带，也让窗口被工具栏撑得过宽 ——
+// effectiveLimit 把单行上限压到 preferredRowWidth，这里守住"确实折行了"。
+// （每行是否超限由下面第 3 节逐行校验，那里用的是真实布局出来的坐标。）
+check("工具栏不是一长行（单行上限 \(Int(ToolbarLayout.preferredRowWidth))）",
+      rows >= 2, "\(rows) 行")
 
 let leftShiftFree = screen.width - window.frame.width
 print(String(format: "\n  选区左边缘 ≤ %.0f 时不会左移（窗口宽 %.0f）", leftShiftFree, window.frame.width))
