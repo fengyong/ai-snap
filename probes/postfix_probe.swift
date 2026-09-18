@@ -280,6 +280,52 @@ do {
           v1.objects.isEmpty, "对象数 \(v1.objects.count)")
 }
 
+// MARK: - 8. 未送出的改动判定 + 「放弃」按钮
+
+print("\n=== 8. 未送出的改动判定 + 「放弃」按钮 ===")
+do {
+    // 判定用"内容指纹"算出来，所以这里直接改画布状态即可（不必合成鼠标事件）
+    let v = AnnotationView(image: makeCanvas(400, 300))
+    check("空画布没什么可丢的", !v.hasUnsavedAnnotations)
+
+    let key = v.hitTestBuffer.generateUniqueColorKey()
+    v.objects[key] = RectangleShape(from: CGPoint(x: 50, y: 50),
+                                    to: CGPoint(x: 150, y: 150),
+                                    color: .red, lineWidth: 4, hitTestColorKey: key)
+    v.zOrder = [key]
+    check("画布上有东西 → 有未送出的改动", v.hasUnsavedAnnotations)
+
+    _ = v.compositeImage()
+    check("导出（保存/复制/贴图都会走这里）之后不再提醒", !v.hasUnsavedAnnotations)
+
+    v.objects[key]?.move(by: CGVector(dx: 40, dy: 0))
+    check("导出后又改动了 → 重新提醒", v.hasUnsavedAnnotations)
+
+    v.objects.removeValue(forKey: key)
+    v.zOrder = []
+    check("画完又全部删掉 → 不必提醒", !v.hasUnsavedAnnotations)
+
+    // 「放弃」按钮：存在、是红的、空画布上点它会直接关窗（不弹确认）
+    let window = AnnotationWindow(image: makeCanvas(300, 200))
+    func allButtons(_ view: NSView) -> [NSButton] {
+        var out: [NSButton] = []
+        if let b = view as? NSButton { out.append(b) }
+        for sub in view.subviews { out.append(contentsOf: allButtons(sub)) }
+        return out
+    }
+    let discard = window.contentView.flatMap { allButtons($0).first { $0.title == "放弃" } }
+    check("工具栏里有「放弃」按钮", discard != nil)
+
+    let titleColor = discard?.attributedTitle.attribute(
+        .foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+    check("「放弃」用红色标题（本工具栏唯一会丢东西的按钮）",
+          titleColor == NSColor.systemRed, "\(titleColor.map { "\($0)" } ?? "nil")")
+
+    // 没有未送出内容时不应弹模态框（弹出会阻塞探针），确认函数直接放行
+    check("空画布上不需要确认", window.confirmDiscardIfNeeded())
+    window.close()
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

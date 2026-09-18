@@ -106,6 +106,51 @@ class AnnotationView: NSView {
     // 调试面板：外部挂载的 NSImageView，用于实时显示 Layer B 可视化
     weak var debugImageView: NSImageView?
 
+    // MARK: - 未送出的改动
+
+    /// 画布内容的轻量指纹（几何 + 旋转 + 颜色 + 文字 + z 序）。
+    ///
+    /// 用"算出来的指纹"而不是"每次改动手动 +1"：后者要在十几个改动点各插一行，
+    /// 漏掉任何一处都会让"有没有未送出的改动"判错 —— 而漏掉的后果是**关闭时不再提醒**，
+    /// 正好是最不该出错的方向。指纹是纯计算结果，不存在漏插。
+    var contentFingerprint: Int {
+        var h = zOrder.count &* 1_000_003
+        for key in zOrder {
+            guard let o = objects[key] else { continue }
+            h = h &* 31 &+ Int(key)
+            h = h &* 31 &+ Int(o.center.x.rounded())
+            h = h &* 31 &+ Int(o.center.y.rounded())
+            h = h &* 31 &+ Int((o.rotation * 1000).rounded())
+            h = h &* 31 &+ Int(o.boundingBox.width.rounded())
+            h = h &* 31 &+ Int(o.boundingBox.height.rounded())
+            if let c = o.color.usingColorSpace(.deviceRGB) {
+                h = h &* 31 &+ Int((c.redComponent * 255).rounded())
+                h = h &* 31 &+ Int((c.greenComponent * 255).rounded())
+                h = h &* 31 &+ Int((c.blueComponent * 255).rounded())
+            }
+            if let t = o as? TextShape { h = h &* 31 &+ t.text.hashValue }
+        }
+        return h
+    }
+
+    /// 最近一次"内容已送出"（保存 / 复制 / 贴图）时的指纹；nil = 本次会话还没送出过
+    private var exportedFingerprint: Int?
+
+    /// 是否还有**未送出的、且确实存在于画布上的**标注。
+    /// 关窗 / 放弃截图前用它决定要不要弹确认。
+    ///
+    /// 不用 `!undoStack.isEmpty`：画完又全部删掉、或刚导出过没再改，
+    /// 这两种情况画布上都没什么可丢的，却会白弹一次确认框。
+    var hasUnsavedAnnotations: Bool {
+        guard !objects.isEmpty else { return false }
+        return contentFingerprint != exportedFingerprint
+    }
+
+    /// 标记"当前内容已经被送出去了"（保存 / 复制 / 贴图都会走到 compositeImage）
+    func markContentExported() {
+        exportedFingerprint = contentFingerprint
+    }
+
     // MARK: 橡皮擦状态
     //
     // 橡皮擦不是"拖拽构造一个对象"，而是边拖边删，所以它有自己的一组状态，
@@ -1149,6 +1194,9 @@ class AnnotationView: NSView {
 
     /// 生成最终合成图片（底图 + 所有标注对象）
     func compositeImage() -> NSImage {
+        // 保存 / 复制 / 贴图都会走这里 —— 内容既然已经送出去，之后关窗就不必再提醒
+        markContentExported()
+
         let size = baseImage.size
         let image = NSImage(size: size)
         image.lockFocus()
