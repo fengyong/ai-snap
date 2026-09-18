@@ -222,6 +222,64 @@ do {
     }
 }
 
+// MARK: - 7. 橡皮擦笔画中途按 Esc
+
+print("\n=== 7. 橡皮擦拖到一半按 Esc：这一笔必须被取消，而不是丢了又不进撤销栈 ===")
+do {
+    func mouse(_ type: NSEvent.EventType, _ p: CGPoint) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: 0,
+                           windowNumber: 0, context: nil, eventNumber: 0,
+                           clickCount: 1, pressure: 1)!
+    }
+    func escapeEvent() -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                         windowNumber: 0, context: nil, characters: "\u{1b}",
+                         charactersIgnoringModifiers: "\u{1b}",
+                         isARepeat: false, keyCode: 53)!
+    }
+    func drawRect(_ v: AnnotationView, _ a: CGPoint, _ b: CGPoint) {
+        v.currentTool = .rectangle
+        v.mouseDown(with: mouse(.leftMouseDown, a))
+        v.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)))
+        v.mouseUp(with: mouse(.leftMouseUp, b))
+    }
+    // 矩形 (200,120)-(320,240)：底边 y=120 处描边很宽（线宽+6），(260,120) 必命中
+    let onEdge = CGPoint(x: 260, y: 120)
+
+    // A) 中途 Esc → 必须取消这一笔（对象回来）
+    let v1 = AnnotationView(image: makeCanvas(600, 400))
+    drawRect(v1, CGPoint(x: 200, y: 120), CGPoint(x: 320, y: 240))
+    check("先画出一个矩形", v1.objects.count == 1, "对象数 \(v1.objects.count)")
+
+    v1.currentTool = .eraser
+    v1.mouseDown(with: mouse(.leftMouseDown, onEdge))     // 命中 → 立刻真删
+    let midStroke = v1.objects.count
+    v1.keyDown(with: escapeEvent())                      // 还没松手就按 Esc
+    v1.mouseUp(with: mouse(.leftMouseUp, onEdge))
+
+    check("拖到一半时对象确实已被真删（说明橡皮擦是实时删）",
+          midStroke == 0, "对象数 \(midStroke)")
+    // ★ 这条是判别点：不修的话 Esc 让 mouseUp 落进 .idle，对象再也回不来
+    check("Esc 之后对象被放回画布", v1.objects.count == 1, "对象数 \(v1.objects.count)")
+    check("z 序一并还原", v1.zOrder.count == 1, "zOrder \(v1.zOrder.count)")
+
+    // B) 对照：正常松手 → 真的删掉，而且 ⌘Z 能找回来
+    let v2 = AnnotationView(image: makeCanvas(600, 400))
+    drawRect(v2, CGPoint(x: 200, y: 120), CGPoint(x: 320, y: 240))
+    v2.currentTool = .eraser
+    v2.mouseDown(with: mouse(.leftMouseDown, onEdge))
+    v2.mouseUp(with: mouse(.leftMouseUp, onEdge))
+    check("对照：正常完成的一笔确实删掉了对象", v2.objects.isEmpty, "对象数 \(v2.objects.count)")
+    v2.performUndo()
+    check("对照：⌘Z 能把这一笔整笔找回来", v2.objects.count == 1, "撤销后对象数 \(v2.objects.count)")
+
+    // C) Esc 取消之后画布状态必须干净：再擦一笔仍然正常
+    v1.mouseDown(with: mouse(.leftMouseDown, onEdge))
+    v1.mouseUp(with: mouse(.leftMouseUp, onEdge))
+    check("Esc 取消后再擦一笔仍然生效（状态没被污染）",
+          v1.objects.isEmpty, "对象数 \(v1.objects.count)")
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)
