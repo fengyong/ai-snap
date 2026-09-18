@@ -41,6 +41,18 @@
 | `probe_region` | P1-2 副屏覆盖窗口吞掉鼠标、P1-11 选区坐标漏掉屏幕原点 |
 | `probe_signing.sh` | P3-3 ad-hoc 签名 / build.sh 架构硬编码 |
 
+## 第一轮 review 的探针（`probes/review/`）
+
+`probes/review/` 存放**第一轮 review** 的探针，配套报告是根目录的
+`CODE_REVIEW_ROUND1.md`（历史文档，结论以 `CODE_REVIEW.md` 为准）。
+这批探针是独立的小脚本，不接入 `run_all.sh`，按 `CODE_REVIEW_ROUND1.md` 里给出的命令单独运行即可。
+
+| 探针 | 验证点 |
+|------|--------|
+| `review/probe_round1_basics.swift` | `kCGWindowBounds` 类型桥接、多屏选区、窗口命中 Y 翻转、工具栏宽度、HitTest 翻转 |
+| `review/probe_round2_stroke_clear.swift` | 选区 `stroke` 后再 `clear` 时内侧描边被擦、外侧残留量 |
+| `review/probe_round3_bridge_types.swift` | `CGWindowList` 的 PID / CGWindowID 原始类型 |
+
 ## 三类探针的差别（重要）
 
 1. **与会话无关**（任何机器、任何时刻结论都成立）

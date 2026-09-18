@@ -1,1 +1,8 @@
+# Swift / SPM 构建产物
+.build/
+
+# macOS 系统文件
+.DS_Store
+
+# 打包产物
 AISnap.app
