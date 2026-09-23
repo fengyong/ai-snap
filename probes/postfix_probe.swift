@@ -502,6 +502,53 @@ do {
     check("添加链路：再来一次 redo 对象又在", v.objects.count == 1)
 }
 
+// MARK: - 12. 序号可重排（删中间后其余续上）
+
+print("\n=== 12. 序号标注可重排：删掉中间一个，剩下的续上 1、2… ===")
+do {
+    func mouse(_ type: NSEvent.EventType, _ p: CGPoint) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: 0,
+                           windowNumber: 0, context: nil, eventNumber: 0,
+                           clickCount: 1, pressure: 1)!
+    }
+    let v = AnnotationView(image: makeCanvas(600, 400))
+    v.currentTool = .step
+    for (i, p) in [CGPoint(x: 100, y: 100),
+                   CGPoint(x: 200, y: 100),
+                   CGPoint(x: 300, y: 100)].enumerated() {
+        v.mouseDown(with: mouse(.leftMouseDown, p))
+        v.mouseUp(with: mouse(.leftMouseUp, p))
+        let badges = v.zOrder.compactMap { v.objects[$0] as? StepBadge }
+        check("放置第 \(i + 1) 个序号，编号为 \(i + 1)",
+              badges.last?.number == i + 1,
+              "实际 \(badges.last?.number ?? -1)")
+    }
+
+    // 删掉中间那个（number == 2）
+    let middleKey = v.zOrder.compactMap { key -> UInt32? in
+        (v.objects[key] as? StepBadge)?.number == 2 ? key : nil
+    }.first!
+    v.selectedKey = middleKey
+    v.deleteSelectedObject()
+
+    let after = v.zOrder.compactMap { v.objects[$0] as? StepBadge }.map(\.number)
+    check("删中间后剩余重排为 1、2（而不是 1、3）", after == [1, 2], "实际 \(after)")
+
+    v.performUndo()
+    let restored = v.zOrder.compactMap { v.objects[$0] as? StepBadge }.map(\.number)
+    check("撤销删除后又变回 1、2、3", restored == [1, 2, 3], "实际 \(restored)")
+
+    v.performRedo()
+    let redone = v.zOrder.compactMap { v.objects[$0] as? StepBadge }.map(\.number)
+    check("重做删除后仍是 1、2", redone == [1, 2], "实际 \(redone)")
+
+    // 再放一个：应接在后面成为 3
+    v.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 400, y: 100)))
+    v.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 400, y: 100)))
+    let extended = v.zOrder.compactMap { v.objects[$0] as? StepBadge }.map(\.number)
+    check("重排后再新建接在末尾（1、2、3）", extended == [1, 2, 3], "实际 \(extended)")
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

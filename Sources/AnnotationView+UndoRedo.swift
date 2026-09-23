@@ -69,6 +69,7 @@ extension AnnotationView {
         }
 
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+        renumberStepBadges()
         refreshDebugView()
         needsDisplay = true
     }
@@ -131,6 +132,7 @@ extension AnnotationView {
         }
 
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+        renumberStepBadges()
         refreshDebugView()
         needsDisplay = true
     }

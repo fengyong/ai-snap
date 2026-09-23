@@ -552,6 +552,7 @@ class AnnotationView: NSView {
                                          zOrderBefore: eraseZOrderBefore,
                                          zOrderAfter: zOrder))
                 redoStack.removeAll()
+                renumberStepBadges()
             }
             eraseDeleted = []
             eraseZOrderBefore = []
@@ -736,6 +737,7 @@ class AnnotationView: NSView {
         eraseDeleted = []
         eraseZOrderBefore = []
         lastErasePoint = nil
+        renumberStepBadges()
     }
 
     /// 撤销"移动箭头"时，把当初被解除的附着关系装回去（并把端点吸回父对象周长）
@@ -765,6 +767,7 @@ class AnnotationView: NSView {
                                  zOrderBefore: zOrderBefore,
                                  zOrderAfter: zOrder))
         redoStack.removeAll()
+        renumberStepBadges()
         selectedKey = nil
 
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
@@ -1023,8 +1026,9 @@ class AnnotationView: NSView {
 
     /// 下一个序号标注的编号 = 现有最大编号 + 1。
     ///
-    /// 取最大值而非"数量 + 1"，是为了让删除后新建的编号不会与已有的撞号；
-    /// 同时也避免删除中间某个序号时，其余序号的显示数字发生跳动。
+    /// 创建瞬间先取 max+1（避免与还留在画布上的编号撞号）；
+    /// 随后 `renumberStepBadges()` 会按 z 序收成 1..n，所以「可重排」
+    /// （删中间一个后其余续上）由重编号保证，不靠这里的分配策略。
     private func nextStepNumber() -> Int {
         var maxNumber = 0
         for (_, object) in objects {
@@ -1033,6 +1037,28 @@ class AnnotationView: NSView {
             }
         }
         return maxNumber + 1
+    }
+
+    /// 把画布上的序号标注按 z 序（底→顶，近似放置顺序）重新编成 1..n。
+    ///
+    /// 路线图 P0-B6 要求「自动递增 **+ 可重排**」：删掉中间的 2 之后，
+    /// 剩下的应变成 1、2，而不是 1、3。编号只是显示状态，**不进撤销栈** ——
+    /// 撤销恢复的是对象与 z 序，随后同样重编号，结果自然正确。
+    func renumberStepBadges() {
+        var n = 0
+        var changed = false
+        for key in zOrder {
+            guard let badge = objects[key] as? StepBadge else { continue }
+            n += 1
+            if badge.number != n {
+                badge.number = n
+                changed = true
+            }
+        }
+        // 只有数字变了才需要重绘；命中层不画数字，不必动 Layer B
+        if changed {
+            needsDisplay = true
+        }
     }
 
     // MARK: - Drawing (Layer A)
@@ -1149,6 +1175,7 @@ class AnnotationView: NSView {
                               zOrderAfter: zOrder))
         redoStack.removeAll()
         hitTestBuffer.drawObject(obj)
+        renumberStepBadges()
         refreshDebugView()
         if selectAfterPlacing {
             selectedKey = colorKey
