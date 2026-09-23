@@ -269,6 +269,12 @@ final class PinWindow: NSPanel {
 private final class PinContentView: NSView {
     private let image: NSImage
 
+    /// 惰性缓存的位图，专供透明度采样。一次 TIFF 转换，之后 hitTest 只读像素。
+    private lazy var alphaRep: NSBitmapImageRep? = {
+        guard let tiff = image.tiffRepresentation else { return nil }
+        return NSBitmapImageRep(data: tiff)
+    }()
+
     var onMouseDown: ((NSEvent) -> Void)?
     var onMouseDragged: ((NSEvent) -> Void)?
     var onScroll: ((NSEvent) -> Void)?
@@ -284,6 +290,39 @@ private final class PinContentView: NSView {
     }
 
     override var isFlipped: Bool { false }
+
+    /// 透明像素上点击要**穿过去**（Snipaste 伪透明的核心手感）。
+    ///
+    /// 否则一张带透明区的贴图会把下面的窗口/桌面整块挡住，用户点不到
+    /// 本来想点的东西。不透明区域照常吃事件（拖动 / 双击关闭 / 滚轮缩放）。
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let hit = super.hitTest(point) else { return nil }
+        if isPassThrough(at: point) { return nil }
+        return hit
+    }
+
+    /// 该点是否应视为透明而让点击穿过。
+    ///
+    /// 阈值 0.05（约 13/255）：完全为 0 的像素必须穿过；压缩/缩放产生的
+    /// 近透明边缘也一并穿过，避免"点在空气上却抓住了贴图"。
+    /// 完全不透明的普通截图在此阈值下行为与原先完全一致。
+    private func isPassThrough(at point: NSPoint) -> Bool {
+        guard bounds.width > 0, bounds.height > 0,
+              let rep = alphaRep,
+              rep.pixelsWide > 0, rep.pixelsHigh > 0 else {
+            return false
+        }
+        // 视图 y=0 在底部（isFlipped == false），位图原点在左上
+        let fx = (point.x - bounds.minX) / bounds.width
+        let fy = (point.y - bounds.minY) / bounds.height
+        guard fx >= 0, fx < 1, fy >= 0, fy < 1 else { return false }
+
+        let px = min(Int(fx * CGFloat(rep.pixelsWide)), rep.pixelsWide - 1)
+        let py = min(Int((1 - fy) * CGFloat(rep.pixelsHigh)), rep.pixelsHigh - 1)
+        guard px >= 0, py >= 0,
+              let color = rep.colorAt(x: px, y: py) else { return false }
+        return color.alphaComponent < 0.05
+    }
 
     override func draw(_ dirtyRect: NSRect) {
         // 用图自身的逻辑尺寸铺满 bounds（窗口 frame 已按 zoom 算好）
