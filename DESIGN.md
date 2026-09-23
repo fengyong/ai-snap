@@ -77,39 +77,76 @@ macOS 截图标注工具，支持区域截图、窗口截图，以及在截图�
 
 ## 2. 项目结构
 
+> 与 README 的「技术架构」表保持同一粒度。两处若不一致，以源码树为准。
+
 ```
 ai-snap/
 ├── Package.swift                       # SPM 配置
 └── Sources/
     ├── main.swift                      # 应用入口
-    ├── AppDelegate.swift               # 应用生命周期 + 菜单栏
-    ├── Models.swift                    # 数据模型 (Arrow, CanvasState)
+    ├── AppDelegate.swift               # 状态栏菜单、截图调度、历史与更新入口
+    ├── Preferences.swift               # 偏好持久化（UserDefaults 单一来源）
+    ├── SettingsWindow.swift            # 偏好设置窗口（快捷键/忽略列表/托盘/更新）
+    ├── HotkeyManager.swift             # Carbon 全局热键 + 忽略应用策略
+    ├── LaunchAtLogin.swift             # 开机自启（SMAppService）
+    ├── Models.swift                    # AnnotationObject 协议与全部标注对象、UndoAction
     ├── HitTestBuffer.swift             # 隐藏图层 (Layer B) 实现
-    ├── ScreenCapture.swift             # 截图统一入口 (异步)：决定截哪个
+    ├── ScreenCapture.swift             # 截图统一入口（异步）：决定截哪个
     ├── Capture/
     │   ├── CaptureProviderSCK.swift    # ScreenCaptureKit 捕获实现
     │   ├── CaptureProviderLegacy.swift # 旧 CGWindowList 实现备份 (回滚通道)
-    │   └── ScreenCaptureError.swift    # 截图失败的结构化错误
-    ├── RegionSelectionWindow.swift     # 全屏覆盖选区窗口
-    ├── AnnotationView.swift            # 标注画布 (核心)
-    └── AnnotationWindow.swift          # 标注窗口 + 工具栏
+    │   ├── ScreenCaptureError.swift    # 截图失败的结构化错误
+    │   └── ScreenGeometry.swift        # 屏幕 ↔ 图像坐标换算（纯函数）
+    ├── RegionSelectionWindow.swift     # 冻结帧全屏覆盖层 + 选区
+    ├── OverlayWindowStyle.swift        # 覆盖层窗口外观（主/副屏共用）
+    ├── AnchoredPlacement.swift         # 就地编辑落点（纯函数）
+    ├── ToolbarLayout.swift             # 工具栏按组折行（纯函数 + 游标）
+    ├── AnnotationWindow.swift          # 标注窗口、工具栏、菜单、导出与 OCR 入口
+    ├── AnnotationView.swift            # 画布交互核心（鼠标状态机、键盘、导出）
+    ├── AnnotationView+Attachments.swift# 箭头附着到形状周长
+    ├── AnnotationView+Snapping.swift   # 点吸附 + 聚光灯遮罩
+    ├── AnnotationView+UndoRedo.swift   # 撤销 / 重做
+    ├── AnnotationView+Rendering.swift  # 选中手柄、拖拽预览
+    ├── AnnotationView+TextEditing.swift# 文字行内编辑（NSTextField 叠加）
+    ├── Tools/
+    │   ├── AnnotationToolHandler.swift # 工具 handler 协议 + ToolRegistry
+    │   ├── ArrowToolHandler.swift
+    │   ├── ShapeToolHandlers.swift     # 矩形/圆角/圆/椭圆/聚光灯
+    │   ├── ClickPlacementToolHandler.swift # 序号 / 贴纸
+    │   ├── TextToolHandler.swift
+    │   └── RedactionToolHandlers.swift # 马赛克 / 模糊
+    ├── Redaction/
+    │   ├── ImageRedaction.swift        # 块平均 / 高斯模糊（纯图像处理）
+    │   └── RedactionShape.swift        # 打码标注对象
+    ├── Picker/ImagePixelSampler.swift  # 取色器：底图像素采样与坐标换算
+    ├── OCR/
+    │   ├── TextRecognizer.swift        # Vision 识别 + 阅读顺序
+    │   └── OCRResultWindow.swift       # 识别结果面板
+    ├── History/
+    │   ├── CaptureHistory.swift        # 截图历史索引 + 磁盘文件
+    │   └── HistoryWindow.swift         # 历史列表窗口
+    ├── Pin/
+    │   ├── PinWindow.swift             # 贴图置顶面板（含透明区穿透）
+    │   └── PinManager.swift
+    └── Update/UpdateChecker.swift      # 更新检查（版本号比较、清单地址）
 ```
 
 ### 模块职责
 
-| 文件 | 职责 | 依赖 |
-|------|------|------|
-| `main.swift` | NSApplication 启动引导 | AppDelegate |
-| `AppDelegate` | 菜单栏图标、截图流程调度 | RegionSelectionWindow, ScreenCapture, AnnotationWindow |
-| `Models` | AnnotationObject 协议、Arrow/Rectangle/Circle/Stamp 类、状态枚举 | 无 |
-| `HitTestBuffer` | 离屏位图缓冲区，Color Picking 命中检测，调试可视化 | Models |
-| `ScreenCapture` | 截图统一入口（异步）：窗口枚举 + 分派到具体 Provider | CaptureProviderSCK |
-| `CaptureProviderSCK` | ScreenCaptureKit 区域/窗口捕获，含版本路由与错误映射 | ScreenCaptureError |
-| `CaptureProviderLegacy` | 旧 `CGWindowListCreateImage` 实现（回滚用，默认不启用） | 无 |
-| `ScreenCaptureError` | 结构化错误（权限被拒 / 找不到窗口 / 捕获失败） | 无 |
-| `RegionSelectionWindow` | 全屏半透明覆盖层 + 拖拽选区 | ScreenCapture |
-| `AnnotationView` | 双图层画布渲染、鼠标交互、多形状绘制/移动 | Models, HitTestBuffer |
-| `AnnotationWindow` | 窗口容器、工具栏 (工具/颜色/保存/复制)、调试面板 | AnnotationView |
+| 组件 | 职责 |
+|------|------|
+| `AppDelegate` | 状态栏（左/右/中键可绑动作）、截图调度、热键入口（含忽略列表闸门） |
+| `Preferences` / `SettingsWindow` | 偏好单一来源；只把「没有别的入口」的设置放进窗口 |
+| `HotkeyManager` | Carbon 注册/注销；`HotkeyIgnorePolicy` 纯函数判定忽略 |
+| `Models` | 对象协议与全部标注类；`UndoAction` 显式记录 add/delete 的 before/after z 序 |
+| `HitTestBuffer` | Layer B：唯一色 key、关抗锯齿、O(1) 读像素命中 |
+| `ScreenCapture` + `Capture/` | 「截哪个」与「真抓图」分离；SCK 主路径 + legacy 回滚 |
+| `RegionSelectionWindow` | 先冻结后选区；主屏可交互，副屏仅冻帧（已知限制） |
+| `AnchoredPlacement` / `ToolbarLayout` | 就地落点与工具栏折行，纯函数可离屏测 |
+| `AnnotationWindow` | 窗口容器、工具栏（单一来源 `toolbarTools`）、导出/OCR/Pin 入口 |
+| `AnnotationView*` | 画布核心；Handler 协议化后加工具不必改画布 |
+| `Tools/` | 每个绘图工具一个 handler |
+| `Redaction/` `Picker/` `OCR/` `History/` `Pin/` `Update/` | 各自子系统，与画布通过窄接口交互 |
 
 ---
 
