@@ -549,6 +549,59 @@ do {
     check("重排后再新建接在末尾（1、2、3）", extended == [1, 2, 3], "实际 \(extended)")
 }
 
+// MARK: - 13. 贴图透明区鼠标穿透
+
+print("\n=== 13. 贴图：透明像素上点击穿过，不透明区仍可点中 ===")
+do {
+    // 左半不透明、右半全透明的图
+    let size = NSSize(width: 100, height: 100)
+    let image = NSImage(size: size)
+    image.lockFocus()
+    NSColor.clear.setFill()
+    NSRect(origin: .zero, size: size).fill()
+    NSColor.systemRed.setFill()
+    NSRect(x: 0, y: 0, width: 50, height: 100).fill()
+    image.unlockFocus()
+
+    let pin = PinWindow(image: image,
+                        frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+    pin.hasShadow = false
+    guard let content = pin.contentView else {
+        check("能拿到贴图内容视图", false); exit(1)
+    }
+
+    // 不透明半边：hitTest 应命中内容视图
+    let opaqueHit = content.hitTest(NSPoint(x: 25, y: 50))
+    check("不透明区能点中贴图", opaqueHit === content,
+          "hit = \(opaqueHit.map { "\(type(of: $0))" } ?? "nil")")
+
+    // 透明半边：hitTest 应返回 nil（事件落到下层）
+    let clearHit = content.hitTest(NSPoint(x: 75, y: 50))
+    check("透明区点击穿过（hitTest 为 nil）", clearHit == nil,
+          "hit = \(clearHit.map { "\(type(of: $0))" } ?? "nil")")
+
+    // 边界：刚好在中线附近仍应按像素判定，不整块拒收
+    let nearSeam = content.hitTest(NSPoint(x: 48, y: 50))
+    check("中线左侧（不透明）仍命中", nearSeam === content,
+          "hit = \(nearSeam.map { "\(type(of: $0))" } ?? "nil")")
+
+    // 完全不透明的普通截图：任意点都应命中（与旧行为一致）
+    let opaqueOnly = NSImage(size: size)
+    opaqueOnly.lockFocus()
+    NSColor.systemBlue.setFill()
+    NSRect(origin: .zero, size: size).fill()
+    opaqueOnly.unlockFocus()
+    let pin2 = PinWindow(image: opaqueOnly,
+                         frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+    pin2.hasShadow = false
+    let centerHit = pin2.contentView?.hitTest(NSPoint(x: 50, y: 50))
+    check("普通不透明截图行为不变（到处都能点中）", centerHit != nil,
+          "hit = \(centerHit.map { "\(type(of: $0))" } ?? "nil")")
+
+    pin.close()
+    pin2.close()
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)
