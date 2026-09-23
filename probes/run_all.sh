@@ -79,6 +79,7 @@ echo "=== 探针（链接真实源码）==="
 run_probe prefs_probe            Sources/Models.swift Sources/Preferences.swift \
                                  Sources/HotkeyManager.swift
 run_probe hotkey_probe           Sources/Models.swift Sources/Preferences.swift Sources/HotkeyManager.swift
+run_probe hotkey_ignore_probe    Sources/Models.swift Sources/Preferences.swift Sources/HotkeyManager.swift
 run_probe cyclic_index_probe     Sources/Models.swift
 run_probe text_shape_probe       Sources/Models.swift
 run_probe screen_geometry_probe  Sources/Capture/ScreenGeometry.swift

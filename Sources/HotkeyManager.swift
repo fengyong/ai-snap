@@ -266,3 +266,50 @@ enum HotkeyRegistration {
         }
     }
 }
+
+// MARK: - 忽略程序策略
+
+/// 判定「当前前台应用在忽略列表里时，全局截图热键是否应跳过动作」。
+///
+/// v1 用**一份共享列表**同时作用于区域/窗口两个截图热键 —— 真实诉求是
+/// 「在终端 / IDE / 游戏里别劫持我的按键」，按热键分别配表的需求很弱，留待后续。
+///
+/// ⚠️ 平台限制：Carbon 的 `RegisterEventHotKey` 注册后按键即被系统吞掉，
+/// 这里的「忽略」只能做到**我们不触发动作**，无法把按键再透传给前台应用。
+/// 真正的透传需要 CGEventTap + 辅助功能权限，与本应用「少要权限」的原则冲突，不做。
+/// 默认组合（⌃⌘A / ⌃⌘W）足够冷门，被吞也没有实际影响。
+enum HotkeyIgnorePolicy {
+
+    /// - Parameters:
+    ///   - bundleID: 当前前台应用的 bundle identifier（来自 NSWorkspace）
+    ///   - rules: 忽略规则；精确匹配大小写不敏感；以 `*` 结尾表示前缀匹配
+    ///            （如 `com.microsoft.VSCode*`）；单独一个 `*` 表示全部忽略
+    /// - Returns: 该应用是否应被忽略
+    static func isIgnored(bundleID: String?, rules: [String]) -> Bool {
+        guard let bundleID = bundleID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !bundleID.isEmpty, !rules.isEmpty else {
+            return false
+        }
+
+        for rawRule in rules {
+            let rule = rawRule.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !rule.isEmpty else { continue }
+
+            if rule == "*" {
+                return true
+            }
+            if rule.hasSuffix("*") {
+                let prefix = String(rule.dropLast())
+                if !prefix.isEmpty,
+                   bundleID.range(of: prefix, options: [.caseInsensitive, .anchored]) != nil {
+                    return true
+                }
+                continue
+            }
+            if bundleID.caseInsensitiveCompare(rule) == .orderedSame {
+                return true
+            }
+        }
+        return false
+    }
+}
