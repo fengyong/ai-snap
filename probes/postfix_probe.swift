@@ -433,6 +433,75 @@ do {
     window.close()
 }
 
+// MARK: - 11. 撤销/重做方向显式化（不再靠「对象是否还在表里」反推）
+
+print("\n=== 11. 撤销/重做方向：add/delete 各走各的，不看对象在不在 ===")
+do {
+    func mouse(_ type: NSEvent.EventType, _ p: CGPoint) -> NSEvent {
+        NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: 0,
+                           windowNumber: 0, context: nil, eventNumber: 0,
+                           clickCount: 1, pressure: 1)!
+    }
+    func drawRect(_ v: AnnotationView, _ a: CGPoint, _ b: CGPoint) {
+        v.currentTool = .rectangle
+        v.mouseDown(with: mouse(.leftMouseDown, a))
+        v.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)))
+        v.mouseUp(with: mouse(.leftMouseUp, b))
+    }
+
+    // A) 添加 → 撤销 → 重做：对象回来，且 z 序一致
+    let v = AnnotationView(image: makeCanvas(600, 400))
+    drawRect(v, CGPoint(x: 80, y: 80), CGPoint(x: 180, y: 180))
+    let keyAfterAdd = v.zOrder.first
+    check("添加后对象在画布上", v.objects.count == 1)
+    v.performUndo()
+    check("撤销添加 → 对象被摘除", v.objects.isEmpty && v.zOrder.isEmpty)
+    v.performRedo()
+    check("重做添加 → 对象装回", v.objects.count == 1)
+    check("重做后 z 序与添加时一致", v.zOrder.first == keyAfterAdd,
+          "zOrder \(v.zOrder)")
+
+    // B) 再撤销、再重做一次，确认来回多次不会靠存在性走错分支
+    v.performUndo()
+    v.performRedo()
+    v.performUndo()
+    check("多次来回后仍能正确撤销添加", v.objects.isEmpty)
+    v.performRedo()
+    check("多次来回后仍能正确重做添加", v.objects.count == 1)
+
+    // C) 删除（含多对象）→ 撤销 → 重做
+    let v2 = AnnotationView(image: makeCanvas(600, 400))
+    drawRect(v2, CGPoint(x: 60, y: 60), CGPoint(x: 140, y: 140))
+    drawRect(v2, CGPoint(x: 220, y: 60), CGPoint(x: 300, y: 140))
+    let bothKeys = Set(v2.zOrder)
+    check("两个矩形都在", v2.objects.count == 2)
+
+    // 选中并删掉其中一个
+    let keep = v2.zOrder[0]
+    let drop = v2.zOrder[1]
+    v2.selectedKey = drop
+    v2.deleteSelectedObject()
+    check("删掉一个后剩一个", v2.objects.count == 1 && v2.zOrder == [keep])
+
+    v2.performUndo()
+    check("撤销删除 → 装回，且 z 序还原",
+          v2.objects.count == 2 && Set(v2.zOrder) == bothKeys,
+          "objects \(v2.objects.count) z \(v2.zOrder)")
+    v2.performRedo()
+    check("重做删除 → 再次摘除，且 z 序去到删除后",
+          v2.objects.count == 1 && v2.zOrder == [keep],
+          "objects \(v2.objects.count) z \(v2.zOrder)")
+
+    // D) 关键判别：删除撤销后，对象「存在」——旧实现会把 redo 的 .delete
+    //    误判成「重做删除」（碰巧对）；但「添加撤销后对象不存在」时旧实现走
+    //    「重做添加」。两边都对只因 add/delete 恰好互斥。这里再验证：
+    //    添加撤销（对象不在）→ 重做添加后，再撤销添加，对象应再次不在。
+    v.performUndo() // 撤销重做的添加
+    check("添加链路：undo → redo → undo 后对象不在", v.objects.isEmpty)
+    v.performRedo()
+    check("添加链路：再来一次 redo 对象又在", v.objects.count == 1)
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

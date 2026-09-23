@@ -334,10 +334,17 @@ struct DetachedAttachments {
 }
 
 enum UndoAction {
-    /// 添加了一个对象（撤销 = 删除它）
-    case add(colorKey: UInt32)
-    /// 删除了对象（撤销 = 重新添加，包含被级联删除的子箭头）
-    case delete(objects: [(UInt32, any AnnotationObject)], zOrderSnapshot: [UInt32])
+    /// 用户添加了 objects（通常是 1 个）。
+    /// 撤销 = 摘除并回到 `zOrderBefore`；重做 = 装回并去到 `zOrderAfter`。
+    /// 不用「对象是否还在表里」反推方向 —— 那在加新对象类型时会静默出错。
+    case add(objects: [(UInt32, any AnnotationObject)],
+             zOrderBefore: [UInt32],
+             zOrderAfter: [UInt32])
+    /// 用户删除了 objects（含被级联摘掉的子箭头）。
+    /// 撤销 = 装回并回到 `zOrderBefore`；重做 = 摘除并去到 `zOrderAfter`。
+    case delete(objects: [(UInt32, any AnnotationObject)],
+                zOrderBefore: [UInt32],
+                zOrderAfter: [UInt32])
     /// 移动了对象（撤销 = 反向移动）；`detached` 记录被解除的附着，撤销时一并恢复
     case move(colorKey: UInt32, delta: CGVector, detached: DetachedAttachments?)
     /// 旋转了对象
