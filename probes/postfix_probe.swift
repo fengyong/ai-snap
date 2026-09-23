@@ -602,6 +602,47 @@ do {
     pin2.close()
 }
 
+// MARK: - 14. 符号键直选全部 12 个工具
+
+print("\n=== 14. 数字键 1–9 与 0 / - / = 直选全部 12 个工具 ===")
+do {
+    func findAnnotationView(_ v: NSView) -> AnnotationView? {
+        if let a = v as? AnnotationView { return a }
+        for sub in v.subviews { if let a = findAnnotationView(sub) { return a } }
+        return nil
+    }
+    let window = AnnotationWindow(image: makeCanvas(200, 200))
+    guard let view = window.contentView.flatMap({ findAnnotationView($0) }) else {
+        check("能拿到标注画布", false); exit(1)
+    }
+    func key(_ chars: String) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                         windowNumber: window.windowNumber, context: nil,
+                         characters: chars, charactersIgnoringModifiers: chars,
+                         isARepeat: false, keyCode: 0)!
+    }
+
+    // 1 → 箭头
+    view.keyDown(with: key("1"))
+    check("1 → 箭头", view.currentTool == .arrow, "\(view.currentTool)")
+    // 9 → 马赛克（第 9 个）
+    view.keyDown(with: key("9"))
+    check("9 → 马赛克", view.currentTool == .mosaic, "\(view.currentTool)")
+    // 0 / - / = → 第 10–12 个（旧实现到 9 就断了）
+    view.keyDown(with: key("0"))
+    check("0 → 模糊", view.currentTool == .blur, "\(view.currentTool)")
+    view.keyDown(with: key("-"))
+    check("- → 橡皮", view.currentTool == .eraser, "\(view.currentTool)")
+    view.keyDown(with: key("="))
+    check("= → 取色", view.currentTool == .picker, "\(view.currentTool)")
+
+    // 非直选键不应抢走事件改工具
+    let before = view.currentTool
+    view.keyDown(with: key("x"))
+    check("无关字符不改工具", view.currentTool == before, "\(view.currentTool)")
+    window.close()
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

@@ -661,11 +661,28 @@ class AnnotationView: NSView {
             break
         }
 
-        // 数字键 1..9 → 直接选中第 N 个绘图工具
-        if let chars = event.charactersIgnoringModifiers,
-           let digit = Int(chars), digit >= 1, digit <= 9 {
-            (window as? AnnotationWindow)?.selectTool(atIndex: digit - 1)
-            return true
+        // 符号/数字键直选工具。用**字符**而不是 keyCode：主键盘与数字小键的
+        // keyCode 不同，字符才是统一的。
+        //   1–9 → 前 9 个；0 / - / = → 第 10 / 11 / 12 个（模糊 / 橡皮 / 取色）
+        // 工具已有 12 个，只留 1–9 会让后 3 个无法直选（旧账：数字键只到 9）。
+        if let chars = event.charactersIgnoringModifiers {
+            let index: Int?
+            switch chars {
+            case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+                index = (Int(chars) ?? 1) - 1
+            case "0":
+                index = 9
+            case "-":
+                index = 10
+            case "=":
+                index = 11
+            default:
+                index = nil
+            }
+            if let index {
+                (window as? AnnotationWindow)?.selectTool(atIndex: index)
+                return true
+            }
         }
 
         return false
