@@ -72,7 +72,8 @@ extension AnnotationView {
             // （它在 Layer B 上仍会占一块命中区，点上去会选中一片"什么都没有"）
             objects.removeValue(forKey: key)
             zOrder.removeAll { $0 == key }
-            if case .add(let addedKey)? = undoStack.last, addedKey == key {
+            if case .add(let added, _, _)? = undoStack.last,
+               added.contains(where: { $0.0 == key }) {
                 undoStack.removeLast()
             }
             selectedKey = nil

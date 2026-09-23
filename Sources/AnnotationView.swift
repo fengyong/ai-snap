@@ -549,7 +549,8 @@ class AnnotationView: NSView {
             // 想退回原状得按十几次 —— 那等于撤销功能对橡皮擦不可用。
             if !eraseDeleted.isEmpty {
                 undoStack.append(.delete(objects: eraseDeleted,
-                                         zOrderSnapshot: eraseZOrderBefore))
+                                         zOrderBefore: eraseZOrderBefore,
+                                         zOrderAfter: zOrder))
                 redoStack.removeAll()
             }
             eraseDeleted = []
@@ -760,7 +761,9 @@ class AnnotationView: NSView {
         let taken = takeOutOfCanvas(key)
         guard !taken.isEmpty else { return }
 
-        undoStack.append(.delete(objects: taken, zOrderSnapshot: zOrderBefore))
+        undoStack.append(.delete(objects: taken,
+                                 zOrderBefore: zOrderBefore,
+                                 zOrderAfter: zOrder))
         redoStack.removeAll()
         selectedKey = nil
 
@@ -1138,9 +1141,12 @@ class AnnotationView: NSView {
     private func registerNewObject(_ obj: any AnnotationObject,
                                    colorKey: UInt32,
                                    selectAfterPlacing: Bool = false) {
+        let zOrderBefore = zOrder
         objects[colorKey] = obj
         zOrder.append(colorKey)
-        undoStack.append(.add(colorKey: colorKey))
+        undoStack.append(.add(objects: [(colorKey, obj)],
+                              zOrderBefore: zOrderBefore,
+                              zOrderAfter: zOrder))
         redoStack.removeAll()
         hitTestBuffer.drawObject(obj)
         refreshDebugView()
