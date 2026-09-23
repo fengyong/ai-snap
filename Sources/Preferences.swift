@@ -1,6 +1,28 @@
 import Cocoa
 import Carbon.HIToolbox
 
+/// 状态栏图标的鼠标按键动作。
+///
+/// 带 String 原始值：与 `LineStyle` 同样的持久化惯例（UserDefaults 存原始值，
+/// 老版本里出现无法识别的值时回缺省，而不是崩溃或错位）。
+enum TrayClickAction: String, CaseIterable {
+    case menu
+    case regionCapture
+    case windowCapture
+    case history
+    case noAction
+
+    var displayName: String {
+        switch self {
+        case .menu:           return "弹出菜单"
+        case .regionCapture:  return "区域截图"
+        case .windowCapture:  return "窗口截图"
+        case .history:        return "截图历史"
+        case .noAction:       return "无动作"
+        }
+    }
+}
+
 /// 用户偏好的持久化存取。
 ///
 /// **为什么单独抽一层**：此前线宽、颜色、箭头样式、线型、水印、调色板每次重启
@@ -39,6 +61,10 @@ final class Preferences {
         case updateFeedURL
         case autoCheckUpdates
         case recordHistory
+        case ignoredBundleIdentifiers
+        case trayLeftAction
+        case trayRightAction
+        case trayMiddleAction
     }
 
     /// 缺省值集中在这里。改动这一处即同时改变「新用户初值」与「老用户缺键回退值」。
@@ -55,6 +81,17 @@ final class Preferences {
         /// 关掉时**连写盘都不发生** —— 截图常含敏感内容，用户对"我没保存的东西
         /// 却躺在磁盘上"的接受度因人而异，开关必须是真的开关。
         static let recordHistory = true
+
+        /// 热键忽略列表（bundle identifier）。默认空 —— 不在任何应用里忽略。
+        static let ignoredBundleIdentifiers: [String] = []
+
+        /// 状态栏图标左/右/中键的动作。
+        /// 默认左右键都弹菜单、中键无动作 —— 与改造前「点图标即弹菜单」的行为完全一致，
+        /// 老用户升级零变化。**三个键里必须始终有一个是 .menu**（设置窗口负责守卫），
+        /// 否则常驻状态栏、没有 Dock 图标的应用将无法到达偏好设置/历史/退出。
+        static let trayLeftAction: TrayClickAction = .menu
+        static let trayRightAction: TrayClickAction = .menu
+        static let trayMiddleAction: TrayClickAction = .noAction
 
         /// 默认快捷键。刻意避开两类组合：
         ///
@@ -207,6 +244,57 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.recordHistory.rawValue) }
     }
 
+    // MARK: - 热键忽略列表
+
+    /// 在这些应用处于前台时，全局截图快捷键不触发动作。
+    ///
+    /// 存的是 bundle identifier 数组。读出时统一做「去空白 → 去空串 → 去重」，
+    /// 这样手改 plist 或旧版本写入的脏值不会在 UI 里冒出空行。
+    var ignoredBundleIdentifiers: [String] {
+        get {
+            guard let raw = defaults.stringArray(forKey: Key.ignoredBundleIdentifiers.rawValue) else {
+                return Defaults.ignoredBundleIdentifiers
+            }
+            var seen = Set<String>()
+            return raw.compactMap { item -> String? in
+                let trimmed = item.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty, !seen.contains(trimmed) else { return nil }
+                seen.insert(trimmed)
+                return trimmed
+            }
+        }
+        set { defaults.set(newValue, forKey: Key.ignoredBundleIdentifiers.rawValue) }
+    }
+
+    // MARK: - 状态栏动作
+
+    var trayLeftAction: TrayClickAction {
+        get { trayAction(Key.trayLeftAction, fallback: Defaults.trayLeftAction) }
+        set { setTrayAction(newValue, key: Key.trayLeftAction) }
+    }
+
+    var trayRightAction: TrayClickAction {
+        get { trayAction(Key.trayRightAction, fallback: Defaults.trayRightAction) }
+        set { setTrayAction(newValue, key: Key.trayRightAction) }
+    }
+
+    var trayMiddleAction: TrayClickAction {
+        get { trayAction(Key.trayMiddleAction, fallback: Defaults.trayMiddleAction) }
+        set { setTrayAction(newValue, key: Key.trayMiddleAction) }
+    }
+
+    private func trayAction(_ key: Key, fallback: TrayClickAction) -> TrayClickAction {
+        guard let raw = defaults.string(forKey: key.rawValue),
+              let action = TrayClickAction(rawValue: raw) else {
+            return fallback
+        }
+        return action
+    }
+
+    private func setTrayAction(_ action: TrayClickAction, key: Key) {
+        defaults.set(action.rawValue, forKey: key.rawValue)
+    }
+
     // MARK: - 更新
 
     /// 更新清单（appcast）地址。留空表示"还没有发布渠道"，此时只保留手动检查入口。
@@ -234,7 +322,8 @@ final class Preferences {
         for key in [Key.lineWidth, Key.lineStyle, Key.colorHex, Key.arrowStyleIndex,
                     Key.paletteIndex, Key.lastToolTag, Key.watermarkEnabled, Key.watermarkText,
                     Key.hotkeyRegion, Key.hotkeyWindow, Key.updateFeedURL, Key.autoCheckUpdates,
-                    Key.recordHistory] {
+                    Key.recordHistory, Key.ignoredBundleIdentifiers,
+                    Key.trayLeftAction, Key.trayRightAction, Key.trayMiddleAction] {
             defaults.removeObject(forKey: key.rawValue)
         }
     }

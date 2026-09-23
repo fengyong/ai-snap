@@ -1,12 +1,13 @@
 import Cocoa
 import Carbon.HIToolbox
+import UniformTypeIdentifiers
 
 /// 偏好设置窗口。
 ///
-/// 只有「全局快捷键」与「更新」两组设置 —— 线宽、颜色、线型、箭头样式、水印都已经在
-/// 标注窗口的工具栏里，**再放一份到这里只会造出两个能改同一份数据的地方**
+/// 这里只放**没有别的入口**的设置：全局快捷键（含忽略应用列表）、状态栏按键动作、
+/// 开机启动、截图历史、更新。线宽、颜色、线型、箭头样式、水印已经在标注窗口的工具栏里，
+/// **再放一份到这里只会造出两个能改同一份数据的地方**
 /// （改了一处另一处不刷新，用户看到的状态就自相矛盾）。
-/// 这两组都没有别的入口，所以只有它们需要这个窗口。
 final class SettingsWindowController: NSWindowController {
 
     /// 快捷键改动后由外部（AppDelegate）重新注册，并把问题反馈回来。
@@ -24,6 +25,12 @@ final class SettingsWindowController: NSWindowController {
     private var autoCheckBox: NSButton!
     private var launchAtLoginBox: NSButton!
     private var recordHistoryBox: NSButton!
+    /// 忽略应用列表的行容器（列表变化时整体重建）
+    private var ignoredAppsBox: NSStackView!
+    /// 状态栏左/右/中键动作下拉框
+    private var trayLeftPopup: NSPopUpButton!
+    private var trayRightPopup: NSPopUpButton!
+    private var trayMiddlePopup: NSPopUpButton!
     private var keyMonitor: Any?
     /// 正在录制的目标：nil 表示没有在录制
     private var recordingTarget: RecordingTarget?
@@ -87,6 +94,31 @@ final class SettingsWindowController: NSWindowController {
         statusLabel.isHidden = true
         root.addArrangedSubview(statusLabel)
 
+        // ── 忽略的应用程序 ──
+        let ignoreTitle = NSTextField(labelWithString: "在这些应用中忽略快捷键")
+        ignoreTitle.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        root.addArrangedSubview(ignoreTitle)
+
+        ignoredAppsBox = NSStackView()
+        ignoredAppsBox.orientation = .vertical
+        ignoredAppsBox.alignment = .leading
+        ignoredAppsBox.spacing = 6
+        ignoredAppsBox.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
+        root.addArrangedSubview(ignoredAppsBox)
+
+        let addAppButton = NSButton(title: "＋ 添加应用程序…",
+                                    target: self, action: #selector(addIgnoredApp))
+        addAppButton.bezelStyle = .rounded
+        root.addArrangedSubview(addAppButton)
+
+        let ignoreHint = NSTextField(wrappingLabelWithString:
+            "列表中的应用处于前台时，截图快捷键不会触发。受 macOS 限制，被拦截的按键不会转发给该应用"
+            + "（默认组合 ⌃⌘A / ⌃⌘W 很冷门，一般无影响）。支持 bundle id 前缀规则，以 * 结尾。")
+        ignoreHint.font = NSFont.systemFont(ofSize: 11)
+        ignoreHint.textColor = .secondaryLabelColor
+        ignoreHint.preferredMaxLayoutWidth = 420
+        root.addArrangedSubview(ignoreHint)
+
         let separator = NSBox()
         separator.boxType = .separator
         root.addArrangedSubview(separator)
@@ -133,6 +165,30 @@ final class SettingsWindowController: NSWindowController {
         let separatorHistory = NSBox()
         separatorHistory.boxType = .separator
         root.addArrangedSubview(separatorHistory)
+
+        // ── 状态栏图标 ──
+        let trayTitle = NSTextField(labelWithString: "状态栏图标")
+        trayTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        root.addArrangedSubview(trayTitle)
+
+        trayLeftPopup = makeTrayPopup()
+        trayRightPopup = makeTrayPopup()
+        trayMiddlePopup = makeTrayPopup()
+        root.addArrangedSubview(makeTrayRow(label: "左键", popup: trayLeftPopup))
+        root.addArrangedSubview(makeTrayRow(label: "右键", popup: trayRightPopup))
+        root.addArrangedSubview(makeTrayRow(label: "中键", popup: trayMiddlePopup))
+
+        let trayHint = NSTextField(wrappingLabelWithString:
+            "分别绑定单击状态栏图标的动作，修改即时生效。至少保留一个按键为「弹出菜单」，"
+            + "否则将无法从状态栏打开偏好设置、截图历史或退出。")
+        trayHint.font = NSFont.systemFont(ofSize: 11)
+        trayHint.textColor = .secondaryLabelColor
+        trayHint.preferredMaxLayoutWidth = 420
+        root.addArrangedSubview(trayHint)
+
+        let separatorTray = NSBox()
+        separatorTray.boxType = .separator
+        root.addArrangedSubview(separatorTray)
 
         // ── 更新 ──
         let updateTitle = NSTextField(labelWithString: "更新")
@@ -236,12 +292,204 @@ final class SettingsWindowController: NSWindowController {
         feedURLField.stringValue = Preferences.shared.updateFeedURL
         autoCheckBox.state = Preferences.shared.automaticallyChecksForUpdates ? .on : .off
         recordHistoryBox.state = Preferences.shared.recordHistory ? .on : .off
+        rebuildIgnoredAppsList()
+        syncTrayPopupsToPreferences()
         refreshLaunchAtLogin()
+    }
+
+    /// 内容行数变化后重算窗口高度（与 launchAtLoginToggled 里同一手法）。
+    private func fitWindow() {
+        guard let window = window else { return }
+        window.setContentSize(window.contentView?.fittingSize ?? window.frame.size)
     }
 
     @objc private func recordHistoryToggled(_ sender: NSButton) {
         Preferences.shared.recordHistory = (sender.state == .on)
     }
+
+    // MARK: - 忽略的应用程序
+
+    /// 按偏好重建忽略列表的行。整体重建最省心：增删之后不必手工对齐行与数据。
+    private func rebuildIgnoredAppsList() {
+        ignoredAppsBox.subviews.forEach { $0.removeFromSuperview() }
+
+        let ids = Preferences.shared.ignoredBundleIdentifiers
+        if ids.isEmpty {
+            let empty = NSTextField(labelWithString: "（无）所有应用中快捷键都正常生效")
+            empty.font = NSFont.systemFont(ofSize: 11)
+            empty.textColor = .secondaryLabelColor
+            ignoredAppsBox.addArrangedSubview(empty)
+            return
+        }
+
+        for id in ids {
+            ignoredAppsBox.addArrangedSubview(makeIgnoredAppRow(bundleID: id))
+        }
+    }
+
+    private func makeIgnoredAppRow(bundleID: String) -> NSView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+
+        let name = displayName(forBundleID: bundleID)
+        let nameLabel = NSTextField(labelWithString: name)
+        nameLabel.font = NSFont.systemFont(ofSize: 12)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        nameLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(nameLabel)
+
+        // 显示名与 bundle id 不同时，把灰色 id 附在后面，方便确认选对了应用
+        if name != bundleID {
+            let idLabel = NSTextField(labelWithString: bundleID)
+            idLabel.font = NSFont.systemFont(ofSize: 10)
+            idLabel.textColor = .secondaryLabelColor
+            idLabel.lineBreakMode = .byTruncatingTail
+            idLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            row.addArrangedSubview(idLabel)
+        }
+
+        let remove = NSButton(title: "－", target: self, action: #selector(removeIgnoredApp(_:)))
+        remove.bezelStyle = .rounded
+        remove.identifier = NSUserInterfaceItemIdentifier(bundleID)
+        remove.toolTip = "移除"
+        row.addArrangedSubview(remove)
+
+        row.widthAnchor.constraint(lessThanOrEqualToConstant: 420).isActive = true
+        return row
+    }
+
+    /// 用 bundle id 反查应用显示名；查不到（应用已卸载/是前缀规则）就直接显示 id。
+    private func displayName(forBundleID id: String) -> String {
+        if id.hasSuffix("*") { return id }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id),
+              let bundle = Bundle(url: url) else { return id }
+        let info = bundle.localizedInfoDictionary ?? bundle.infoDictionary
+        if let display = info?["CFBundleDisplayName"] as? String, !display.isEmpty { return display }
+        if let name = info?["CFBundleName"] as? String, !name.isEmpty { return name }
+        return id
+    }
+
+    @objc private func addIgnoredApp() {
+        let panel = NSOpenPanel()
+        panel.title = "选择要忽略快捷键的应用"
+        panel.message = "可多选。选中的应用处于前台时，截图全局快捷键不会触发。"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [UTType.application]
+        guard let window = window else { return }
+
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let self = self else { return }
+
+            var ids = Preferences.shared.ignoredBundleIdentifiers
+            var unreadable: [String] = []
+            for appURL in panel.urls {
+                guard let bundleID = Bundle(url: appURL)?.bundleIdentifier else {
+                    unreadable.append(appURL.deletingPathExtension().lastPathComponent)
+                    continue
+                }
+                if !ids.contains(bundleID) { ids.append(bundleID) }
+            }
+            Preferences.shared.ignoredBundleIdentifiers = ids
+            self.rebuildIgnoredAppsList()
+            self.fitWindow()
+
+            if !unreadable.isEmpty {
+                let alert = NSAlert()
+                alert.messageText = "部分应用无法识别"
+                alert.informativeText = "以下应用读不到 bundle identifier，未加入列表：\n"
+                    + unreadable.joined(separator: "、")
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "好")
+                alert.beginSheetModal(for: window)
+            }
+        }
+    }
+
+    @objc private func removeIgnoredApp(_ sender: NSButton) {
+        guard let id = sender.identifier?.rawValue else { return }
+        var ids = Preferences.shared.ignoredBundleIdentifiers
+        ids.removeAll { $0 == id }
+        Preferences.shared.ignoredBundleIdentifiers = ids
+        rebuildIgnoredAppsList()
+        fitWindow()
+    }
+
+    // MARK: - 状态栏按键动作
+
+    private func makeTrayPopup() -> NSPopUpButton {
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for action in TrayClickAction.allCases {
+            let item = NSMenuItem(title: action.displayName, action: nil, keyEquivalent: "")
+            item.representedObject = action.rawValue
+            popup.menu?.addItem(item)
+        }
+        popup.target = self
+        popup.action = #selector(trayActionChanged(_:))
+        return popup
+    }
+
+    private func makeTrayRow(label: String, popup: NSPopUpButton) -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 12
+        let text = NSTextField(labelWithString: label)
+        text.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        row.addArrangedSubview(text)
+        row.addArrangedSubview(popup)
+        return row
+    }
+
+    private func syncTrayPopupsToPreferences() {
+        select(trayLeftPopup, action: Preferences.shared.trayLeftAction)
+        select(trayRightPopup, action: Preferences.shared.trayRightAction)
+        select(trayMiddlePopup, action: Preferences.shared.trayMiddleAction)
+    }
+
+    private func select(_ popup: NSPopUpButton, action: TrayClickAction) {
+        guard let item = popup.itemArray.first(where: {
+            ($0.representedObject as? String) == action.rawValue
+        }) else { return }
+        popup.select(item)
+    }
+
+    private func selectedAction(_ popup: NSPopUpButton) -> TrayClickAction {
+        guard let raw = popup.selectedItem?.representedObject as? String,
+              let action = TrayClickAction(rawValue: raw) else { return .menu }
+        return action
+    }
+
+    @objc private func trayActionChanged(_ sender: NSPopUpButton) {
+        let left = selectedAction(trayLeftPopup)
+        let right = selectedAction(trayRightPopup)
+        let middle = selectedAction(trayMiddlePopup)
+
+        // 兜底守卫：三个键必须留一个「弹出菜单」，否则状态栏里再也到不了偏好/历史/退出。
+        // 拒绝本次修改：不落盘，并把控件回滚为已存值。
+        guard [left, right, middle].contains(.menu) else {
+            syncTrayPopupsToPreferences()
+            statusLabel.stringValue = Self.menuGuardMessage
+            statusLabel.textColor = .systemOrange
+            statusLabel.isHidden = false
+            fitWindow()
+            return
+        }
+
+        Preferences.shared.trayLeftAction = left
+        Preferences.shared.trayRightAction = right
+        Preferences.shared.trayMiddleAction = middle
+        // 若此前显示的是本功能的守卫告警，现在状态合法了，收掉它；
+        // 热键注册等其它告警按文案区分，不误清。
+        if statusLabel.stringValue == Self.menuGuardMessage {
+            statusLabel.isHidden = true
+        }
+    }
+
+    private static let menuGuardMessage =
+        "至少保留一个按键为「弹出菜单」，否则将无法打开偏好设置与退出。"
 
     // MARK: - 开机启动
 
@@ -385,9 +633,11 @@ final class SettingsWindowController: NSWindowController {
     func present() {
         stopRecording()
         // 每次都重新读：开机启动的真实状态在系统手里，用户可能在
-        // 「系统设置 → 通用 → 登录项与扩展」里改过，窗口不能显示上次的旧状态
+        // 「系统设置 → 通用 → 登录项与扩展」里改过，窗口不能显示上次的旧值
         refreshFromPreferences()
         showProblems([])
+        // 忽略列表可能在窗口关闭期间被（未来的）其他入口改动，重新按内容量高度
+        fitWindow()
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)

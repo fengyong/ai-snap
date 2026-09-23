@@ -2,6 +2,9 @@ import Cocoa
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
+    /// 状态栏菜单。不再直接挂到 `statusItem.menu`（那样左键/右键都只会弹菜单、无法绑动作），
+    /// 而是在按键动作解析为 `.menu` 时由我们自己弹出（见 `statusBarClicked(_:)`）。
+    private var statusMenu: NSMenu!
     private var regionSelectionWindow: RegionSelectionWindow?
     private var annotationWindow: AnnotationWindow?
     private var settingsWindowController: SettingsWindowController?
@@ -26,8 +29,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// 注册全局快捷键。改动后（设置窗口）也走这里。
     private func setupHotkeys() {
         let problems = HotkeyRegistration.applyAll(
-            regionHandler: { [weak self] in self?.startRegionCapture() },
-            windowHandler: { [weak self] in self?.startWindowCapture() }
+            regionHandler: { [weak self] in self?.performHotkeyAction { self?.startRegionCapture() } },
+            windowHandler: { [weak self] in self?.performHotkeyAction { self?.startWindowCapture() } }
         )
 
         guard !problems.isEmpty else { return }
@@ -52,6 +55,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
+    /// 全局热键动作的统一入口：前台应用命中忽略列表时直接跳过。
+    ///
+    /// **只能包热键回调**，不能加进 `startRegionCapture`/`startWindowCapture` 本身 ——
+    /// 那两个方法也被状态栏菜单调用，用户主动点菜单时不应受忽略列表影响。
+    /// 判定必须在一切开窗/激活动作之前同步完成：Carbon 热键不会激活本应用，
+    /// 此刻 frontmostApplication 仍是用户所在的 app，判定才准确。
+    private func performHotkeyAction(_ action: () -> Void) {
+        guard !isFrontmostAppIgnored() else { return }
+        action()
+    }
+
+    private func isFrontmostAppIgnored() -> Bool {
+        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        return HotkeyIgnorePolicy.isIgnored(bundleID: bundleID,
+                                            rules: Preferences.shared.ignoredBundleIdentifiers)
+    }
+
     /// 截图历史窗口。没有记录时也照常打开 —— 窗口里会说明"还没有记录"，
     /// 比点了菜单什么都不发生要好。
     @objc private func showHistory() {
@@ -73,8 +93,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             // 改键后重新注册，并把问题回传给设置窗口显示
             controller.onHotkeysChanged = { [weak self] in
                 HotkeyRegistration.applyAll(
-                    regionHandler: { [weak self] in self?.startRegionCapture() },
-                    windowHandler: { [weak self] in self?.startWindowCapture() }
+                    regionHandler: { [weak self] in self?.performHotkeyAction { self?.startRegionCapture() } },
+                    windowHandler: { [weak self] in self?.performHotkeyAction { self?.startWindowCapture() } }
                 )
             }
             controller.onCheckForUpdates = { [weak self] in
@@ -192,11 +212,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     private func setupStatusBar() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "camera.viewfinder",
-                                   accessibilityDescription: "AISnap")
-        }
+        guard let button = statusItem.button else { return }
+        button.image = NSImage(systemSymbolName: "camera.viewfinder",
+                               accessibilityDescription: "AISnap")
 
+        statusMenu = makeStatusMenu()
+
+        // 关键：**不要**设 `statusItem.menu`。一旦设置，AppKit 会在点击时自动弹菜单，
+        // 收不到按键动作，也就无法为左/右/中键分别绑动作。
+        // 改为订阅三种鼠标抬起事件，在 action 里按当前偏好路由。
+        button.target = self
+        button.action = #selector(statusBarClicked(_:))
+        button.sendAction(on: [.leftMouseUp, .rightMouseUp, .otherMouseUp])
+    }
+
+    private func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "区域截图", action: #selector(startRegionCapture), keyEquivalent: "1"))
         menu.addItem(NSMenuItem(title: "窗口截图", action: #selector(startWindowCapture), keyEquivalent: "2"))
@@ -215,8 +245,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         for item in menu.items {
             item.target = self
         }
+        return menu
+    }
 
-        statusItem.menu = menu
+    /// 状态栏图标点击：按「哪个键 + 当前偏好」路由到对应动作。
+    ///
+    /// 事件类型与 buttonNumber 的对应：
+    /// - 左键 `.leftMouseUp`，buttonNumber 0
+    /// - 右键 `.rightMouseUp`，buttonNumber 1（control-click 也会被系统合成成右键）
+    /// - 中键 `.otherMouseUp`，buttonNumber 2
+    @objc private func statusBarClicked(_ sender: NSStatusBarButton?) {
+        guard let button = sender ?? statusItem.button else { return }
+        let event = NSApp.currentEvent
+
+        let action: TrayClickAction
+        switch event?.buttonNumber {
+        case 1:  action = Preferences.shared.trayRightAction
+        case 2:  action = Preferences.shared.trayMiddleAction
+        default: action = Preferences.shared.trayLeftAction
+        }
+
+        switch action {
+        case .menu:
+            popUpStatusMenu(button)
+        case .regionCapture:
+            startRegionCapture()
+        case .windowCapture:
+            startWindowCapture()
+        case .history:
+            showHistory()
+        case .noAction:
+            break
+        }
+    }
+
+    /// 手动弹出状态栏菜单（自动弹菜单的前提 `statusItem.menu` 已被我们弃用）。
+    private func popUpStatusMenu(_ button: NSStatusBarButton) {
+        button.isHighlighted = true
+        // 锚点取按钮左下角、y 抬到按钮上方 2pt，菜单即贴在图标下沿展开，
+        // 与系统自动弹菜单的默认位置一致。
+        statusMenu.popUp(positioning: nil,
+                         at: NSPoint(x: 0, y: button.bounds.height + 2),
+                         in: button)
+        button.isHighlighted = false
     }
 
     // MARK: - Actions
