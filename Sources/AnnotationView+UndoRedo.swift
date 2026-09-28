@@ -66,6 +66,16 @@ extension AnnotationView {
                 shape.text = previous
                 redoStack.append(.editText(colorKey: colorKey, previous: current))
             }
+
+        case .restyle(let colorKey, let oldColor, _, let oldLineWidth, _):
+            if let obj = objects[colorKey] {
+                obj.color = oldColor
+                if let width = oldLineWidth { AnnotationView.setLineWidth(width, on: obj) }
+                redoStack.append(.restyle(colorKey: colorKey,
+                                          oldColor: oldColor, newColor: obj.color,
+                                          oldLineWidth: oldLineWidth,
+                                          newLineWidth: AnnotationView.lineWidth(of: obj)))
+            }
         }
 
         hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
@@ -128,6 +138,16 @@ extension AnnotationView {
                 let current = shape.text
                 shape.text = previous
                 undoStack.append(.editText(colorKey: colorKey, previous: current))
+            }
+
+        case .restyle(let colorKey, let oldColor, let newColor, let oldLineWidth, let newLineWidth):
+            if let obj = objects[colorKey] {
+                obj.color = newColor
+                if let width = newLineWidth { AnnotationView.setLineWidth(width, on: obj) }
+                undoStack.append(.restyle(colorKey: colorKey,
+                                          oldColor: oldColor, newColor: newColor,
+                                          oldLineWidth: oldLineWidth,
+                                          newLineWidth: newLineWidth))
             }
         }
 

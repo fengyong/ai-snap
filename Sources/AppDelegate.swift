@@ -184,11 +184,49 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         }
     }
 
-    private func checkScreenCapturePermission() -> Bool {
+    /// 权限判定。
+    ///
+    /// `CGPreflightScreenCaptureAccess()` 有一个众所周知的假阴性：用户到系统设置里
+    /// 授权之后，**同一个进程生命周期内它仍可能返回 false**（系统要求重启应用才更新
+    /// 这个标志）。只信它的话，用户明明已经授权，却被反复引导去授权 —— 怎么点都没用。
+    ///
+    /// 所以再加一次**真实的极小截图探测**兜底：能拍到非透明像素就说明确实有权限。
+    /// 非 private：探针要直接验证"已授权时不得被判成无权限"
+    func checkScreenCapturePermission() -> Bool {
         if #available(macOS 10.15, *) {
-            return CGPreflightScreenCaptureAccess()
+            if CGPreflightScreenCaptureAccess() { return true }
+            return canCaptureRealPixels()
         }
         return true
+    }
+
+    /// 用一张极小截图探测"到底能不能拍到东西"。
+    ///
+    /// 探测矩形取 **2×2 点**而不是 1×1：在 1x 屏上 1pt 就只有 1 个像素，
+    /// 而"全透明"判定至少要 2×2 才有意义 —— 1 个像素时任何实现都容易把
+    /// 不透明误判成透明，于是兜底探测在 1x 屏上恒为 false（这个坑踩过）。
+    func canCaptureRealPixels() -> Bool {
+        guard let probe = CGWindowListCreateImage(CGRect(x: 0, y: 0, width: 2, height: 2),
+                                                  .optionOnScreenOnly, kCGNullWindowID,
+                                                  [.bestResolution]) else {
+            return false
+        }
+        let w = probe.width, h = probe.height
+        guard w >= 1, h >= 1 else { return false }
+
+        var buffer = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(data: &buffer, width: w, height: h,
+                                  bitsPerComponent: 8, bytesPerRow: w * 4,
+                                  space: CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            return false
+        }
+        ctx.draw(probe, in: CGRect(x: 0, y: 0, width: w, height: h))
+        // 只要有一个像素不是全透明，就说明真的拍到了屏幕内容
+        for i in stride(from: 3, to: buffer.count, by: 4) where buffer[i] != 0 {
+            return true
+        }
+        return false
     }
 
     /// 展示屏幕录制权限引导。
@@ -429,7 +467,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private func openAnnotationWindow(with capture: CapturedImage) {
         let nsImage = NSImage(cgImage: capture.image, size: capture.logicalSize)
 
-        let window = AnnotationWindow(image: nsImage, anchor: capture.anchorRect)
+        // 把**像素**尺寸显式传下去：导出分辨率必须锚在源截图上，
+        // 而不是让 NSImage.lockFocus() 按"当前显示器"猜（1x 屏上会掉一半像素）
+        let window = AnnotationWindow(image: nsImage, anchor: capture.anchorRect,
+                                      pixelSize: CGSize(width: capture.image.width,
+                                                        height: capture.image.height))
         if capture.anchorRect != nil {
             // 标注窗口关闭时收掉冻结覆盖层 —— 覆盖层的所有权在 regionSelectionWindow 手上，
             // 标注窗口只负责通知

@@ -151,6 +151,78 @@ class AnnotationView: NSView {
         exportedFingerprint = contentFingerprint
     }
 
+    // MARK: - 改选中对象的样式
+
+    /// 对象当前的线宽；不支持线宽的对象（贴纸 / 文字 / 聚光灯）返回 nil
+    static func lineWidth(of obj: any AnnotationObject) -> CGFloat? {
+        if let arrow = obj as? Arrow { return arrow.lineWidth }
+        if let rect = obj as? RectangleShape { return rect.lineWidth }
+        if let circle = obj as? CircleShape { return circle.lineWidth }
+        return nil
+    }
+
+    static func setLineWidth(_ value: CGFloat, on obj: any AnnotationObject) {
+        if let arrow = obj as? Arrow { arrow.lineWidth = value }
+        else if let rect = obj as? RectangleShape { rect.lineWidth = value }
+        else if let circle = obj as? CircleShape { circle.lineWidth = value }
+    }
+
+    /// 颜色是否视为同一个（动态系统色直接 `==` 会误判，统一折到 deviceRGB 比）
+    private static func colorsEqual(_ a: NSColor, _ b: NSColor) -> Bool {
+        guard let x = a.usingColorSpace(.deviceRGB),
+              let y = b.usingColorSpace(.deviceRGB) else { return a == b }
+        return abs(x.redComponent - y.redComponent) < 0.002
+            && abs(x.greenComponent - y.greenComponent) < 0.002
+            && abs(x.blueComponent - y.blueComponent) < 0.002
+            && abs(x.alphaComponent - y.alphaComponent) < 0.002
+    }
+
+    /// 选中对象的颜色（无选中时为 nil）
+    var selectedObjectColor: NSColor? {
+        guard let key = selectedKey, let obj = objects[key] else { return nil }
+        return obj.color
+    }
+
+    /// 选中对象的线宽（无选中 / 该类型没有线宽时为 nil）
+    var selectedObjectLineWidth: CGFloat? {
+        guard let key = selectedKey, let obj = objects[key] else { return nil }
+        return Self.lineWidth(of: obj)
+    }
+
+    /// 把**选中对象**的样式改成给定值（可撤销）。返回是否真的发生了变化。
+    ///
+    /// 与 `currentColor` / `currentLineWidth` 的区别：那两个只影响**之后新画**的对象，
+    /// 这里改的是已经画好、且当前被选中的那一个 —— 用户选中一个箭头再点色点，
+    /// 期望的是"把这一个改掉"，而不是"下一个画出来是什么颜色"。
+    @discardableResult
+    func restyleSelection(color newColor: NSColor? = nil, lineWidth newLineWidth: CGFloat? = nil) -> Bool {
+        guard let key = selectedKey, let obj = objects[key] else { return false }
+
+        let oldColor = obj.color
+        let oldLineWidth = Self.lineWidth(of: obj)
+
+        var changed = false
+        if let color = newColor, !Self.colorsEqual(color, obj.color) {
+            obj.color = color
+            changed = true
+        }
+        if let width = newLineWidth, let current = oldLineWidth, abs(current - width) > 0.01 {
+            Self.setLineWidth(width, on: obj)
+            changed = true
+        }
+        guard changed else { return false }
+
+        undoStack.append(.restyle(colorKey: key,
+                                  oldColor: oldColor, newColor: obj.color,
+                                  oldLineWidth: oldLineWidth,
+                                  newLineWidth: Self.lineWidth(of: obj)))
+        redoStack.removeAll()
+        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+        refreshDebugView()
+        needsDisplay = true
+        return true
+    }
+
     // MARK: 橡皮擦状态
     //
     // 橡皮擦不是"拖拽构造一个对象"，而是边拖边删，所以它有自己的一组状态，
@@ -201,8 +273,15 @@ class AnnotationView: NSView {
     /// 进入编辑前的原文，用于 Esc 取消与撤销
     var textEditingOriginalText: String = ""
 
-    init(image: NSImage) {
+    /// 源截图的**像素**尺寸。导出时以此为准。
+    ///
+    /// 不传的话就只能靠 `NSImage.lockFocus()` 让系统按"当前显示器"决定分辨率 ——
+    /// 在 1x 外接屏上标注 2x 截图，导出的 PNG 会掉一半像素。
+    private let sourcePixelSize: CGSize?
+
+    init(image: NSImage, pixelSize: CGSize? = nil) {
         self.baseImage = image
+        self.sourcePixelSize = pixelSize
         let size = image.size
         self.hitTestBuffer = HitTestBuffer(size: size)
         super.init(frame: NSRect(origin: .zero, size: size))
@@ -1246,33 +1325,86 @@ class AnnotationView: NSView {
 
     // MARK: - Export
 
+    /// 导出用的像素尺寸：优先用调用方显式传入的源图像素尺寸，
+    /// 否则从 `baseImage` 的 representation 里取最大的那个
+    /// （`NSImage(cgImage:size:)` 的 rep 往往报不出可靠像素数，所以显式传入才是正路）。
+    private var exportPixelSize: CGSize {
+        if let explicit = sourcePixelSize, explicit.width >= 1, explicit.height >= 1 {
+            return explicit
+        }
+        let rep = baseImage.representations
+            .filter { $0.pixelsWide > 0 && $0.pixelsHigh > 0 }
+            .max { $0.pixelsWide * $0.pixelsHigh < $1.pixelsWide * $1.pixelsHigh }
+        if let rep = rep {
+            return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
+        }
+        return CGSize(width: baseImage.size.width * 2, height: baseImage.size.height * 2)
+    }
+
     /// 生成最终合成图片（底图 + 所有标注对象）
     func compositeImage() -> NSImage {
         // 保存 / 复制 / 贴图都会走这里 —— 内容既然已经送出去，之后关窗就不必再提醒
         markContentExported()
 
-        let size = baseImage.size
-        let image = NSImage(size: size)
+        let pointSize = baseImage.size
+        let pixels = exportPixelSize
+        let scale = max(pixels.width / max(pointSize.width, 1), 0.01)
+
+        // 用**显式位图**而不是 `NSImage.lockFocus()`：
+        // lockFocus 的分辨率取决于"当前显示器"的 backingScaleFactor ——
+        // 在 1x 外接屏上标注 2x 截图，导出的 PNG 会掉一半像素（在 2x 屏上则碰巧正确，
+        // 所以这个 bug 只在换显示器时才暴露）。这里按源图**像素**尺寸建上下文，
+        // 之后照常按"点"坐标绘制，由 scaleBy 放大到像素。
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil,
+                                         pixelsWide: max(Int(pixels.width), 1),
+                                         pixelsHigh: max(Int(pixels.height), 1),
+                                         bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB,
+                                         bytesPerRow: 0, bitsPerPixel: 0) else {
+            return compositeViaLockFocus(pointSize: pointSize)   // 兜底，正常不会走到
+        }
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            ctx.scaleBy(x: scale, y: scale)
+            render(into: ctx, pointSize: pointSize)
+        }
+        NSGraphicsContext.restoreGraphicsState()
+
+        let image = NSImage(size: pointSize)
+        image.addRepresentation(rep)
+        return image
+    }
+
+    /// 建不出显式位图时的兜底路径（分辨率随当前显示器，仅用于不中断导出）
+    private func compositeViaLockFocus(pointSize: NSSize) -> NSImage {
+        let image = NSImage(size: pointSize)
         image.lockFocus()
         if let ctx = NSGraphicsContext.current?.cgContext {
-            let rect = CGRect(origin: .zero, size: size)
-            baseImage.draw(in: rect)
-            // Spotlight 遮罩
-            drawSpotlightOverlay(in: ctx)
-            for key in zOrder {
-                if let obj = objects[key] {
-                    // 用 drawForExport 而不是 draw：聚光灯的虚线边框是编辑器 UI，
-                    // 不该出现在导出图里（其余类型默认行为与 draw 相同）
-                    obj.drawForExport(in: ctx)
-                }
-            }
-            // 水印（最后绘制，覆盖在所有内容之上）
-            if watermarkConfig.enabled && !watermarkConfig.text.isEmpty {
-                drawWatermark(in: ctx, size: size)
-            }
+            render(into: ctx, pointSize: pointSize)
         }
         image.unlockFocus()
         return image
+    }
+
+    /// 把底图、聚光灯遮罩、所有对象、水印渲染进给定上下文（坐标是"点"）
+    private func render(into ctx: CGContext, pointSize: NSSize) {
+        let rect = CGRect(origin: .zero, size: pointSize)
+        baseImage.draw(in: rect)
+        // Spotlight 遮罩
+        drawSpotlightOverlay(in: ctx)
+        for key in zOrder {
+            if let obj = objects[key] {
+                // 用 drawForExport 而不是 draw：聚光灯的虚线边框是编辑器 UI，
+                // 不该出现在导出图里（其余类型默认行为与 draw 相同）
+                obj.drawForExport(in: ctx)
+            }
+        }
+        // 水印（最后绘制，覆盖在所有内容之上）
+        if watermarkConfig.enabled && !watermarkConfig.text.isEmpty {
+            drawWatermark(in: ctx, size: pointSize)
+        }
     }
 
     /// 绘制水印

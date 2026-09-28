@@ -353,6 +353,10 @@ enum UndoAction {
     case scale(colorKey: UInt32, factor: CGFloat)
     /// 改了文字标注的内容（撤销 = 改回 previous）
     case editText(colorKey: UInt32, previous: String)
+    /// 改了选中对象的样式（颜色 / 线宽）。同时带新旧值：撤销取旧、重做取新。
+    /// 线宽用可选值 —— 贴纸/文字/聚光灯没有线宽，那类对象传 nil。
+    case restyle(colorKey: UInt32, oldColor: NSColor, newColor: NSColor,
+                 oldLineWidth: CGFloat?, newLineWidth: CGFloat?)
 }
 
 // MARK: - Cyclic Index
