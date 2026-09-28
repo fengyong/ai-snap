@@ -635,6 +635,170 @@ do {
           "\(AnnotationView.lineWidth(of: rect) ?? -1)")
 }
 
+// MARK: - 12. 区域截图路径：「放弃」按钮必须真的关窗
+
+print("\n=== 12. borderless（区域截图）上「放弃」必须真的关窗 ===")
+do {
+    // 区域截图那条路是 `.borderless`（没有 `.closable`），而 AppKit 对这类窗口的
+    // `performClose` 只响一声、**不关窗**。曾经「放弃」就是走 performClose 的，
+    // 于是这条**主路径**上按钮完全没反应（窗口截图那条有标题栏 X 兜着，反而正常）。
+    // 这里直接调按钮的动作，验它确实把窗关掉 —— 没有任何标注，所以不会弹确认框。
+    let borderless = AnnotationWindow(image: blankCanvas(400, 300),
+                                      anchor: NSRect(x: 100, y: 100, width: 200, height: 150))
+    borderless.makeKeyAndOrderFront(nil)
+    check("区域截图窗口确实是 borderless（没有 .closable）",
+          !borderless.styleMask.contains(.closable), "\(borderless.styleMask.rawValue)")
+    borderless.discardAndClose()
+    check("「放弃」把区域截图窗口关掉了（走 performClose 时会留着不关）",
+          !borderless.isVisible,
+          borderless.isVisible ? "窗口还在 —— 按钮又是死的" : "已关闭")
+
+    // 对照：窗口截图那条路（有 .closable）本来就能关，确认没被改坏
+    let titled = AnnotationWindow(image: blankCanvas(400, 300), anchor: nil)
+    titled.makeKeyAndOrderFront(nil)
+    titled.discardAndClose()
+    check("对照：窗口截图那条路的「放弃」也正常", !titled.isVisible, "已关闭")
+}
+
+// MARK: - 13. 调试面板隐藏时不渲染（显示时必须补上）
+
+print("\n=== 13. 调试面板隐藏时不做事、显示时有内容 ===")
+do {
+    let window = AnnotationWindow(image: blankCanvas(400, 300))
+    func findCanvas(_ v: NSView) -> AnnotationView? {
+        if let c = v as? AnnotationView { return c }
+        for s in v.subviews { if let c = findCanvas(s) { return c } }
+        return nil
+    }
+    guard let root = window.contentView, let canvas = findCanvas(root),
+          let panel = canvas.debugImageView else {
+        check("能拿到画布与调试面板", false); exit(1)
+    }
+    let key = canvas.hitTestBuffer.generateUniqueColorKey()
+    canvas.objects[key] = RectangleShape(center: CGPoint(x: 200, y: 150), width: 100, height: 60,
+                                         color: .black, lineWidth: 8, hitTestColorKey: key)
+    canvas.zOrder = [key]
+
+    check("调试面板默认是隐藏的", panel.isHidden, "isHidden=\(panel.isHidden)")
+    canvas.refreshDebugView()
+    check("面板隐藏时 refreshDebugView 不做渲染（省掉每帧整幅拷贝）",
+          panel.image == nil,
+          panel.image == nil ? "没渲染" : "仍然渲染了 —— 白花一次全画布拷贝")
+
+    // 显示时必须补一次，否则面板会是一片空白
+    panel.isHidden = false
+    canvas.refreshDebugView()
+    check("面板显示时能渲染出内容（没被上一条优化连累成空白）",
+          panel.image != nil, panel.image == nil ? "空白" : "有内容")
+    window.close()
+}
+
+// MARK: - 14. 拖拽期间的命中层优化不能弄坏「选中」
+
+print("\n=== 14. 挪动对象后仍能按新位置选中（命中层欠账会被补上）===")
+do {
+    let view = AnnotationView(image: blankCanvas(600, 400))
+    let key = view.hitTestBuffer.generateUniqueColorKey()
+    let rect = RectangleShape(from: CGPoint(x: 100, y: 100), to: CGPoint(x: 220, y: 200),
+                              color: .black, lineWidth: 8, hitTestColorKey: key)
+    view.objects[key] = rect
+    view.zOrder = [key]
+    view.hitTestBuffer.drawObject(rect)
+
+    // 选中它
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 160, y: 100)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 160, y: 100)))
+    check("先能选中", view.selectedKey == key, "\(String(describing: view.selectedKey))")
+
+    // 拖到右边去：拖拽期间命中层只记脏、不重绘（见 flushHitLayerIfNeeded）
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 160, y: 100)))
+    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 360, y: 100)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 360, y: 100)))
+
+    view.selectedKey = nil
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 360, y: 100)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 360, y: 100)))
+    check("挪动之后，按**新位置**能选中它（命中层欠账被补上了）",
+          view.selectedKey == key, "\(String(describing: view.selectedKey))")
+}
+
+// MARK: - 15. 取色器切走再切回来仍然可用（释放后必须能重新装载）
+
+print("\n=== 15. 取色器采样器释放后能重新装载 ===")
+do {
+    // 画布上先放一块**确定颜色**的区域：只有这样断言才有判别力 ——
+    // 纯白画布上"取到了白色"和"根本没取样、只是把 currentColor 留成初值"分不开。
+    let canvas = blankCanvas(400, 300)
+    canvas.lockFocus()
+    NSColor(red: 0, green: 0, blue: 1, alpha: 1).setFill()
+    NSRect(x: 100, y: 100, width: 200, height: 150).fill()
+    canvas.unlockFocus()
+
+    let view = AnnotationView(image: canvas)
+    // 观测点用 currentColor（picker 分支在 mouseUp 时写回它），与 picker_probe 同一手法
+    func pickAt(_ p: CGPoint) {
+        view.mouseDown(with: mouse(.leftMouseDown, p))
+        view.mouseUp(with: mouse(.leftMouseUp, p))
+    }
+    func isBlue(_ c: NSColor) -> Bool {
+        let d = c.usingColorSpace(.deviceRGB) ?? c
+        return d.blueComponent > 0.8 && d.redComponent < 0.2
+    }
+    view.currentTool = .picker
+    view.currentColor = .black
+    pickAt(CGPoint(x: 200, y: 150))
+    let first = view.currentColor
+
+    // 切走（会释放整幅 RGBA 副本）再切回来 —— 释放必须不影响再次使用。
+    // 写成 `lazy var` 的话这里会永久失效：lazy 只初始化一次，被赋过 nil 就不再装载。
+    view.currentTool = .arrow
+    view.currentTool = .picker
+    view.currentColor = .black
+    pickAt(CGPoint(x: 210, y: 160))
+    let second = view.currentColor
+
+    check("取色器取到的是画布上那块蓝色（不是初值、也没取错位置）",
+          isBlue(first), "\(first)")
+    check("切走再切回来仍能取到同一个蓝色（释放后可重新装载）",
+          isBlue(second), "\(second) —— 若是黑色说明释放之后装不回来了")
+}
+
+// MARK: - 16. 被动吸附检测仍然正确
+
+print("\n=== 16. 被动吸附检测（改写置脏条件时不能把它弄坏）===")
+do {
+    // 这一段原来写的是"吸附状态没变就不置脏"，但**离屏环境里 `needsDisplay` 不可观测**：
+    // 视图不在窗口里时设 true 读回是 false，在窗口里时设 false 又读回 true ——
+    // 那样的断言恒真、抓不到任何东西（实测：把修复退回旧写法它照样全绿）。
+    //
+    // 所以这里改锚在**可观测的吸附状态**上：那才是我重写这段代码时真正可能弄坏的东西
+    // （置脏条件与状态赋值在同一段里）。至于"确实少重绘了"这个性能收益本身没有可靠的
+    // 离屏可观测量，由代码审阅保证 —— 这一点在评审记录里写明。
+    let view = AnnotationView(image: blankCanvas(600, 400))
+    let key = view.hitTestBuffer.generateUniqueColorKey()
+    let rect = RectangleShape(center: CGPoint(x: 100, y: 100), width: 60, height: 40,
+                              color: .black, lineWidth: 4, hitTestColorKey: key)
+    view.objects[key] = rect
+    view.zOrder = [key]
+    view.currentTool = .arrow
+
+    guard let snap = rect.snapPoints().first else {
+        check("矩形有吸附点", false); exit(1)
+    }
+    view.mouseMoved(with: mouse(.mouseMoved, snap.point))
+    check("移到吸附点上时记下 activeSnapPoint（指示器才画得出来）",
+          view.activeSnapPoint != nil, "\(String(describing: view.activeSnapPoint))")
+
+    view.mouseMoved(with: mouse(.mouseMoved, CGPoint(x: 560, y: 380)))
+    check("移开之后 activeSnapPoint 被清掉（指示器不该留在原地）",
+          view.activeSnapPoint == nil, "\(String(describing: view.activeSnapPoint))")
+
+    // 回到吸附点：状态要能再次被设上（证明"没变化才跳过"没有把状态机卡住）
+    view.mouseMoved(with: mouse(.mouseMoved, snap.point))
+    check("再移回吸附点，状态能重新设上",
+          view.activeSnapPoint != nil, "\(String(describing: view.activeSnapPoint))")
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

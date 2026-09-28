@@ -188,10 +188,16 @@ enum UpdateChecker {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.timeoutInterval = 10
 
-        session.dataTask(with: request) { data, _, error in
+        session.dataTask(with: request) { data, response, error in
             let result: UpdateCheckResult
             if let error = error {
                 result = .failed(reason: "网络请求失败：\(error.localizedDescription)")
+            } else if let http = response as? HTTPURLResponse,
+                      !(200..<300).contains(http.statusCode) {
+                // 404 / 500 也会带 body，直接丢给 JSONDecoder 会变成"清单格式不对" ——
+                // 把"地址写错了 / 服务端挂了"误导成"格式问题"，排查方向完全跑偏。
+                // 非 HTTP（探针用的 file://）拿不到 HTTPURLResponse，不会走到这里。
+                result = .failed(reason: "更新清单读取失败：服务器返回 HTTP \(http.statusCode)")
             } else if let data = data {
                 do {
                     let manifest = try JSONDecoder().decode(UpdateManifest.self, from: data)
