@@ -516,19 +516,33 @@ do {
 
 print("\n=== 9. 权限判定 ===")
 do {
-    // 这条只保证"已授权时一定返回 true"（兜底探测不得把好情况判坏）。
-    // **反方向**（无权限时不得判成有权限）需要一个人家确实没授权的进程 ——
-    // 本探针多半从宿主继承了授权，进程内构造不出来；那条由
-    // `probes/permission_probe.swift` 用 launchctl 另起一个身份来验。
-    let delegate = AppDelegate()
+    // 这一节默认**整节跳过**，原因不是它不重要，而是它有副作用：
+    //
+    // 任何一次真实的抓屏请求（`SCShareableContent` / `CGWindowListCreateImage`）都会让
+    // **这个探针二进制**被登记进「系统设置 → 隐私与安全性 → 屏幕录制」列表。探针每次都
+    // 在新的临时路径里编译，于是跑一次就多一条垃圾记录；而这类按路径识别的裸可执行文件
+    // `tccutil reset` 清不掉（报 "No such bundle identifier"），只能手动删。
+    // 2026-09-28 实测踩到：列表里冒出了 `run` 等条目。
+    //
+    //   AISNAP_PROBE_ALLOW_CAPTURE=1 ./probes/run_all.sh master_parity    # 要验时显式打开
+    //
+    // 默认状态下只读 preflight —— 那个 API 不发起抓屏请求、不登记。
+    let allowCapture = ProcessInfo.processInfo.environment["AISNAP_PROBE_ALLOW_CAPTURE"] == "1"
     let preflight = CGPreflightScreenCaptureAccess()
-    let sck = delegate.canQueryShareableContent()
-    let decided = delegate.checkScreenCapturePermission()
-    check("preflight 为真时判定必须为真", !preflight || decided,
-          "preflight=\(preflight) 判定=\(decided)")
-    check("已授权时实时探测也得说有权限（不然会误报缺权限）", !preflight || sck,
-          "preflight=\(preflight) SCK 探测=\(sck)")
-    print("     [INFO] 实时探测 \(sck)；无权限方向见 probes/permission_probe.swift")
+    if allowCapture {
+        let delegate = AppDelegate()
+        let sck = delegate.canQueryShareableContent()
+        let decided = delegate.checkScreenCapturePermission()
+        check("preflight 为真时判定必须为真", !preflight || decided,
+              "preflight=\(preflight) 判定=\(decided)")
+        check("已授权时实时探测也得说有权限（不然会误报缺权限）", !preflight || sck,
+              "preflight=\(preflight) SCK 探测=\(sck)")
+        print("     [INFO] 无权限方向（本进程构造不出来）见 probes/permission_probe.swift")
+    } else {
+        print("     [INFO] 已跳过（本机 preflight=\(preflight)）—— 实时探测会往"
+              + "「屏幕录制」列表里加一条记录，默认不跑")
+        print("     [INFO] 要跑：AISNAP_PROBE_ALLOW_CAPTURE=1 ./probes/run_all.sh master_parity")
+    }
 }
 
 // MARK: - 10. 窗口挑选：浮层不能跳过、系统层必须挡掉
