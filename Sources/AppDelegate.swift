@@ -495,12 +495,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         let window = AnnotationWindow(image: nsImage, anchor: capture.anchorRect,
                                       pixelSize: CGSize(width: capture.image.width,
                                                         height: capture.image.height))
-        if capture.anchorRect != nil {
-            // 标注窗口关闭时收掉冻结覆盖层 —— 覆盖层的所有权在 regionSelectionWindow 手上，
-            // 标注窗口只负责通知
-            window.onClose = { [weak self] in
-                self?.regionSelectionWindow?.hideOverlays()
-                self?.regionSelectionWindow = nil
+        // 标注窗关闭时：AppDelegate 不该再留着它。
+        //
+        // 少了 `annotationWindow = nil` 这一句，用 X / 「放弃」关掉窗口之后引用还挂着，
+        // 于是 ⌘Q 会对着一个**已经消失的窗口**再问一次「放弃这张截图？」——
+        // 而那份内容早被用户明确丢弃了，只会让人莫名其妙。
+        //
+        // 覆盖层的所有权在 regionSelectionWindow 手上，标注窗口只负责通知 ——
+        // 这一句只对"区域截图"那条路有意义（窗口截图没有覆盖层）。
+        window.onClose = { [weak self] in
+            guard let self else { return }
+            self.annotationWindow = nil
+            if capture.anchorRect != nil {
+                self.regionSelectionWindow?.hideOverlays()
+                self.regionSelectionWindow = nil
             }
         }
 

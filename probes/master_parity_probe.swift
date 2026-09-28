@@ -325,7 +325,14 @@ do {
     check("没有标注窗口时退出直接放行，不无谓拦一下",
           appDelegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow,
           "\(appDelegate.applicationShouldTerminate(NSApplication.shared))")
+
+    // close() 必须触发 onClose —— AppDelegate 靠它把 annotationWindow 置回 nil。
+    // 少了这一步，窗口关掉之后 ⌘Q 还会对着一个已经消失的窗口再问一次「放弃这张截图？」。
+    var closeNotified = false
+    window.onClose = { closeNotified = true }
     window.close()
+    check("close() 会触发 onClose（AppDelegate 靠它清掉窗口引用）",
+          closeNotified, closeNotified ? "已触发" : "没触发 —— ⌘Q 会问一个已关掉的窗口")
 }
 
 // MARK: - 5. 导出分辨率锚在源像素
