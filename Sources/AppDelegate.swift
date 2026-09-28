@@ -17,12 +17,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// 多出一个没人管的僵尸覆盖层。有代号就能让迟到的那次直接放弃并自己收干净。
     private var captureGeneration = 0
 
-    /// 窗口截图是否正在"0.5 秒等待 + 捕获"当中。防重入用。
+    /// 窗口截图是否正在"权限预检 / 丢弃确认"当中。防重入用。
     ///
-    /// 这条流程里有一段"给用户时间切换到目标窗口"的延迟加一次异步捕获；期间再按一次
-    /// 快捷键会调度出第二次，第二次的 `openAnnotationWindow` 会覆盖 `annotationWindow`
-    /// 引用 —— 第一张标注图连同它的窗口一起被丢掉。
+    /// 防重入必须在**同步段**占坑：权限预检是 await，两次快速按键都会在挂起处
+    /// 溜过守卫，于是调度出两次捕获、第二次覆盖 `annotationWindow` 引用。
+    /// 进入选择模式之后模态由 `windowPickOverlay != nil` 表达，这个旗子只护前置段。
     private var windowCaptureInFlight = false
+    /// 窗口选择模式覆盖层。非 nil 即处于模态选择中（热键/菜单入口据此拒绝重入）。
+    private var windowPickOverlay: WindowPickOverlay?
     private var annotationWindow: AnnotationWindow?
     private var settingsWindowController: SettingsWindowController?
     private var historyWindow: HistoryWindow?
@@ -390,6 +392,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// 权限通过之后的实际流程（从 `startRegionCapture` 拆出来，便于 async 化）
     private func beginRegionCapture() {
+        // 窗口选择覆盖层还开着时先收掉：macOS 15.2+ 的 display-agnostic 捕获
+        // 不排除自家窗口，开着冻结会把覆盖层拍进冻结帧
+        // （14.x 的 filter 路径反而排除了自家窗口 —— 两条路径行为不同，一并规避）。
+        windowPickOverlay?.cancel()
+
         // 开新截图会把当前标注窗收掉 —— 有未保存的标注时先问一句，**与窗口截图那条路一致**。
         //
         // 这里原来是直接 `annotationWindow?.orderOut(nil)`，有两个后果（同一个洞）：
@@ -474,9 +481,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func startWindowCapture() {
-        // 防重入必须在**同步段**占坑：权限预检改成 await 之后，两次快速按键都会在挂起处
+        // 防重入必须在**同步段**占坑：权限预检是 await，两次快速按键都会在挂起处
         // 溜过守卫，于是调度出两次捕获、第二次覆盖 annotationWindow。
-        guard !windowCaptureInFlight else { return }
+        guard windowPickOverlay == nil, !windowCaptureInFlight else { return }
         windowCaptureInFlight = true
 
         Task { @MainActor in
@@ -497,27 +504,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
                 annotationWindow = nil
             }
 
-            // 给用户一点时间切换到目标窗口
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self else { return }
-                Task { @MainActor in
-                    defer { self.windowCaptureInFlight = false }
-                    do {
-                        let capture = try await ScreenCapture.captureWindowUnderMouse()
-                        self.recordHistory(capture)
-                        self.openAnnotationWindow(with: capture)
-                    } catch ScreenCaptureError.permissionDenied {
-                        // 旧实现此处只会静默返回 nil，用户点了没反应；现在给出正确引导
-                        self.showPermissionAlert()
-                    } catch {
-                        // 鼠标下方没有可捕获的窗口（例如点到了桌面）。
-                        // 旧实现在这里是彻底静默（返回 nil，用户点了没任何反馈）；
-                        // 现在至少给一声提示音，让用户知道操作被响应了。
-                        NSSound.beep()
-                    }
+            beginWindowPick()
+        }
+    }
+
+    /// 进入窗口选择模式：覆盖层实时高亮光标下的窗口，单击确认。
+    ///
+    /// 旧实现是「点菜单 → 等 0.5 秒 → 截当前鼠标下的窗口」—— 用户要在 0.5 秒里
+    /// 切到目标窗口，与定时器赛跑；热键路径更别扭：得先悬停好再按键。选择模式
+    /// 先**看到**要哪个（高亮跟随 + 滚轮换选），再单击确认，时序 hack 不复存在。
+    /// 不需要冻结屏幕：SCK 的 desktopIndependentWindow 抓的是窗口自身内容，
+    /// 自家覆盖层进不了图（详见 WindowPickOverlay 文档）。
+    private func beginWindowPick() {
+        let overlay = WindowPickOverlay { [weak self] windowID in
+            guard let self else { return }
+            self.windowPickOverlay = nil
+            self.windowCaptureInFlight = false
+            guard let windowID else { return }   // Esc / 右键 / 点桌面空白 = 取消
+
+            Task { @MainActor in
+                do {
+                    let capture = try await ScreenCapture.captureWindow(windowID: windowID)
+                    self.recordHistory(capture)
+                    self.openAnnotationWindow(with: capture)
+                } catch ScreenCaptureError.permissionDenied {
+                    // 与旧实现一致：权限被拒要给正确引导，而不是静默没反应
+                    self.showPermissionAlert()
+                } catch {
+                    // 窗口截不动（个别窗口在权限/状态下会抛错）：提示音让用户知道
+                    // 操作被响应了，而不是"点了没反应"。
+                    NSSound.beep()
                 }
             }
         }
+        windowPickOverlay = overlay
+        overlay.begin()
     }
 
     @objc private func quitApp() {

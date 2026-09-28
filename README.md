@@ -6,7 +6,7 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
 
 ### 截图捕获
 - **区域截图** - 全屏覆盖层，鼠标拖拽选择任意矩形区域
-- **窗口截图** - 自动检测鼠标下方的窗口并捕获
+- **窗口截图** - **选择模式**：全屏覆盖层实时高亮光标下的窗口（带标题牌），单击确认截取；滚轮可在重叠窗口间换选，Esc / 右键取消。不再有"按了之后 0.5 秒内切窗口"的定时器赛跑
 - **Retina 适配** - 自动识别屏幕 DPI，正确处理 2x/3x 分辨率
 - **先冻屏、再选区** - 显示覆盖层**之前**先截一次屏，覆盖层画的是冻结帧。
   于是选区确定只需裁一刀：不必等覆盖层消失，也不可能把覆盖层自己拍进去
@@ -103,6 +103,7 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
 | `main.swift` | 应用入口 |
 | `AppDelegate.swift` | 状态栏菜单、截图调度、历史与更新的入口 |
 | `ScreenCapture.swift` | 截图统一入口（异步）：决定截哪个区域/窗口 |
+| `WindowPick/` | 窗口选择模式：覆盖层高亮 + 单击确认（纯逻辑与 GUI 分离） |
 | `Capture/CaptureProviderSCK.swift` | ScreenCaptureKit 捕获实现（区域 / 窗口） |
 | `Capture/CaptureProviderLegacy.swift` | 旧 CGWindowList 实现的备份（回滚通道） |
 | `Capture/ScreenCaptureError.swift` | 截图失败的结构化错误 |

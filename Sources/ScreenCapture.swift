@@ -76,34 +76,28 @@ enum ScreenCapture {
 
     // MARK: - 窗口截图
 
-    /// 捕获鼠标所在位置的窗口。
+    /// 按 CGWindowID 捕获单个窗口（窗口选择模式的确认路径）。
     ///
     /// 倍率按「图像像素宽 ÷ 窗口逻辑宽」反推 —— 窗口的 `frame` 是点，
     /// 而捕获时配置的像素宽是 `frame.width × pointPixelScale`，两者相除恰好是实际倍率。
     ///
-    /// **按 Z 序逐个试**：最前面那个未必截得动（某些窗口在当前权限/状态下会抛错），
-    /// 只试第一个的话就表现为"点了没反应"。全部失败才报没找到。
-    static func captureWindowUnderMouse() async throws -> CapturedImage {
-        let candidates = windowCandidatesUnderMouse()
-        guard !candidates.isEmpty else {
+    /// 与旧 `captureWindowUnderMouse` 的「按 Z 序逐个试」不同：选择模式下用户
+    /// **明确指定**了窗口，失败就失败（调用方提示音）——静默去截它后面那个窗口
+    /// 是更糟的行为（评审里「点的明明是浮窗、拿到的却是别的东西」正是这类错误）。
+    static func captureWindow(windowID: CGWindowID) async throws -> CapturedImage {
+        let (image, pointWidth) = try await CaptureProviderSCK.captureWindow(windowID: windowID)
+        guard image.width >= 1, image.height >= 1, pointWidth >= 1 else {
             throw ScreenCaptureError.windowNotFoundUnderMouse
         }
-
-        var lastError: Error?
-        for candidate in candidates {
-            do {
-                let (image, pointWidth) = try await CaptureProviderSCK.captureWindow(windowID: candidate.id)
-                guard image.width >= 1, image.height >= 1, pointWidth >= 1 else { continue }
-                return CapturedImage(image: image,
-                                     pixelScale: CapturedImage.scale(pixelWidth: image.width,
-                                                                     pointWidth: pointWidth),
-                                     anchorRect: nil)
-            } catch {
-                lastError = error      // 这个截不动，继续试下一个
-            }
-        }
-        throw lastError ?? ScreenCaptureError.windowNotFoundUnderMouse
+        return CapturedImage(image: image,
+                             pixelScale: CapturedImage.scale(pixelWidth: image.width,
+                                                             pointWidth: pointWidth),
+                             anchorRect: nil)
     }
+
+    // 旧的 captureWindowUnderMouse（盲截"当前鼠标下 Z 序最前且截得动"的窗口）已随
+    // 窗口选择模式移除。候选筛选逻辑保留在 windowCandidates（纯函数，有探针），
+    // 由 WindowPickSupport 复用。
 
     // MARK: - 窗口枚举
 
@@ -174,19 +168,4 @@ enum ScreenCapture {
         return result
     }
 
-    /// 鼠标下方（按 Z 序）的候选窗口
-    private static func windowCandidatesUnderMouse() -> [(id: CGWindowID, bounds: CGRect)] {
-        guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else {
-            return []
-        }
-        // CGWindowList 用屏幕坐标（左上原点），NSEvent 用左下原点，这里换算一次
-        let mouseLocation = NSEvent.mouseLocation
-        let testPoint = CGPoint(x: mouseLocation.x,
-                                y: primaryScreenHeight - mouseLocation.y)
-        return windowCandidates(from: windowList,
-                                at: testPoint,
-                                ownPID: ProcessInfo.processInfo.processIdentifier)
-    }
 }
