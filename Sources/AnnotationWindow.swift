@@ -1060,7 +1060,7 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
     @objc func saveImage() {
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
+        panel.allowedContentTypes = ImageEncode.supportedTypes
         panel.nameFieldStringValue = "screenshot.png"
 
         panel.beginSheetModal(for: self) { [weak self] response in
@@ -1070,8 +1070,8 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
             let image = self.annotationView.compositeImage()
             // 编码失败与写盘失败是两件事，提示也要分开。
             // 这条以前是静默 return：用户点了「保存」什么都没发生，也不知道没存上。
-            guard let data = self.pngData(from: image) else {
-                self.presentEncodeFailure()
+            guard let data = ImageEncode.data(from: image, url: url) else {
+                self.presentEncodeFailure(url: url)
                 return
             }
             do {
@@ -1159,11 +1159,14 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
     /// 编码阶段失败（写盘还没开始）。与 `presentWriteFailure` 分开，
     /// 因为两者的原因与用户能采取的行动不同：编码失败多半是内存，写盘失败多半是磁盘/权限。
-    private func presentEncodeFailure() {
+    private func presentEncodeFailure(url: URL) {
         NSApp.activate(ignoringOtherApps: true)
+        let ext = url.pathExtension.uppercased()
+        let format = ext.isEmpty ? "PNG" : ext
         let alert = NSAlert()
         alert.messageText = "导出失败"
-        alert.informativeText = "图片编码失败（PNG）。这通常意味着内存不足，关掉一些窗口后重试即可。"
+        alert.informativeText = "图片编码失败（\(format)）。这通常意味着内存不足，关掉一些窗口后重试即可；"
+            + "若保存的是 HEIC，也可能是这台机器没有 HEIC 编码器，可改存 PNG。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "好")
         alert.runModal()
@@ -1193,17 +1196,7 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     /// 非 private：探针要验证"编码出来的像素与原图逐位一致"——换编码器最容易悄悄改变
     /// 颜色/透明度，而那种错用户只会觉得"存出来的图有点不对"。
     func pngData(from image: NSImage) -> Data? {
-        if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first,
-           let data = rep.representation(using: .png, properties: [:]) {
-            return data
-        }
-        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
-              let buffer = CFDataCreateMutable(nil, 0),
-              let dest = CGImageDestinationCreateWithData(buffer, "public.png" as CFString, 1, nil)
-        else { return nil }
-        CGImageDestinationAddImage(dest, cg, nil)
-        guard CGImageDestinationFinalize(dest) else { return nil }
-        return buffer as Data
+        ImageEncode.png(from: image)
     }
 
     /// 写入剪贴板用的临时 PNG，返回其 URL。

@@ -65,6 +65,7 @@ final class Preferences {
         case trayLeftAction
         case trayRightAction
         case trayMiddleAction
+        case redactionStrength
     }
 
     /// 缺省值集中在这里。改动这一处即同时改变「新用户初值」与「老用户缺键回退值」。
@@ -81,6 +82,10 @@ final class Preferences {
         /// 关掉时**连写盘都不发生** —— 截图常含敏感内容，用户对"我没保存的东西
         /// 却躺在磁盘上"的接受度因人而异，开关必须是真的开关。
         static let recordHistory = true
+
+        /// 打码强度系数。1.0 = 原始块/半径（12 点）。
+        /// 允许 0.5…3.0：小图（表情包）可以调细，高清大屏截图可以调粗。
+        static let redactionStrength = 1.0
 
         /// 热键忽略列表（bundle identifier）。默认空 —— 不在任何应用里忽略。
         static let ignoredBundleIdentifiers: [String] = []
@@ -332,6 +337,19 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.autoCheckUpdates.rawValue) }
     }
 
+    // MARK: - 打码强度
+
+    /// 打码强度系数（0.5…3.0，默认 1.0）。实际马赛克块大小 / 模糊半径
+    /// = 基准值（`RedactionToolHandler` 的 12 点）× 本系数。
+    /// 读到界外值（手工改 plist 等）时按缺省处理，不钳制 —— 与其他键的容错一致。
+    var redactionStrength: Double {
+        get {
+            defaults.object(forKey: Key.redactionStrength.rawValue) as? Double
+                ?? Defaults.redactionStrength
+        }
+        set { defaults.set(newValue, forKey: Key.redactionStrength.rawValue) }
+    }
+
     // MARK: - 恢复默认
 
     /// 清空所有已存偏好，回到 `Defaults`。
@@ -340,7 +358,8 @@ final class Preferences {
                     Key.paletteIndex, Key.lastToolTag, Key.watermarkEnabled, Key.watermarkText,
                     Key.hotkeyRegion, Key.hotkeyWindow, Key.updateFeedURL, Key.autoCheckUpdates,
                     Key.recordHistory, Key.ignoredBundleIdentifiers,
-                    Key.trayLeftAction, Key.trayRightAction, Key.trayMiddleAction] {
+                    Key.trayLeftAction, Key.trayRightAction, Key.trayMiddleAction,
+                    Key.redactionStrength] {
             defaults.removeObject(forKey: key.rawValue)
         }
     }

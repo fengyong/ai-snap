@@ -31,6 +31,9 @@ final class SettingsWindowController: NSWindowController {
     private var trayLeftPopup: NSPopUpButton!
     private var trayRightPopup: NSPopUpButton!
     private var trayMiddlePopup: NSPopUpButton!
+    /// 打码强度滑杆与数值标签
+    private var redactionStrengthSlider: NSSlider!
+    private var redactionStrengthLabel: NSTextField!
     private var keyMonitor: Any?
     /// 正在录制的目标：nil 表示没有在录制
     private var recordingTarget: RecordingTarget?
@@ -190,6 +193,44 @@ final class SettingsWindowController: NSWindowController {
         separatorTray.boxType = .separator
         root.addArrangedSubview(separatorTray)
 
+        // ── 打码 ──
+        let redactionTitle = NSTextField(labelWithString: "打码")
+        redactionTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        root.addArrangedSubview(redactionTitle)
+
+        redactionStrengthSlider = NSSlider(value: Preferences.shared.redactionStrength,
+                                           minValue: 0.5, maxValue: 3.0,
+                                           target: self,
+                                           action: #selector(redactionStrengthChanged(_:)))
+        // 0.5 起步、1.0 是缺省：给两个刻度点让「默认在哪」看得见
+        redactionStrengthSlider.allowsTickMarkValuesOnly = false
+        redactionStrengthSlider.isContinuous = true
+        redactionStrengthLabel = NSTextField(labelWithString: Self.strengthText(
+            Preferences.shared.redactionStrength))
+        redactionStrengthLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+
+        let strengthRow = NSStackView(views: [
+            NSTextField(labelWithString: "强度"),
+            redactionStrengthSlider,
+            redactionStrengthLabel,
+        ])
+        strengthRow.orientation = .horizontal
+        strengthRow.spacing = 12
+        redactionStrengthSlider.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        root.addArrangedSubview(strengthRow)
+
+        let redactionHint = NSTextField(wrappingLabelWithString:
+            "马赛克与模糊共用这一个强度：1.0× = 默认（12 点块 / 半径），对小图可调细到 0.5×，"
+            + "高分屏大图可调粗到 3.0×。只影响之后新画的打码，已画好的不变。")
+        redactionHint.font = NSFont.systemFont(ofSize: 11)
+        redactionHint.textColor = .secondaryLabelColor
+        redactionHint.preferredMaxLayoutWidth = 420
+        root.addArrangedSubview(redactionHint)
+
+        let separatorRedaction = NSBox()
+        separatorRedaction.boxType = .separator
+        root.addArrangedSubview(separatorRedaction)
+
         // ── 更新 ──
         let updateTitle = NSTextField(labelWithString: "更新")
         updateTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
@@ -305,6 +346,18 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func recordHistoryToggled(_ sender: NSButton) {
         Preferences.shared.recordHistory = (sender.state == .on)
+    }
+
+    /// 打码强度滑杆：即时写回偏好，数值标签同步。
+    /// 马赛克/模糊在**绘制时**读偏好，所以不需要刷新已存在的对象（见打码段提示文案）。
+    @objc private func redactionStrengthChanged(_ sender: NSSlider) {
+        let value = (sender.doubleValue * 10).rounded() / 10   // 步进 0.1，防出现 1.0000001×
+        Preferences.shared.redactionStrength = value
+        redactionStrengthLabel.stringValue = Self.strengthText(value)
+    }
+
+    private static func strengthText(_ value: Double) -> String {
+        String(format: "%.1f×", value)
     }
 
     // MARK: - 忽略的应用程序
