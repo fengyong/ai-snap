@@ -4,6 +4,8 @@
 #
 #   ./build.sh                完整打包
 #   ./build.sh --skip-dmg     只出 .app（开发时快一些）
+#   ./build.sh --install      打包并安装到 /Applications
+#   ./build.sh --skip-dmg --install    常用组合：快出包 + 直接装上
 #
 # 环境变量：
 #   BUILD_NUMBER   构建号（默认时间戳）
@@ -31,7 +33,20 @@ VERSION="0.1.0"
 BUILD_NUMBER="${BUILD_NUMBER:-$(date +%Y%m%d.%H%M)}"
 
 SKIP_DMG=0
-[ "${1:-}" = "--skip-dmg" ] && SKIP_DMG=1
+DO_INSTALL=0
+# 安装目标目录。做成可覆盖的，是为了让「删除旧版本」这段破坏性逻辑
+# 能对着临时目录离屏验证，而不用拿真的 /Applications 去试。
+INSTALL_DIR="${INSTALL_DIR:-/Applications}"
+# 选项可任意顺序组合
+for arg in "$@"; do
+  case "$arg" in
+    --skip-dmg) SKIP_DMG=1 ;;
+    --install)  DO_INSTALL=1 ;;
+    # ${arg} 的花括号不能省：后面紧跟的是中文全角括号，bash 会把那几个多字节
+    # 字节当成变量名的一部分，在 set -u 下报 "unbound variable"（实测踩到）
+    *) echo "未知参数：${arg}（可用：--skip-dmg / --install）" >&2; exit 1 ;;
+  esac
+done
 
 cd "$(dirname "$0")"
 
@@ -203,9 +218,41 @@ fi
 echo "签名校验通过"
 codesign -dv "$APP_BUNDLE" 2>&1 | grep -E "Identifier|Signature|Authority|TeamIdentifier" | sed 's/^/   /'
 
+# ── 4. 安装到 /Applications（可选）────────────────────────────────────
+#
+# 必须放在 SKIP_DMG 的提前 return **之前**，否则 `--skip-dmg --install` 会直接退出、装不上。
+if [ "$DO_INSTALL" = "1" ]; then
+  step "安装到 $INSTALL_DIR"
+  TARGET="$INSTALL_DIR/$APP_BUNDLE"
+
+  if [ ! -d "$INSTALL_DIR" ]; then
+    echo "❌ 目标目录不存在：$INSTALL_DIR" >&2
+    exit 1
+  fi
+
+  if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
+    # 用 rm -rf **删除**旧版本，而不是移到废纸篓。
+    #
+    # 移到废纸篓会一直堆：实测用户废纸篓里堆了 8 个旧 AISnap（Finder 还会给重名的
+    # 加时间戳后缀），而且 LaunchServices 会保留那些失效路径的注册 ——
+    # 结果是「打开方式」和 Spotlight 里冒出一堆重复的 AISnap，用户以为装了多个。
+    rm -rf "$TARGET"
+    echo "  已删除旧版本：$TARGET"
+  fi
+  cp -R "$APP_BUNDLE" "$TARGET"
+  echo "  已安装：$TARGET"
+
+  # 立刻把这份注册给 LaunchServices，别留着旧路径的注册指向已经不存在的包
+  LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+  if [ -x "$LSREGISTER" ] && "$LSREGISTER" -f "$TARGET" >/dev/null 2>&1; then
+    echo "  已刷新 LaunchServices 注册"
+  fi
+fi
+
 if [ "$SKIP_DMG" = "1" ]; then
   step "完成（已跳过 DMG）"
   echo "  $(pwd)/$APP_BUNDLE"
+  [ "$DO_INSTALL" = "1" ] && echo "  已安装：$INSTALL_DIR/$APP_BUNDLE"
   exit 0
 fi
 
