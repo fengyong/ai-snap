@@ -1399,11 +1399,26 @@ final class TextShape: AnnotationObject {
         return [.font: font, .foregroundColor: color, .paragraphStyle: paragraph]
     }
 
+    /// `contentSize` 的缓存。见下面那段注释：这个值一帧里会被取十几次。
+    private var cachedContentSize: CGSize?
+    private var cachedContentSizeKey: String?
+
     /// 内容尺寸（含留白）。多行文字由 NSString 的 size(withAttributes:) 自动计入行数。
+    ///
+    /// **带缓存**：`attributes` 每次访问都要新建一个段落样式与字典，而
+    /// `size(withAttributes:)` 要把整段文字排版一遍 —— 可这个值在
+    /// draw / hitTest / boundingBox / selectionHandlePoints / snapPoints 里被反复取，
+    /// 一帧内十几次。文字内容或字号变了才需要重算（颜色与对齐不影响测量结果）。
     var contentSize: CGSize {
+        let key = "\(fontSize)\u{1}\(text)"
+        if key == cachedContentSizeKey, let cached = cachedContentSize { return cached }
+
         let raw = (text as NSString).size(withAttributes: attributes)
-        return CGSize(width: ceil(raw.width) + Self.padding * 2,
-                      height: ceil(raw.height) + Self.padding * 2)
+        let size = CGSize(width: ceil(raw.width) + Self.padding * 2,
+                          height: ceil(raw.height) + Self.padding * 2)
+        cachedContentSizeKey = key
+        cachedContentSize = size
+        return size
     }
 
     var boundingBox: CGRect {

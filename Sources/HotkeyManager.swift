@@ -149,7 +149,7 @@ final class HotkeyManager {
         if registrations.contains(where: { $0.config == config }) {
             throw RegistrationError.keyUsedByAnotherAction(config.displayString)
         }
-        installHandlerIfNeeded()
+        try installHandlerIfNeeded(config)
 
         let id = nextID
         nextID += 1
@@ -193,13 +193,18 @@ final class HotkeyManager {
 
     /// 只会装一次。Carbon 的事件处理器是 C 函数指针，拿不到 `self`，
     /// 因此通过单例转发。
-    private func installHandlerIfNeeded() {
+    ///
+    /// 两处曾经踩坑的地方：
+    ///   · `InstallEventHandler` 的返回值原来被丢掉了 —— 装失败也照报「注册成功」，
+    ///     用户之后按键毫无反应、且没有任何线索可查。现在失败按 `systemError` 抛出。
+    ///   · `handlerInstalled` 原来在调用**之前**就置位 —— 那次一旦失败，后面每次
+    ///     `register` 都会跳过安装，永远没有重试机会。现在只在成功后置位。
+    private func installHandlerIfNeeded(_ config: HotkeyConfig) throws {
         guard !handlerInstalled else { return }
-        handlerInstalled = true
 
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                                       eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
+        let status = InstallEventHandler(GetApplicationEventTarget(), { _, event, _ -> OSStatus in
             guard let event = event else { return OSStatus(eventNotHandledErr) }
             var hotKeyID = EventHotKeyID()
             let err = GetEventParameter(event,
@@ -216,6 +221,11 @@ final class HotkeyManager {
             }
             return noErr
         }, 1, &eventType, nil, nil)
+
+        guard status == noErr else {
+            throw RegistrationError.systemError(status, config.displayString)
+        }
+        handlerInstalled = true
     }
 }
 

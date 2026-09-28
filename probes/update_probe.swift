@@ -211,6 +211,61 @@ extension UpdateCheckResult {
     }
 }
 
+print("\n=== 6. HTTP 状态码要说清楚（不能一律报「清单格式不对」）===")
+do {
+    /// 桩：不发真实请求，直接回一个指定状态码 + 一段非 JSON 的 body。
+    /// 真实服务器返回 404/500 时通常也带 HTML 错误页 —— 那正是会被误报成
+    /// 「清单格式不对」的形态，把「地址写错了 / 服务端挂了」误导成「格式问题」。
+    final class StubHTTP: URLProtocol {
+        static var status = 404
+        override class func canInit(with request: URLRequest) -> Bool { true }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func startLoading() {
+            let resp = HTTPURLResponse(url: request.url!, statusCode: Self.status,
+                                       httpVersion: "HTTP/1.1", headerFields: nil)!
+            client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data("<html>Not Found</html>".utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+        override func stopLoading() {}
+    }
+
+    func checkStatus(_ code: Int) -> UpdateCheckResult? {
+        StubHTTP.status = code
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [StubHTTP.self]
+        var result: UpdateCheckResult?
+        UpdateChecker.check(currentVersion: "1.0.0",
+                            feedURL: URL(string: "https://example.com/latest.json")!,
+                            session: URLSession(configuration: config)) { result = $0 }
+        let deadline = Date().addingTimeInterval(10)
+        while result == nil && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        return result
+    }
+
+    func failureReason(_ r: UpdateCheckResult?) -> String {
+        if case .failed(let why) = r { return why }
+        return "(不是 failed)"
+    }
+
+    let notFound = checkStatus(404)
+    check("404 要报出 HTTP 404，而不是「清单格式不对」",
+          failureReason(notFound).contains("404"), failureReason(notFound))
+    check("404 必须是 failed（不能静默当作已是最新）",
+          notFound?.isFailure == true, failureReason(notFound))
+
+    let serverError = checkStatus(500)
+    check("500 同样要报出状态码",
+          failureReason(serverError).contains("500"), failureReason(serverError))
+
+    // 对照组：200 + 同样的非 JSON body，这时才该是「格式不对」
+    let ok = checkStatus(200)
+    check("对照：200 且 body 不是 JSON 时，才报「清单格式不对」",
+          failureReason(ok).contains("格式"), failureReason(ok))
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

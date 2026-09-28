@@ -33,6 +33,10 @@ class AnnotationView: NSView {
             if currentTool != .picker {
                 pickerPoint = nil
                 pickerPreview = nil
+                // 把整幅 RGBA 副本还回去：pixelSampler 是"首次悬停即分配整张图"
+                // （Retina 全屏可达 60MB+），不释放的话它会一直挂到关窗为止 ——
+                // 用户只是路过一下取色器，却永久多占一份全屏位图。
+                pixelSamplerStorage = nil
                 needsDisplay = true
             }
         }
@@ -296,7 +300,41 @@ class AnnotationView: NSView {
     /// 光标处的颜色（拖拽中实时更新）。**只在 mouseUp 时才写回 `currentColor`** ——
     /// 属性观察器会把每次写入都落到 UserDefaults，拖拽中每帧写一次纯属浪费。
     private var pickerPreview: NSColor?
-    private lazy var pixelSampler = baseCGImage.flatMap { ImagePixelSampler(image: $0) }
+    // MARK: - 命中层脏标记
+
+    /// 命中层自上次重绘以来是否已经过期。
+    ///
+    /// 移动/旋转/缩放期间对象一直在动，命中层里「谁画在哪个像素上」也就一直在变。
+    /// 原来每个鼠标事件都全量重绘一次 Layer B（整幅画布，Retina 全屏 15MB+），
+    /// 而**拖拽过程中根本没人读它** —— 真正读它的只有"按下鼠标找对象"与
+    /// "橡皮擦连续采样"。
+    ///
+    /// 改成脏标记 + **读前补绘**：拖拽期间只记一笔，谁要读谁先 flush。
+    /// 这样"忘了重绘"在构造上不可能发生 —— 消费点自己负责先补。
+    private var hitLayerDirty = false
+
+    /// 读命中层之前，把拖拽期间欠下的那次重绘补上
+    private func flushHitLayerIfNeeded() {
+        guard hitLayerDirty else { return }
+        hitLayerDirty = false
+        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+    }
+
+    /// 整幅 RGBA 副本，供取色器采样。**切走取色器时置回 nil**（见 `currentTool.didSet`）——
+    /// 它按需分配但不自动释放，不清的话用户路过一次取色器就永久多占一份全屏位图。
+    ///
+    /// 不能写成 `lazy var`：`lazy` 只在**首次读取**时初始化，一旦被赋过值（包括赋 nil）
+    /// 就永远不会再初始化 —— 那样释放一次之后取色器就永久失效了。所以用「可空的存储 +
+    /// 按需装载」的写法。
+    private var pixelSamplerStorage: ImagePixelSampler?
+
+    /// 取色器采样器：第一次用到时才分配，切走取色器时被释放，之后再用到会重新分配。
+    private func pickerSampler() -> ImagePixelSampler? {
+        if let cached = pixelSamplerStorage { return cached }
+        let made = baseCGImage.flatMap { ImagePixelSampler(image: $0) }
+        pixelSamplerStorage = made
+        return made
+    }
 
     // MARK: 文字识别的结果框
     //
@@ -406,12 +444,16 @@ class AnnotationView: NSView {
 
         // 仅在空闲状态下进行被动端点捕捉检测
         if case .idle = state {
-            if let snap = findNearestSnapPoint(to: point, excludeKey: nil) {
-                activeSnapPoint = snap.point
-            } else {
-                activeSnapPoint = nil
+            // 只在吸附点**真的变了**的时候置脏。
+            //
+            // 原来无条件 `needsDisplay = true`：鼠标在画布上随便移动都触发整幅重绘
+            // （draw(_:) 不按 dirtyRect 裁剪），而绝大多数位置根本没有吸附点 ——
+            // 等于为了一个没变化的指示器，把整张画布连同底图重画一遍。
+            let newSnap = findNearestSnapPoint(to: point, excludeKey: nil)?.point
+            if newSnap != activeSnapPoint {
+                activeSnapPoint = newSnap
+                needsDisplay = true
             }
-            needsDisplay = true
         }
     }
 
@@ -482,7 +524,8 @@ class AnnotationView: NSView {
             }
         }
 
-        // 在 Layer B 上查找鼠标位置的颜色
+        // 在 Layer B 上查找鼠标位置的颜色（拖拽刚结束的话，先把它欠的重绘补上）
+        flushHitLayerIfNeeded()
         let colorKey = hitTestBuffer.pickColorKey(at: point)
 
         if colorKey != 0, let obj = objects[colorKey] {
@@ -547,7 +590,7 @@ class AnnotationView: NSView {
             updateAttachedArrows(forParent: colorKey)
 
             // 重绘 Layer B
-            hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+            hitLayerDirty = true   // 拖拽期间不重绘，读命中层前统一补（见 flushHitLayerIfNeeded）
             refreshDebugView()
             needsDisplay = true
 
@@ -559,7 +602,7 @@ class AnnotationView: NSView {
             rotateStartAngle += deltaAngle
             state = .rotating(colorKey: colorKey, lastAngle: currentAngle)
 
-            hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+            hitLayerDirty = true   // 拖拽期间不重绘，读命中层前统一补（见 flushHitLayerIfNeeded）
             refreshDebugView()
             needsDisplay = true
 
@@ -577,7 +620,7 @@ class AnnotationView: NSView {
                 }
             }
 
-            hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)
+            hitLayerDirty = true   // 拖拽期间不重绘，读命中层前统一补（见 flushHitLayerIfNeeded）
             refreshDebugView()
             needsDisplay = true
 
@@ -986,6 +1029,7 @@ class AnnotationView: NSView {
     /// 环里的对象擦不掉，用户会以为橡皮擦坏了。
     private func erase(at point: CGPoint) {
         var picked: Set<UInt32> = []
+        flushHitLayerIfNeeded()
         let center = hitTestBuffer.pickColorKey(at: point)
         if center != 0 { picked.insert(center) }
         for i in 0..<8 {
@@ -1047,7 +1091,7 @@ class AnnotationView: NSView {
     /// 画布坐标 → 底图像素 → RGB。换算交给 `ImagePixelSampler.pixelCoordinate`，
     /// 画布这边不重复实现一遍 Y 翻转。
     private func rgbAtCanvasPoint(_ point: CGPoint) -> (r: Int, g: Int, b: Int)? {
-        guard let sampler = pixelSampler,
+        guard let sampler = pickerSampler(),
               let px = ImagePixelSampler.pixelCoordinate(
                 canvasPoint: point,
                 canvasSize: baseImage.size,
@@ -1058,7 +1102,7 @@ class AnnotationView: NSView {
 
     /// 取色放大镜 + 色值标签。
     private func drawPickerLoupe(in ctx: CGContext) {
-        guard let cursor = pickerPoint, let sampler = pixelSampler else { return }
+        guard let cursor = pickerPoint, let sampler = pickerSampler() else { return }
 
         let side = 11                       // 奇数 → 被取的那一格正好落在正中间
         let magnified: CGFloat = 132
@@ -1366,8 +1410,14 @@ class AnnotationView: NSView {
     // MARK: - Debug Visualization
 
     /// 刷新右侧的 Layer B 调试面板。非 private：撤销/重做扩展要用
+    ///
+    /// **面板隐藏时直接返回**：它默认隐藏（⌘D 才显示），但视图一直挂在窗口上，
+    /// 原来只判 `!= nil` —— 于是拖拽时每个鼠标事件都照样跑一遍 `debugVisualization`
+    /// （全对象 drawHitTest + `makeImage()` 拷一份整幅位图），面板没开也要付这个成本。
+    /// 显示时由 `AnnotationWindow.toggleDebugPanel` 补一次刷新。
     func refreshDebugView() {
-        guard let imageView = debugImageView else { return }
+        guard let imageView = debugImageView, !imageView.isHidden else { return }
+        flushHitLayerIfNeeded()
         let debugImage = hitTestBuffer.debugVisualization(objects: objects, zOrder: zOrder)
         imageView.image = debugImage
     }
@@ -1397,7 +1447,14 @@ class AnnotationView: NSView {
 
         let pointSize = baseImage.size
         let pixels = exportPixelSize
-        let scale = max(pixels.width / max(pointSize.width, 1), 0.01)
+        // 两个方向各算一次、分别施加。
+        //
+        // 当前 `logicalSize` 是按**同一个** pixelScale 从像素尺寸推出来的
+        // （见 CapturedImage.logicalSize），所以两个比值恒等、取哪个都一样 ——
+        // 但只按宽度算是个隐式假设：万一将来 logicalSize 的来源变了（例如某条路
+        // 传进来的点尺寸与像素不同源），图就会被拉变形且没人会发现。分开写没有代价。
+        let scaleX = max(pixels.width / max(pointSize.width, 1), 0.01)
+        let scaleY = max(pixels.height / max(pointSize.height, 1), 0.01)
 
         // 用**显式位图**而不是 `NSImage.lockFocus()`：
         // lockFocus 的分辨率取决于"当前显示器"的 backingScaleFactor ——
@@ -1416,7 +1473,7 @@ class AnnotationView: NSView {
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
         if let ctx = NSGraphicsContext.current?.cgContext {
-            ctx.scaleBy(x: scale, y: scale)
+            ctx.scaleBy(x: scaleX, y: scaleY)
             render(into: ctx, pointSize: pointSize)
         }
         NSGraphicsContext.restoreGraphicsState()

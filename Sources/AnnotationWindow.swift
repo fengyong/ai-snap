@@ -102,10 +102,21 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     }
 
     /// 工具栏「放弃」按钮：放弃这张截图并关窗。
-    /// 用 performClose 而不是 close —— 前者一定会问过 windowShouldClose，
-    /// 这样"确认放弃"就只存在一份逻辑。
-    @objc private func discardAndClose() {
-        performClose(nil)
+    ///
+    /// **不能走 `performClose`**：区域截图那条路是 `.borderless`（没有 `.closable`），
+    /// 而 AppKit 对这类窗口的 `performClose` 只响一声、**不关窗** ——
+    /// 实测 `isVisible` 保持为真，也就是「放弃」按钮在**主路径**上完全没反应。
+    /// （对照组：带 `.closable` 的窗口截图那条路是正常的。窗口截图有标题栏 X 可以关，
+    /// 区域截图是无边框的，只有这个按钮 —— 所以坏的恰好是唯一入口。）
+    ///
+    /// 直接问一次再 `close()`：`close()` 自己不会调 `windowShouldClose`（实测 0 次），
+    /// 所以"确认逻辑只有一份"这个初衷仍然成立。
+    ///
+    /// 非 private：探针要直接验证"borderless 窗口上它真的会关窗"——
+    /// 这条主路径曾经整个失效（见上），而失效时不会报错、只是没反应。
+    @objc func discardAndClose() {
+        guard confirmDiscardIfNeeded() else { return }
+        close()
     }
 
     /// 取色器取到颜色：把 HEX 复制到剪贴板并提示。
@@ -323,6 +334,9 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         let willShow = panel.isHidden
         panel.isHidden = !willShow
         label.isHidden = !willShow
+        // 隐藏期间 refreshDebugView 是直接返回的（见那里），所以**显示时**必须补一次，
+        // 否则面板会是一片空白 —— 这是"隐藏就不渲染"这个优化必须配上的另一半。
+        if willShow { (annotationView as AnnotationView?)?.refreshDebugView() }
         (annotationView as AnnotationView?)?.needsDisplay = true
 
         let desired = canvasWidth + (willShow ? debugPanelWidth : 0)
@@ -1133,6 +1147,28 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
             return url
         } catch {
             return nil
+        }
+    }
+
+    /// 清掉历史遗留的临时 PNG。
+    ///
+    /// 复制图片时会往 `tmp/AISnap/` 写一份 PNG（给只认文件 URL 的接收方用），
+    /// 但**从来没有清理过** —— 复制几百次就是几百个 1-5MB 的文件躺在临时目录里，
+    /// 直到系统自己想起来回收。启动时删掉超过 24 小时的：剪贴板里那份文件 URL 引用
+    /// 基本都产生于本次会话，留一天足够安全，又能把占用封顶。
+    static func cleanUpTemporaryPNGs(olderThan age: TimeInterval = 24 * 3600) {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory.appendingPathComponent("AISnap", isDirectory: true)
+        guard let entries = try? fm.contentsOfDirectory(
+            at: dir,
+            includingPropertiesForKeys: [.contentModificationDateKey],
+            options: [.skipsHiddenFiles]) else { return }
+
+        let cutoff = Date().addingTimeInterval(-age)
+        for url in entries where url.pathExtension.lowercased() == "png" {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate ?? .distantPast
+            if modified < cutoff { try? fm.removeItem(at: url) }
         }
     }
 

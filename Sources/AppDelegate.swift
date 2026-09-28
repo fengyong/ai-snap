@@ -16,6 +16,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// 而是在按键动作解析为 `.menu` 时由我们自己弹出（见 `statusBarClicked(_:)`）。
     private var statusMenu: NSMenu!
     private var regionSelectionWindow: RegionSelectionWindow?
+
+    /// 每次发起截图都 +1 的代号。
+    ///
+    /// 用来作废"迟到的异步任务"：`presentRegionSelection` 里的 Task 强持有那个 window，
+    /// 并在 `await freezeScreens()` 之后**无条件** `beginSelection()`（它会
+    /// `makeKeyAndOrderFront` + 把每个覆盖层 `orderFront`）。用户在冻结完成前再按一次
+    /// 快捷键时，第一次的 Task 醒来后仍会把一个**已经无主**的覆盖层推上屏 —— 屏幕上
+    /// 多出一个没人管的僵尸覆盖层。有代号就能让迟到的那次直接放弃并自己收干净。
+    private var captureGeneration = 0
+
+    /// 窗口截图是否正在"0.5 秒等待 + 捕获"当中。防重入用。
+    ///
+    /// 这条流程里有一段"给用户时间切换到目标窗口"的延迟加一次异步捕获；期间再按一次
+    /// 快捷键会调度出第二次，第二次的 `openAnnotationWindow` 会覆盖 `annotationWindow`
+    /// 引用 —— 第一张标注图连同它的窗口一起被丢掉。
+    private var windowCaptureInFlight = false
     private var annotationWindow: AnnotationWindow?
     private var settingsWindowController: SettingsWindowController?
     private var historyWindow: HistoryWindow?
@@ -35,6 +51,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         setupHotkeys()
         // 首次启动时请求屏幕录制权限
         requestScreenCapturePermission()
+        // 清掉历史遗留的临时 PNG（复制图片会写一份，但以前从不清理）
+        AnnotationWindow.cleanUpTemporaryPNGs()
         // 自动检查更新默认关闭；开着但没配地址时也直接跳过（不打扰）
         if Preferences.shared.automaticallyChecksForUpdates {
             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
@@ -359,22 +377,39 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             return
         }
 
-        // 让本应用已有的窗口先离开屏幕 —— 否则会被冻结进底图
-        annotationWindow?.orderOut(nil)
-        // 上一次截图若还留着冻结覆盖层（标注窗口被 orderOut 而非 close，
-        // onClose 没触发），这里补收一次
+        // 开新截图会把当前标注窗收掉 —— 有未保存的标注时先问一句，**与窗口截图那条路一致**。
+        //
+        // 这里原来是直接 `annotationWindow?.orderOut(nil)`，有两个后果（同一个洞）：
+        //   1. 不问就收 —— 一次快捷键静默丢掉上一张的成果；
+        //   2. 只是 orderOut，引用还挂着。用户在新选区按 Esc 取消后，那个窗口
+        //      **永远不会再显示出来**；而下次截图 openAnnotationWindow 会把
+        //      annotationWindow 指向新窗，旧窗随之释放 —— 内容是真的没了。
+        // 改成和窗口截图一样：先确认、再 close()。close() 会触发 onClose，
+        // 顺带把冻结覆盖层收干净（原来那段"补收一次"的注释说的就是这个坑）。
+        if let window = annotationWindow {
+            guard window.confirmDiscardIfNeeded() else { return }
+            window.close()
+            annotationWindow = nil
+        }
+
+        // 覆盖层可能还留着（上一次截图在选区内被中断等），补收一次
         regionSelectionWindow?.hideOverlays()
         regionSelectionWindow = nil
 
         // 等窗口服务器完成合成，再去冻结屏幕。
         // 这是**一次性**等待，不是每次截图都要付：冻结之后覆盖层显示的是静止画面，
         // 选区确定后只需裁剪冻结图，不再需要「关掉覆盖层 → 等它消失 → 再截图」那一套。
+        captureGeneration += 1
+        let generation = captureGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
-            self?.presentRegionSelection()
+            self?.presentRegionSelection(generation: generation)
         }
     }
 
-    private func presentRegionSelection() {
+    private func presentRegionSelection(generation: Int) {
+        // 等待这 0.06 秒期间又发起了一次截图 → 这次已经过时，直接不做
+        guard generation == captureGeneration else { return }
+
         let window = RegionSelectionWindow { [weak self] capture in
             guard let self = self else { return }
 
@@ -396,8 +431,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         Task { @MainActor in
             // 先冻结、再显示：覆盖层画的是冻结帧，所以它自己不会被拍进去
             guard await window.freezeScreens() else {
+                // 只有"还是当前这一次"才能清引用/报错 —— 否则会把新一次刚建好的覆盖层清掉
+                guard generation == self.captureGeneration else { return }
                 self.regionSelectionWindow = nil
                 self.showCaptureFailureAlert()
+                return
+            }
+            // 冻结期间又发起了一次截图 → 这一份已经无主，自己收干净，不强推上屏
+            guard generation == self.captureGeneration else {
+                window.hideOverlays()
                 return
             }
             window.beginSelection()
@@ -432,10 +474,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             annotationWindow = nil
         }
 
+        // 防重入：这一段要等 0.5 秒 + 一次异步捕获，期间再按一次会调度出第二次捕获，
+        // 第二次的 openAnnotationWindow 会覆盖 annotationWindow，第一张图直接丢。
+        guard !windowCaptureInFlight else { return }
+        windowCaptureInFlight = true
+
         // 给用户一点时间切换到目标窗口
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self else { return }
             Task { @MainActor in
+                defer { self.windowCaptureInFlight = false }
                 do {
                     let capture = try await ScreenCapture.captureWindowUnderMouse()
                     self.recordHistory(capture)
