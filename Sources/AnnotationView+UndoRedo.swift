@@ -67,14 +67,18 @@ extension AnnotationView {
                 redoStack.append(.editText(colorKey: colorKey, previous: current))
             }
 
-        case .restyle(let colorKey, let oldColor, _, let oldLineWidth, _):
+        case .restyle(let colorKey, let oldColor, let newColor, let oldLineWidth, let newLineWidth):
             if let obj = objects[colorKey] {
                 obj.color = oldColor
                 if let width = oldLineWidth { AnnotationView.setLineWidth(width, on: obj) }
+                // redo 记录必须**原样沿用传进来的 newColor / newLineWidth**。
+                // 不能在改回旧值之后再读 `obj.color` / `lineWidth(of:)` —— 那时读到的
+                // 已经是旧值，重做记录里的新旧值相等，重做就成了空操作
+                // （实测：换色后撤销再重做，颜色与线宽都回不去）。
                 redoStack.append(.restyle(colorKey: colorKey,
-                                          oldColor: oldColor, newColor: obj.color,
+                                          oldColor: oldColor, newColor: newColor,
                                           oldLineWidth: oldLineWidth,
-                                          newLineWidth: AnnotationView.lineWidth(of: obj)))
+                                          newLineWidth: newLineWidth))
             }
         }
 

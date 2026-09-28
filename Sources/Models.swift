@@ -556,22 +556,32 @@ class Arrow: AnnotationObject {
         //  · 实心三角/菱形头部有实体盖住接缝 → 箭杆提前收住，否则 `.round` 端帽
         //    会从尖端多凸出半个线宽（线宽 15 时就是 7.5pt 的圆头凸起）；
         //  · 开放头（两条线）没有实体覆盖 → 箭杆必须画到尖端，否则会看到明显断口。
+        //
+        // 回缩量还必须**不超过箭杆本身的长度**：头部随线宽放大后能长到 48pt
+        // （线宽 15），比短箭头的整根箭杆还长 —— 那时 `endPoint - 回缩量` 会落到
+        // 起点的**反方向**去，箭杆倒着画出来，在箭头后面露出一截圆头
+        // （实测短箭头比几何容许的最左位置多出 7.4px）。
+        // 这种"整根箭杆都藏在头部里"的情况直接不画箭杆，只留头。
         let shaftDX = endPoint.x - startPoint.x
         let shaftDY = endPoint.y - startPoint.y
         let shaftLen = hypot(shaftDX, shaftDY)
         let hasSolidHead = (style.headType == .triangle || style.headType == .diamond)
-        let shaftEnd: CGPoint
-        if hasSolidHead && shaftLen > 0.001 {
+        let retract = Self.headLength(for: style, lineWidth: lineWidth) * 0.85
+
+        if !hasSolidHead {
+            // 开放头：箭杆画到尖端
+            ctx.move(to: startPoint)
+            ctx.addLine(to: endPoint)
+            ctx.strokePath()
+        } else if shaftLen > retract {
+            // 实心头且箭杆长于回缩量：收住，别让 .round 端帽凸出尖端
             let ux = shaftDX / shaftLen, uy = shaftDY / shaftLen
-            let len = Self.headLength(for: style, lineWidth: lineWidth)
-            shaftEnd = CGPoint(x: endPoint.x - ux * len * 0.85,
-                               y: endPoint.y - uy * len * 0.85)
-        } else {
-            shaftEnd = endPoint
+            ctx.move(to: startPoint)
+            ctx.addLine(to: CGPoint(x: endPoint.x - ux * retract,
+                                    y: endPoint.y - uy * retract))
+            ctx.strokePath()
         }
-        ctx.move(to: startPoint)
-        ctx.addLine(to: shaftEnd)
-        ctx.strokePath()
+        // 实心头且 shaftLen <= retract：整根箭杆都被头部盖住，画了只会从后面露出来 → 不画
 
         // 头部/尾部一律用实线 + 圆头（虚线只作用于箭身）
         ctx.setLineDash(phase: 0, lengths: [])
