@@ -102,6 +102,10 @@ run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
 run_probe postfix_probe          "${ALL_SOURCES[@]}"
 # A 区分叉里那些 master 仍然缺失的修复：重新实现后的对齐验证
 run_probe master_parity_probe    "${ALL_SOURCES[@]}"
+# 权限判定：无权限时不得判成有权限。
+# 它会用 launchctl 把**自己**再起一份（launchd 的子进程没有 TCC 授权），
+# 因为本进程多半已从宿主继承授权，兜底分支根本不会被执行。
+run_probe permission_probe       "${ALL_SOURCES[@]}"
 
 # ── 清理测试偏好域 ─────────────────────────────────────────────────────
 #
@@ -125,6 +129,24 @@ for _attempt in 1 2 3 4 5; do
   done
   [ "$removed" = "0" ] && break
   sleep 0.3
+done
+
+# ── 还有一份漏网的：探针二进制叫 `run`，它写的是 UserDefaults.standard ────────
+#
+# 会构造真实 AnnotationWindow 的那几个探针，走的是 `Preferences.shared`
+# （= UserDefaults.standard），而探针进程的可执行文件叫 `run` —— 于是偏好落进了
+# `~/Library/Preferences/run.plist`。上面按 `com.aisnap.probe.*` 清理扫不到它，
+# 结果**上一次探针的取值会漏给下一次**：实测里面留着 `updateFeedURL = ""`，
+# 后面的探针就会读到 `configuredFeedURL == nil`，行为跟预期不一样。
+#
+# 这个名字很通用，所以只在我们自己刚编译过 `run` 的前提下删是安全的 ——
+# 这里正是那个前提下（每个探针都用 -o "$tmp/run" 编出来的）。
+for _attempt in 1 2 3 4 5; do
+  if [ -e "$HOME/Library/Preferences/run.plist" ]; then
+    rm -f "$HOME/Library/Preferences/run.plist"; sleep 0.3
+  else
+    break
+  fi
 done
 
 echo

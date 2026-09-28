@@ -516,7 +516,10 @@ class Arrow: AnnotationObject {
     }
 
     var boundingBox: CGRect {
-        let padding = lineWidth + style.headLength
+        // padding 必须用**随线宽放大后**的头长：可见头部是按 `headLength(for:lineWidth:)`
+        // 画的，这里若还用样式自带的 14，短粗箭头的头就会落在包围盒之外 ——
+        // Option/Shift 的门控（包围盒 inset -8 后判 contains）便按不到看得见的那个头。
+        let padding = lineWidth + Self.headLength(for: style, lineWidth: lineWidth)
         let minX = min(startPoint.x, endPoint.x) - padding
         let minY = min(startPoint.y, endPoint.y) - padding
         let maxX = max(startPoint.x, endPoint.x) + padding
