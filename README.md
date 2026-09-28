@@ -218,6 +218,14 @@ LaunchServices 一直保留注册，「打开方式」与 Spotlight 里就会冒
 
 ### 关于屏幕录制权限反复失效
 
+> **有 Developer ID 证书时以下问题不存在**：`build.sh` 的签名身份优先级链会自动改用
+> 「Developer ID Application」签名（Hardened Runtime + 安全时间戳），并可配合公证
+> （`scripts/release.sh` 发版自动走 notarization + staple）。TCC 按「证书 + bundle ID」
+> 关联授权，重新编译/重装**不再失效**；公证过的包发给别人也不会被 Gatekeeper 拦。
+> Apple Developer Program（$99/年）加入后，配置一次凭据即可：
+> `xcrun notarytool store-credentials AC_NOTARY --apple-id <AppleID> --team-id <TeamID> --password <App专用密码>`
+> 以下内容仅适用于 ad-hoc / 自签名场景。
+
 **症状**：在系统设置里勾上了 AISnap，下次启动或下次截图却又要求授权。
 
 **根因是签名方式，不是权限逻辑**（代码里 `if !CGPreflightScreenCaptureAccess()`
