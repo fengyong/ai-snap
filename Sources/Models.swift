@@ -78,10 +78,14 @@ enum RectPerimeter {
     /// 语义：点落在矩形**内部**时推到最近的那条边；落在外部时取它的钳制点
     /// （也就是角或边上离它最近的位置）。
     ///
-    /// 这段几何原来在 RectangleShape / StepBadge / SpotlightShape / RedactionShape
-    /// 里**各有一份逐字重复的实现**（连注释都差不多），改一处漏三处 —— 而这里算错了
+    /// 这段几何原来在 **RectangleShape / StampObject / SpotlightShape / RedactionShape**
+    /// 里各有一份逐字重复的实现（连注释都差不多），改一处漏三处 —— 而这里算错了
     /// 不会报错，只会表现为"吸附点/吸附指示跑到奇怪的地方"。收进来与
     /// `parameter(for:)` / `point(at:)` 作伴，让矩形周长几何只有一个来源。
+    ///
+    /// **注意别把 StepBadge 也并进来**：它的周长是**圆周**（`radius`，配
+    /// `pointOnPerimeter` 的圆周参数化），与矩形不是一回事 —— 并进来会让"吸附指示落在
+    /// 正方形角上、附着却解析到圆上"，两边语义打架。CircleShape 的椭圆同理，也是独立实现。
     static func nearestPoint(to point: CGPoint, center: CGPoint,
                              size: CGSize, rotation: CGFloat) -> CGPoint {
         let localPt = rotatePoint(point, around: center, by: -rotation)
