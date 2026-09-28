@@ -486,6 +486,8 @@ enum DrawingTool: Equatable {
     case blur      // 高斯模糊打码（拖拽框选）
     case eraser    // 橡皮擦：拖拽抹掉经过的对象，本身不产生对象
     case picker    // 取色器：从截图上取色，本身不产生对象
+    case pen       // 自由画笔：拖拽逐点采样，整条笔画是一个对象
+    case marker    // 马克笔：半透明宽笔触（与画笔共用 FreehandShape）
 
     static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
         switch (lhs, rhs) {
@@ -494,7 +496,7 @@ enum DrawingTool: Equatable {
              (.circle, .circle), (.ellipse, .ellipse),
              (.step, .step), (.text, .text), (.spotlight, .spotlight),
              (.mosaic, .mosaic), (.blur, .blur), (.eraser, .eraser),
-             (.picker, .picker):
+             (.picker, .picker), (.pen, .pen), (.marker, .marker):
             return true
         case (.stamp, .stamp):
             return true  // 所有 stamp 视为同类工具
@@ -1654,6 +1656,269 @@ final class TextShape: AnnotationObject {
     /// 缩放作用在**字号**上 —— 文字的「大小」就是字号，改宽高没有意义
     func scale(by factor: CGFloat) {
         fontSize = min(max(fontSize * abs(factor), 8), 300)
+    }
+}
+
+// MARK: - FreehandShape (画笔 / 马克笔)
+
+/// 自由手绘笔画：折线点集 + 笔触参数。
+///
+/// 与解析形状最大的不同：没有宽高/半径这类参数，**点集就是本体** ——
+/// 移动 = 平移所有点、缩放 = 以质心缩放所有点、旋转沿用画布层的 rotation。
+/// 命中检测依旧走双图层（描同一条路径、加粗、关抗锯齿），零额外几何代码。
+///
+/// 「马克笔」与「画笔」共用本类（isMarker 开关），取舍与「圆角矩形复用
+/// RectangleShape」一致：旋转/缩放/撤销/命中全部免费。
+class FreehandShape: AnnotationObject {
+    let id: UUID
+    let hitTestColorKey: UInt32
+    /// 笔画点集（**画布坐标**，未含 rotation）。mouseDragged 采点、经距离抽稀。
+    var points: [CGPoint]
+    var color: NSColor
+    var lineWidth: CGFloat
+    /// true = 马克笔：半透明、三倍宽、平头
+    var isMarker: Bool
+    var rotation: CGFloat = 0
+
+    init(points: [CGPoint], color: NSColor, lineWidth: CGFloat,
+         isMarker: Bool, hitTestColorKey: UInt32) {
+        self.id = UUID()
+        self.points = points
+        self.color = color
+        self.lineWidth = lineWidth
+        self.isMarker = isMarker
+        self.hitTestColorKey = hitTestColorKey
+    }
+
+    /// 质心。移动/缩放都以它为锚（缩放是关于质心的线性变换，质心不变 ——
+    /// center 作为纯计算属性天然保持自洽）。
+    var center: CGPoint {
+        guard !points.isEmpty else { return .zero }
+        let sum = points.reduce(CGPoint.zero) { CGPoint(x: $0.x + $1.x, y: $0.y + $1.y) }
+        return CGPoint(x: sum.x / CGFloat(points.count),
+                       y: sum.y / CGFloat(points.count))
+    }
+
+    /// 笔触视觉宽度：马克笔三倍宽（宽笔触是"马克笔"这个名字的来源）
+    var strokeLineWidth: CGFloat { isMarker ? lineWidth * 3 : lineWidth }
+    /// 马克笔半透明。整条笔画**一次** strokePath 画完 —— 单次绘制内部自交
+    /// 不会叠深（CG 对同一次 stroke 只合成一遍），来回涂抹保持均匀。
+    var strokeAlpha: CGFloat { isMarker ? 0.45 : 1 }
+
+    /// 未旋转、不带线宽 padding 的原始包围盒（缩放判据用）
+    private var rawBounds: CGRect {
+        enclosingBox(of: points, padding: 0)
+            ?? CGRect(x: center.x - 1, y: center.y - 1, width: 2, height: 2)
+    }
+
+    var boundingBox: CGRect {
+        // 旋转后的包围盒：点绕 center 转 rotation 再取外包（与 RectangleShape 同法）
+        let rotated = points.map { rotatePoint($0, around: center, by: rotation) }
+        return enclosingBox(of: rotated, padding: strokeLineWidth)
+            ?? CGRect(x: center.x - 2, y: center.y - 2, width: 4, height: 4)
+    }
+
+    // MARK: Drawing
+
+    func draw(in ctx: CGContext) {
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+        ctx.translateBy(x: -center.x, y: -center.y)
+        stroke(in: ctx, color: color, width: strokeLineWidth, alpha: strokeAlpha)
+        ctx.restoreGState()
+    }
+
+    func drawHitTest(in ctx: CGContext, color: NSColor) {
+        ctx.saveGState()
+        ctx.translateBy(x: center.x, y: center.y)
+        ctx.rotate(by: rotation)
+        ctx.translateBy(x: -center.x, y: -center.y)
+        // 命中层不透明 + 加粗（picking pass 不继承视觉层的 alpha，半透明会让
+        // 采到的混色对不上色 key）；强制实线与圆头（superset 命中区）
+        stroke(in: ctx, color: color, width: strokeLineWidth + 6, alpha: nil)
+        ctx.restoreGState()
+    }
+
+    private func stroke(in ctx: CGContext, color: NSColor, width: CGFloat, alpha: CGFloat?) {
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setFillColor(color.cgColor)
+        ctx.setLineWidth(width)
+        ctx.setLineCap(isMarker ? .square : .round)
+        ctx.setLineJoin(.round)
+        if let alpha { ctx.setAlpha(alpha) }
+
+        guard points.count > 1 else {
+            // 单点（点击没拖）：留一个圆点 —— 与"落笔即有痕"的直觉一致
+            if let p = points.first {
+                ctx.fillEllipse(in: CGRect(x: p.x - width / 2, y: p.y - width / 2,
+                                           width: width, height: width))
+            }
+            if alpha != nil { ctx.setAlpha(1) }
+            return
+        }
+        ctx.addPath(Self.smoothedPath(through: points))
+        ctx.strokePath()
+        if alpha != nil { ctx.setAlpha(1) }
+    }
+
+    /// 中点二次曲线平滑：相邻采样点的**中点**作为曲线端点、采样点本身作控制点。
+    /// 比折线圆滑、比 Catmull-Rom 便宜；两端仍精确落在首尾采样点上。
+    static func smoothedPath(through points: [CGPoint]) -> CGPath {
+        let path = CGMutablePath()
+        guard let first = points.first, let last = points.last else { return path }
+        guard points.count > 2 else {
+            path.move(to: first)
+            path.addLine(to: last)
+            return path
+        }
+        path.move(to: first)
+        for i in 1..<(points.count - 1) {
+            let next = points[i + 1]
+            let mid = CGPoint(x: (points[i].x + next.x) / 2,
+                              y: (points[i].y + next.y) / 2)
+            path.addQuadCurve(to: mid, control: points[i])
+        }
+        path.addLine(to: last)
+        return path
+    }
+
+    // MARK: Selection & Snap
+
+    func selectionHandlePoints() -> [CGPoint] {
+        // 笔画没有角点；给首/尾两点当手柄（选择特效画在这些位置）
+        var handles: [CGPoint] = []
+        if let first = points.first { handles.append(first) }
+        if let last = points.last, points.count > 1 { handles.append(last) }
+        return handles
+    }
+
+    func snapPoints() -> [SnapPoint] {
+        var points: [SnapPoint] = [SnapPoint(point: center, type: .center)]
+        if let first = self.points.first {
+            points.append(SnapPoint(point: first, type: .endpoint))
+        }
+        if let last = self.points.last, self.points.count > 1 {
+            points.append(SnapPoint(point: last, type: .endpoint))
+        }
+        return points
+    }
+
+    // MARK: 周长（折线弧长参数化，供箭头附着）
+
+    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
+        // 查询点先转进未旋转空间，算完再转回来 —— 参数化只在局部空间有效
+        let local = rotatePoint(point, around: center, by: -rotation)
+        let result = Self.nearestPoint(onPolyline: points, to: local) ?? center
+        return rotatePoint(result, around: center, by: rotation)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        let local = rotatePoint(point, around: center, by: -rotation)
+        return Self.parameter(onPolyline: points, for: local)
+    }
+
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        let local = Self.polylinePoint(points, at: parameter) ?? center
+        return rotatePoint(local, around: center, by: rotation)
+    }
+
+    private static func nearestPoint(onPolyline pts: [CGPoint], to p: CGPoint) -> CGPoint? {
+        guard pts.count > 1 else { return pts.first }
+        var best = pts[0]
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        for i in 0..<(pts.count - 1) {
+            let candidate = nearestPointOnSegment(pts[i], pts[i + 1], p)
+            let d = hypot(candidate.x - p.x, candidate.y - p.y)
+            if d < bestDistance {
+                bestDistance = d
+                best = candidate
+            }
+        }
+        return best
+    }
+
+    private static func nearestPointOnSegment(_ a: CGPoint, _ b: CGPoint, _ p: CGPoint) -> CGPoint {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let lengthSquared = dx * dx + dy * dy
+        guard lengthSquared > 0 else { return a }
+        let t = max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared))
+        return CGPoint(x: a.x + t * dx, y: a.y + t * dy)
+    }
+
+    private static func cumulativeLengths(_ pts: [CGPoint]) -> [CGFloat] {
+        var lengths = [CGFloat(0)]
+        for i in 1..<pts.count {
+            let d = hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y)
+            lengths.append(lengths[i - 1] + d)
+        }
+        return lengths
+    }
+
+    private static func parameter(onPolyline pts: [CGPoint], for p: CGPoint) -> CGFloat {
+        guard pts.count > 1 else { return 0 }
+        let lengths = cumulativeLengths(pts)
+        guard lengths[pts.count - 1] > 0 else { return 0 }
+        var bestParameter: CGFloat = 0
+        var bestDistance = CGFloat.greatestFiniteMagnitude
+        var consumed: CGFloat = 0
+        for i in 0..<(pts.count - 1) {
+            let candidate = nearestPointOnSegment(pts[i], pts[i + 1], p)
+            let d = hypot(candidate.x - p.x, candidate.y - p.y)
+            if d < bestDistance {
+                bestDistance = d
+                let segLen = lengths[i + 1] - lengths[i]
+                let t: CGFloat = segLen > 0
+                    ? hypot(candidate.x - pts[i].x, candidate.y - pts[i].y) / segLen
+                    : 0
+                bestParameter = (lengths[i] + t * segLen) / lengths[pts.count - 1]
+            }
+            consumed += lengths[i + 1] - lengths[i]
+        }
+        return min(max(bestParameter, 0), 1)
+    }
+
+    private static func polylinePoint(_ pts: [CGPoint], at parameter: CGFloat) -> CGPoint? {
+        guard pts.count > 1 else { return pts.first }
+        let lengths = cumulativeLengths(pts)
+        let total = lengths[pts.count - 1]
+        guard total > 0 else { return pts.first }
+        let target = min(max(parameter, 0), 1) * total
+        for i in 1..<pts.count where lengths[i] >= target {
+            let segLen = lengths[i] - lengths[i - 1]
+            let t: CGFloat = segLen > 0 ? (target - lengths[i - 1]) / segLen : 0
+            return CGPoint(x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
+                           y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t)
+        }
+        return pts.last
+    }
+
+    // MARK: Transform
+
+    func move(by delta: CGVector) {
+        points = points.map { CGPoint(x: $0.x + delta.dx, y: $0.y + delta.dy) }
+    }
+
+    func rotate(by angle: CGFloat) {
+        rotation += angle
+    }
+
+    func scale(by factor: CGFloat) {
+        // 以「主延伸」（宽高中较大者）为缩放判据：一笔横线的高是 0，
+        // 拿高当判据会永远缩不动；拿主延伸则横线竖线都能缩。
+        // 与其他形状一致：只止损、不放大已小于下限的笔画（见 scaledExtent）。
+        guard !points.isEmpty else { return }
+        let box = rawBounds
+        let extent = max(box.width, box.height)
+        guard extent > 0.01 else { return }
+        let target = Self.scaledExtent(extent, by: abs(factor))
+        let f = target / extent
+        guard abs(f - 1) > 0.0001 else { return }
+        let anchor = center
+        points = points.map { p in
+            CGPoint(x: anchor.x + (p.x - anchor.x) * f,
+                    y: anchor.y + (p.y - anchor.y) * f)
+        }
     }
 }
 

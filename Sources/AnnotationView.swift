@@ -16,6 +16,8 @@ class AnnotationView: NSView {
 
     private var state: CanvasState = .idle
     private var currentDrawEnd: CGPoint?
+    /// 自由手绘（画笔/马克笔）进行中的采样点集。距离抽稀在 appendFreehandPoint。
+    private var freehandPoints: [CGPoint] = []
 
     // 当前工具和样式
     //
@@ -174,6 +176,7 @@ class AnnotationView: NSView {
         if let arrow = obj as? Arrow { return arrow.lineWidth }
         if let rect = obj as? RectangleShape { return rect.lineWidth }
         if let circle = obj as? CircleShape { return circle.lineWidth }
+        if let freehand = obj as? FreehandShape { return freehand.lineWidth }
         return nil
     }
 
@@ -181,6 +184,7 @@ class AnnotationView: NSView {
         if let arrow = obj as? Arrow { arrow.lineWidth = value }
         else if let rect = obj as? RectangleShape { rect.lineWidth = value }
         else if let circle = obj as? CircleShape { circle.lineWidth = value }
+        else if let freehand = obj as? FreehandShape { freehand.lineWidth = value }
     }
 
     /// 颜色是否视为同一个（动态系统色直接 `==` 会误判，统一折到 deviceRGB 比）
@@ -566,10 +570,16 @@ class AnnotationView: NSView {
             // 序号 / 贴纸这类单击放置的工具：对象已放置并选中
         } else {
             // 未命中 → 开始画新图形
-            // 对起始点进行 snap：如果吸附到已有对象的 snap point，则以该点为中心绘制
-            let snappedStart = applySnap(to: point, excludeKey: nil)
-            drawingFromCenter = (activeSnapPoint != nil)
-            state = .drawing(tool: currentTool, start: snappedStart)
+            if ToolRegistry.handler(for: currentTool)?.isFreehand == true {
+                // 自由手绘：笔画跟着手走，**不吸附**（吸附到角点会让笔画起笔跳位）
+                freehandPoints = [point]
+                state = .drawing(tool: currentTool, start: point)
+            } else {
+                // 对起始点进行 snap：如果吸附到已有对象的 snap point，则以该点为中心绘制
+                let snappedStart = applySnap(to: point, excludeKey: nil)
+                drawingFromCenter = (activeSnapPoint != nil)
+                state = .drawing(tool: currentTool, start: snappedStart)
+            }
             selectedKey = nil
         }
         needsDisplay = true
@@ -640,8 +650,12 @@ class AnnotationView: NSView {
             refreshDebugView()
             needsDisplay = true
 
-        case .drawing:
-            currentDrawEnd = applySnap(to: point, excludeKey: nil)
+        case .drawing(let tool, _):
+            if ToolRegistry.handler(for: tool)?.isFreehand == true {
+                appendFreehandPoint(point)
+            } else {
+                currentDrawEnd = applySnap(to: point, excludeKey: nil)
+            }
             needsDisplay = true
 
         case .erasing:
@@ -663,6 +677,20 @@ class AnnotationView: NSView {
 
         switch state {
         case .drawing(let tool, let start):
+            if ToolRegistry.handler(for: tool)?.isFreehand == true {
+                // 自由手绘：整条点集就是一个对象。单点也接受（画成圆点）。
+                let points = freehandPoints
+                freehandPoints = []
+                let colorKey = hitTestBuffer.generateUniqueColorKey()
+                if let obj = ToolRegistry.handler(for: tool)?
+                    .makeFreehandObject(points: points, tool: tool,
+                                        context: toolContext(colorKey: colorKey)) {
+                    registerNewObject(obj, colorKey: colorKey)
+                }
+                state = .idle
+                needsDisplay = true
+                return
+            }
             // 对终点应用吸附
             let snappedEnd = applySnap(to: point, excludeKey: nil)
             // 最小长度检查
@@ -867,6 +895,13 @@ class AnnotationView: NSView {
                 index = 10
             case "=":
                 index = 11
+            // 助记键（画笔/马克加在数字直选之后，不打乱 1-9/0/-/= 的既有肌肉记忆）
+            case "p":
+                (window as? AnnotationWindow)?.selectTool(.pen)
+                return true
+            case "m":
+                (window as? AnnotationWindow)?.selectTool(.marker)
+                return true
             default:
                 index = nil
             }
@@ -877,6 +912,19 @@ class AnnotationView: NSView {
         }
 
         return false
+    }
+
+    /// 手绘采点：距上一点 ≥ 1.5pt 才收。
+    ///
+    /// mouseDragged 的触发频率远高于需要（高刷屏上 1px 一事件），
+    /// 不抽稀的话一条笔画能攒几千个点 —— 命中层描边、包围盒、附着参数化全部跟着变慢。
+    /// 1.5pt 在视觉上与逐点无异（后续还有曲线平滑），却把点数压低一个量级。
+    private func appendFreehandPoint(_ point: CGPoint) {
+        if let last = freehandPoints.last,
+           hypot(point.x - last.x, point.y - last.y) < 1.5 {
+            return
+        }
+        freehandPoints.append(point)
     }
 
     /// 把进行中的移动 / 旋转 / 缩放 / 橡皮擦**回退**掉，并归还在拖拽期间被解除的附着关系。
@@ -1299,6 +1347,13 @@ class AnnotationView: NSView {
         // 4. 绘制正在画的图形预览
         if case .drawing(let tool, let start) = state, let end = currentDrawEnd {
             drawPreview(tool: tool, start: start, end: end, in: ctx)
+        }
+        // 自由手绘的预览 = 已采到的点集本身（不是起点→终点的一段线）
+        if case .drawing(let tool, _) = state,
+           ToolRegistry.handler(for: tool)?.isFreehand == true, !freehandPoints.isEmpty {
+            ToolRegistry.handler(for: tool)?
+                .drawFreehandPreview(freehandPoints, tool: tool, in: ctx,
+                                     context: toolContext(colorKey: 0))
         }
 
         // 4.5 拖拽箭头时：如果**松手会附着到某个形状上**，先把锚点标出来

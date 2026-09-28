@@ -119,6 +119,8 @@ run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
 run_probe postfix_probe          "${ALL_SOURCES[@]}"
 # A 区分叉里那些 master 仍然缺失的修复：重新实现后的对齐验证
 run_probe master_parity_probe    "${ALL_SOURCES[@]}"
+# 画笔/马克笔：合成真实拖拽 + 像素实测半透明
+run_probe freehand_probe         "${ALL_SOURCES[@]}"
 
 # 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
 # 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次

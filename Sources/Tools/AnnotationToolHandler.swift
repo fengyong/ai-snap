@@ -52,6 +52,23 @@ protocol AnnotationToolHandler {
     /// 单击放置（序号、贴纸）。返回 nil 表示该工具不是单击放置类。
     func placeObject(at point: CGPoint, tool: DrawingTool,
                      context: ToolContext) -> (any AnnotationObject)?
+
+    /// 自由手绘类工具（画笔 / 马克笔）：拖拽**逐点采样**、整个点集才是一个对象，
+    /// 与「起点→终点」的拖拽构造路径不同。画布据此选择累积点集还是记录终点。
+    var isFreehand: Bool { get }
+
+    /// 用整条采样点集构造对象（仅 isFreehand 工具返回非 nil）。
+    ///
+    /// **必须列进协议本体**（下面 extension 只放默认实现）：Swift 的协议扩展方法
+    /// 不参与存在体动态分发 —— 只写在 extension 里的方法，经 `any AnnotationToolHandler`
+    /// 调用永远命中默认实现、不会调到具体 handler 的版本（实测踩到：一笔画完
+    /// 对象永远是 nil）。与 makeObject/placeObject 是同一个待遇。
+    func makeFreehandObject(points: [CGPoint], tool: DrawingTool,
+                            context: ToolContext) -> (any AnnotationObject)?
+
+    /// 手绘进行中的预览：把已采到的点集画出来（所见即所得）。
+    func drawFreehandPreview(_ points: [CGPoint], tool: DrawingTool,
+                             in ctx: CGContext, context: ToolContext)
 }
 
 extension AnnotationToolHandler {
@@ -67,6 +84,16 @@ extension AnnotationToolHandler {
                      context: ToolContext) -> (any AnnotationObject)? {
         nil
     }
+
+    var isFreehand: Bool { false }
+
+    func makeFreehandObject(points: [CGPoint], tool: DrawingTool,
+                            context: ToolContext) -> (any AnnotationObject)? {
+        nil
+    }
+
+    func drawFreehandPreview(_ points: [CGPoint], tool: DrawingTool,
+                             in ctx: CGContext, context: ToolContext) {}
 }
 
 /// 工具 → handler 的登记表。
@@ -83,6 +110,7 @@ enum ToolRegistry {
         ClickPlacementToolHandler(),
         TextToolHandler(),
         RedactionToolHandler(),
+        PenToolHandler(),
     ]
 
     static func handler(for tool: DrawingTool) -> AnnotationToolHandler? {
