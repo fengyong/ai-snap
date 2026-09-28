@@ -10,6 +10,23 @@ import Cocoa
 /// 作为渲染入口，本文件放它调用的绘制细节。
 extension AnnotationView {
 
+    /// 在附着锚点画一个小环。
+    ///
+    /// 两个场景共用：拖拽箭头时的**落笔前预览**（"松手会挂在这里"）与选中箭头后的
+    /// **事后可查**。两处各画一份的话，改了一处另一处就不一致了。
+    func drawAttachRing(at point: CGPoint, in ctx: CGContext) {
+        ctx.saveGState()
+        ctx.setLineDash(phase: 0, lengths: [])
+        let r: CGFloat = 5
+        let ring = CGRect(x: point.x - r, y: point.y - r, width: r * 2, height: r * 2)
+        ctx.setFillColor(NSColor.systemBlue.withAlphaComponent(0.25).cgColor)
+        ctx.fillEllipse(in: ring)
+        ctx.setStrokeColor(NSColor.systemBlue.cgColor)
+        ctx.setLineWidth(1.5)
+        ctx.strokeEllipse(in: ring)
+        ctx.restoreGState()
+    }
+
     /// 选中态：发光虚线框 + 四角手柄 + 右上角删除按钮
     func drawSelectionHandles(for obj: any AnnotationObject, in ctx: CGContext) {
         let box = obj.boundingBox
@@ -47,32 +64,18 @@ extension AnnotationView {
             ctx.strokeEllipse(in: handleRect)
         }
 
-        // 2.5 附着的端点：画一个小环
+        // 2.5 附着的端点：画一个小环（**事后可查**）
         //
-        // 没有它的话，"这一端挂在了别的形状上"在界面上**毫无迹象** —— 用户只能等到
+        // 没有它的话，"这一端挂在了别的形状上"在界面上毫无迹象 —— 用户只能等到
         // 移动父对象时发现箭头跟着动了才知道；而删掉父对象时箭头又被一起删掉，
-        // 那时就更摸不着头脑（"我只是删了个矩形，箭头怎么也没了"）。
+        // 那时更摸不着头脑（"我只是删了个矩形，箭头怎么也没了"）。
         //
-        // 只在**选中**时画：平时画会与箭头自己的端点圆头糊在一起。
-        // 用 save/restore 把状态圈起来，别影响后面删除叉号的绘制。
+        // 落笔**之前**的提示在 `draw(_:)` 的第 4.5 步（拖拽预览），两者共用这里的画法。
         if let arrow = obj as? Arrow {
-            let anchors = [arrow.startAttachment, arrow.endAttachment]
-                .compactMap { $0 }
-                .compactMap { resolveAttachmentPosition($0) }
-            if !anchors.isEmpty {
-                ctx.saveGState()
-                ctx.setLineDash(phase: 0, lengths: [])
-                for anchor in anchors {
-                    let r: CGFloat = 5
-                    let ring = CGRect(x: anchor.x - r, y: anchor.y - r,
-                                      width: r * 2, height: r * 2)
-                    ctx.setFillColor(NSColor.systemBlue.withAlphaComponent(0.25).cgColor)
-                    ctx.fillEllipse(in: ring)
-                    ctx.setStrokeColor(NSColor.systemBlue.cgColor)
-                    ctx.setLineWidth(1.5)
-                    ctx.strokeEllipse(in: ring)
-                }
-                ctx.restoreGState()
+            for attachment in [arrow.startAttachment, arrow.endAttachment] {
+                guard let attachment = attachment,
+                      let anchor = resolveAttachmentPosition(attachment) else { continue }
+                drawAttachRing(at: anchor, in: ctx)
             }
         }
 

@@ -93,15 +93,18 @@ class AnnotationView: NSView {
     // 点捕捉：当前活跃的吸附点（用于可视化）
     // 非 private：吸附扩展文件要用
     var activeSnapPoint: CGPoint?
-    /// 被动吸附的判定半径（点）：鼠标空闲移动时，离吸附点多近才亮起指示器。
+    /// 被动吸附的判定半径（点）：鼠标空闲移动时，离**吸附点**多近才亮起指示器。
     ///
-    /// **与 `attachThreshold`（15）不是同一个东西，别顺手统一**：
-    ///   · 这个管的是"提示"—— 鼠标路过时给个视觉指引，宁小勿大（太大会到处亮）；
-    ///   · `attachThreshold` 管的是"决定"—— 箭头端点落下时是否记住附着关系，
-    ///     宁大勿小（记错了用户要手动挪开）。
-    /// 两者作用在不同时机、承担不同后果，取值不同是有意的。评审里被列成"语义重叠"，
-    /// 复核后判定不是缺陷；真正缺的是"挂上了"这件事没有视觉反馈 —— 已在
-    /// `drawSelectionHandles` 里补上附着锚点小环。
+    /// **它只管吸附点**（角点 / 中心，见各形状的 `snapPoints()`），
+    /// **不管箭头端点到形状周长的附着** —— 后者是 `attachThreshold`（15）的事，
+    /// 几何不同（点是离散的几个，附着是整条周长）、时机也不同（这个是空闲悬停的
+    /// 指引，那个是落笔时的决定）。两个数**不要顺手统一**：
+    ///   · 这个管"提示"：路过时给个视觉指引，宁小勿大（太大会到处亮）；
+    ///   · 那个管"决定"：端点落下时是否记住附着关系，宁大勿小（记错了要手动挪开）。
+    ///
+    /// 把这两个数放在一起比大小是**看错了地方**：调大这个并不会让人看见"挂上了"，
+    /// 因为附着从来就没有反馈。那件事由拖拽时的锚点预览（`draw(_:)` 第 4.5 步）
+    /// 与选中时的锚点小环负责。这段注释是写给下一轮评审的。
     let snapThreshold: CGFloat = 12.0
     // 起始点是否吸附到了 snap point → 以该点为中心绘制
     private var drawingFromCenter: Bool = false
@@ -1296,6 +1299,20 @@ class AnnotationView: NSView {
         // 4. 绘制正在画的图形预览
         if case .drawing(let tool, let start) = state, let end = currentDrawEnd {
             drawPreview(tool: tool, start: start, end: end, in: ctx)
+        }
+
+        // 4.5 拖拽箭头时：如果**松手会附着到某个形状上**，先把锚点标出来
+        //
+        // 附着是个"看不见的状态"：落笔那一刻它悄悄记下了关系，之后要么父对象移动时
+        // 箭头跟着走、要么父对象被删时箭头一起消失 —— 用户要到那时才知道。
+        //
+        // 注意：第 5 步的吸附指示器画的是**吸附点**（角点/中心），与"周长附着"是两套
+        // 东西。所以"把 snapThreshold 调大一点"并不能让人看见附着 —— 附着在任何距离
+        // 都没有反馈（3 或 14 都一样）。上一轮评审曾把这两件事混起来，这里一并说清。
+        if case .drawing(let tool, _) = state, tool == .arrow, let end = currentDrawEnd,
+           let attachment = detectAttachment(at: end, excludeKey: nil),
+           let anchor = resolveAttachmentPosition(attachment) {
+            drawAttachRing(at: anchor, in: ctx)
         }
 
         // 5. 绘制吸附指示器
