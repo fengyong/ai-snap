@@ -90,14 +90,32 @@ class HitTestBuffer {
 
     /// 清空缓冲区 (全部置为 0 = 背景)
     func clear() {
+        // 连绘图状态一起重置：否则上一个对象留下的线型（虚线）会被"清空"沿用，
+        // 下一个对象一上来就是虚的 —— 命中区出现采不到像素的空洞。
+        context.saveGState()
+        context.setLineDash(phase: 0, lengths: [])
+        context.setLineWidth(1)
+        context.setShouldAntialias(false)
+        context.setAllowsAntialiasing(false)
+        context.setBlendMode(.normal)
         context.setFillColor(NSColor.black.cgColor)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.restoreGState()
     }
 
     /// 在 Layer B 上绘制任意标注对象 (使用其唯一颜色，关闭抗锯齿)
+    ///
+    /// 用 save/restore 把每个对象的状态（线型、线宽、颜色、混合模式）隔离开，
+    /// 这样以后新增图形类型时**不会把它自己的状态泄漏给下一个对象**。
+    /// 少了这层保护，一个虚线对象会把后面所有对象的命中区也画成虚线 ——
+    /// 而这种 bug 只在"两个对象共用一段画笔状态"时才显形，很难归因。
     func drawObject(_ object: any AnnotationObject) {
         let pickColor = colorFromKey(object.hitTestColorKey)
+        context.saveGState()
+        context.setShouldAntialias(false)
+        context.setAllowsAntialiasing(false)
         object.drawHitTest(in: context, color: pickColor)
+        context.restoreGState()
     }
 
     /// 按 Z 序重绘所有对象到 Layer B

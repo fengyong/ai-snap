@@ -80,15 +80,29 @@ enum ScreenCapture {
     ///
     /// 倍率按「图像像素宽 ÷ 窗口逻辑宽」反推 —— 窗口的 `frame` 是点，
     /// 而捕获时配置的像素宽是 `frame.width × pointPixelScale`，两者相除恰好是实际倍率。
+    ///
+    /// **按 Z 序逐个试**：最前面那个未必截得动（某些窗口在当前权限/状态下会抛错），
+    /// 只试第一个的话就表现为"点了没反应"。全部失败才报没找到。
     static func captureWindowUnderMouse() async throws -> CapturedImage {
-        guard let targetID = windowIDUnderMouse() else {
+        let candidates = windowCandidatesUnderMouse()
+        guard !candidates.isEmpty else {
             throw ScreenCaptureError.windowNotFoundUnderMouse
         }
-        let (image, pointWidth) = try await CaptureProviderSCK.captureWindow(windowID: targetID)
-        return CapturedImage(image: image,
-                             pixelScale: CapturedImage.scale(pixelWidth: image.width,
-                                                             pointWidth: pointWidth),
-                             anchorRect: nil)
+
+        var lastError: Error?
+        for candidate in candidates {
+            do {
+                let (image, pointWidth) = try await CaptureProviderSCK.captureWindow(windowID: candidate.id)
+                guard image.width >= 1, image.height >= 1, pointWidth >= 1 else { continue }
+                return CapturedImage(image: image,
+                                     pixelScale: CapturedImage.scale(pixelWidth: image.width,
+                                                                     pointWidth: pointWidth),
+                                     anchorRect: nil)
+            } catch {
+                lastError = error      // 这个截不动，继续试下一个
+            }
+        }
+        throw lastError ?? ScreenCaptureError.windowNotFoundUnderMouse
     }
 
     // MARK: - 窗口枚举
@@ -114,44 +128,55 @@ enum ScreenCapture {
             ?? 0
     }
 
-    /// 返回鼠标下方最前面、非自身进程的窗口 ID。
+    /// 返回鼠标下方**所有**可截图的候选窗口，按 Z 序（最前面的在前）。
     ///
-    /// `CGWindowListCopyWindowInfo` 未废弃（`API_AVAILABLE(macos(10.5))`），
-    /// 因此这段「按 Z 序遍历 + 坐标命中」的逻辑原样保留，
-    /// 唯一的变化是：找到目标后不再自己抓图，而是把 windowID 交给 ScreenCaptureKit。
-    private static func windowIDUnderMouse() -> CGWindowID? {
-        let mouseLocation = NSEvent.mouseLocation
-
-        guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else {
-            return nil
-        }
-
-        // CGWindowList 使用屏幕坐标（左上原点），NSEvent 使用左下原点。整个循环共用一个点，算一次即可。
-        let testPoint = CGPoint(x: mouseLocation.x,
-                                y: primaryScreenHeight - mouseLocation.y)
-
-        let myPID = ProcessInfo.processInfo.processIdentifier
+    /// 过滤条件是必须的：只判 `pid != 自己` + 坐标命中的话，会选到
+    /// Window Server 的窗口、菜单栏、控制中心、Dock 之类 —— 对它们截图要么抛错、
+    /// 要么返回一张空图，用户看到的就是"点了窗口截图没反应"。
+    ///   · `layer == 0`  —— 普通应用窗口层；菜单栏(layer 25)、Dock(20)、
+    ///     Window Server 的大覆盖层都排在这个之外
+    ///   · `alpha > 0`   —— 完全透明的窗口截不出东西
+    ///   · 尺寸 ≥ 1×1    —— 排除零尺寸的占位条目
+    ///
+    /// 纯函数（只吃窗口信息列表 + 点 + 自身 pid），便于用构造数据直接验证。
+    static func windowCandidates(from windowList: [[String: Any]],
+                                 at point: CGPoint,
+                                 ownPID: Int32) -> [(id: CGWindowID, bounds: CGRect)] {
+        var result: [(id: CGWindowID, bounds: CGRect)] = []
         for info in windowList {
-            guard let pid = info[kCGWindowOwnerPID as String] as? Int32,
-                  pid != myPID,
+            guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let alpha = info[kCGWindowAlpha as String] as? Double, alpha > 0,
                   let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat],
                   let windowID = info[kCGWindowNumber as String] as? CGWindowID else {
                 continue
             }
-
             let bounds = CGRect(
                 x: boundsDict["X"] ?? 0,
                 y: boundsDict["Y"] ?? 0,
                 width: boundsDict["Width"] ?? 0,
                 height: boundsDict["Height"] ?? 0
             )
-
-            if bounds.contains(testPoint) {
-                return windowID
-            }
+            guard bounds.width >= 1, bounds.height >= 1 else { continue }
+            guard bounds.contains(point) else { continue }
+            result.append((windowID, bounds))
         }
-        return nil
+        return result
+    }
+
+    /// 鼠标下方（按 Z 序）的候选窗口
+    private static func windowCandidatesUnderMouse() -> [(id: CGWindowID, bounds: CGRect)] {
+        guard let windowList = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+        ) as? [[String: Any]] else {
+            return []
+        }
+        // CGWindowList 用屏幕坐标（左上原点），NSEvent 用左下原点，这里换算一次
+        let mouseLocation = NSEvent.mouseLocation
+        let testPoint = CGPoint(x: mouseLocation.x,
+                                y: primaryScreenHeight - mouseLocation.y)
+        return windowCandidates(from: windowList,
+                                at: testPoint,
+                                ownPID: ProcessInfo.processInfo.processIdentifier)
     }
 }

@@ -234,6 +234,196 @@ do {
     window.close()
 }
 
+// MARK: - 5. 导出分辨率锚在源像素
+
+print("\n=== 5. 导出分辨率锚在源图像素（不再随当前显示器）===")
+do {
+    func pixelSize(_ image: NSImage) -> (Int, Int)? {
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return (rep.pixelsWide, rep.pixelsHigh)
+    }
+
+    // 故意取一个**不等于任何显示器倍率**的像素尺寸（1.5x）：
+    // 旧实现走 NSImage.lockFocus()，在 2x 屏上会导出 400×200；锚在源像素才是 300×150。
+    let view = AnnotationView(image: blankCanvas(200, 100),
+                              pixelSize: CGSize(width: 300, height: 150))
+    let got = pixelSize(view.compositeImage()) ?? (0, 0)
+    check("导出像素尺寸 = 显式传入的源像素尺寸", got == (300, 150),
+          "\(got.0)×\(got.1)（期望 300×150；若按屏幕倍率会是 400×200 或 200×100）")
+
+    // 对照：不显式传时退回 representation 的像素尺寸，不应崩
+    let fallback = AnnotationView(image: blankCanvas(200, 100))
+    let got2 = pixelSize(fallback.compositeImage()) ?? (0, 0)
+    check("不传像素尺寸时仍能导出（走 representation 兜底）",
+          got2.0 >= 200 && got2.1 >= 100, "\(got2.0)×\(got2.1)")
+}
+
+// MARK: - 6. HitTestBuffer 状态隔离
+
+print("\n=== 6. HitTestBuffer 状态隔离（前一个对象的线型不泄漏给下一个）===")
+do {
+    /// 一个"故意留下虚线状态"的假对象 —— 现成的矩形/圆都会自己重置线型，
+    /// 所以只有这种对象才能把"状态泄漏"暴露出来。新加的图形类型如果忘了重置，
+    /// 就是这个样子。
+    final class SloppyObject: AnnotationObject {
+        let id = UUID()
+        let hitTestColorKey: UInt32
+        var center = CGPoint(x: 60, y: 100)
+        var rotation: CGFloat = 0
+        var color: NSColor = .red
+        init(key: UInt32) { hitTestColorKey = key }
+        var boundingBox: CGRect { CGRect(x: 20, y: 80, width: 80, height: 40) }
+        func draw(in ctx: CGContext) {}
+        func drawHitTest(in ctx: CGContext, color: NSColor) {
+            ctx.setStrokeColor(color.cgColor)
+            ctx.setLineWidth(6)
+            ctx.setLineDash(phase: 0, lengths: [6, 6])   // 故意不还原
+            ctx.stroke(boundingBox)
+        }
+        func selectionHandlePoints() -> [CGPoint] { [] }
+        func snapPoints() -> [SnapPoint] { [] }
+        func nearestPerimeterPoint(to point: CGPoint) -> CGPoint { center }
+        func move(by delta: CGVector) {}
+        func rotate(by angle: CGFloat) {}
+        func scale(by factor: CGFloat) {}
+    }
+
+    /// 第二个对象：只画自己的形状，**完全不碰线型**。
+    ///
+    /// 用现成的矩形测不出隔离 —— 因为矩形的 `drawHitTest` 自己会 `setLineDash([])`
+    /// 把状态重置掉，泄漏被对象挡住了（第一版探针就是这么写的，去掉 save/restore
+    /// 后照样通过，等于没测）。真正能暴露隔离缺失的，是"假设缓冲区会给它干净状态"
+    /// 的对象 —— 那正是新增图形类型最常见的样子。
+    final class PlainObject: AnnotationObject {
+        let id = UUID()
+        let hitTestColorKey: UInt32
+        let box: CGRect
+        var rotation: CGFloat = 0
+        var color: NSColor = .black
+
+        init(key: UInt32, box: CGRect) { hitTestColorKey = key; self.box = box }
+        var center: CGPoint { CGPoint(x: box.midX, y: box.midY) }
+        var boundingBox: CGRect { box }
+        func draw(in ctx: CGContext) {}
+        func drawHitTest(in ctx: CGContext, color: NSColor) {
+            ctx.setStrokeColor(color.cgColor)
+            ctx.setLineWidth(8)
+            ctx.stroke(box)          // 不设线型 —— 依赖缓冲区给干净状态
+        }
+        func selectionHandlePoints() -> [CGPoint] { [] }
+        func snapPoints() -> [SnapPoint] { [] }
+        func nearestPerimeterPoint(to point: CGPoint) -> CGPoint { center }
+        func move(by delta: CGVector) {}
+        func rotate(by angle: CGFloat) {}
+        func scale(by factor: CGFloat) {}
+    }
+
+    let view = AnnotationView(image: blankCanvas(400, 200))
+    let sloppyKey = view.hitTestBuffer.generateUniqueColorKey()
+    let plainKey = view.hitTestBuffer.generateUniqueColorKey()
+
+    view.hitTestBuffer.clear()
+    view.hitTestBuffer.drawObject(SloppyObject(key: sloppyKey))          // 留下虚线状态
+    view.hitTestBuffer.drawObject(PlainObject(key: plainKey,
+                                              box: CGRect(x: 250, y: 70, width: 100, height: 60)))
+
+    // 沿它的下边扫：干净状态下应当连续命中，被虚线污染则出现空洞
+    var hits = 0, samples = 0
+    for x in 255...345 {
+        samples += 1
+        if view.hitTestBuffer.pickColorKey(at: CGPoint(x: CGFloat(x), y: 70)) == plainKey {
+            hits += 1
+        }
+    }
+    let ratio = Double(hits) / Double(max(samples, 1))
+    check("前一个对象的虚线没有泄漏给下一个对象（命中区连续）",
+          ratio > 0.95, String(format: "下边命中率 %.0f%%（%d/%d）", ratio * 100, hits, samples))
+}
+
+// MARK: - 7. 窗口挑选过滤
+
+print("\n=== 7. 窗口挑选：过滤掉不可截图的窗口 ===")
+do {
+    let ownPID: Int32 = 999
+    let point = CGPoint(x: 100, y: 100)
+
+    func win(pid: Int32, layer: Int, alpha: Double,
+             _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, id: UInt32) -> [String: Any] {
+        [kCGWindowOwnerPID as String: pid,
+         kCGWindowLayer as String: layer,
+         kCGWindowAlpha as String: alpha,
+         kCGWindowBounds as String: ["X": x, "Y": y, "Width": w, "Height": h],
+         kCGWindowNumber as String: id]
+    }
+
+    let list: [[String: Any]] = [
+        win(pid: 100, layer: 0, alpha: 1, 50, 50, 100, 100, id: 1),      // 普通窗口 → 应入选
+        win(pid: 101, layer: 25, alpha: 1, 0, 0, 2000, 30, id: 2),       // 菜单栏层 → 排除
+        win(pid: 102, layer: 0, alpha: 0, 50, 50, 100, 100, id: 3),      // 全透明 → 排除
+        win(pid: 103, layer: 0, alpha: 1, 50, 50, 0, 0, id: 4),          // 零尺寸 → 排除
+        win(pid: ownPID, layer: 0, alpha: 1, 50, 50, 100, 100, id: 5),   // 自身进程 → 排除
+        win(pid: 104, layer: 0, alpha: 1, 300, 300, 50, 50, id: 6),      // 不含该点 → 排除
+    ]
+
+    let got = ScreenCapture.windowCandidates(from: list, at: point, ownPID: ownPID)
+    check("只留下可截图的普通窗口", got.count == 1 && got.first?.id == 1,
+          "入选 \(got.count) 个：\(got.map { $0.id })")
+}
+
+// MARK: - 8. 选中对象改色 / 改线宽（可撤销）
+
+print("\n=== 8. 选中对象可直接换色 / 改线宽，且可撤销 ===")
+do {
+    let view = AnnotationView(image: blankCanvas(400, 300))
+    let key = view.hitTestBuffer.generateUniqueColorKey()
+    let rect = RectangleShape(center: CGPoint(x: 200, y: 150), width: 120, height: 80,
+                              color: .systemRed, lineWidth: 8, hitTestColorKey: key)
+    view.objects[key] = rect
+    view.zOrder = [key]
+    view.selectedKey = key
+
+    let undoBefore = view.undoStack.count
+    let changed = view.restyleSelection(color: .systemBlue)
+    check("换色真的作用到选中对象上",
+          changed && rect.color.usingColorSpace(.deviceRGB)?.blueComponent ?? 0 > 0.8,
+          "颜色已变")
+
+    view.restyleSelection(lineWidth: 24)
+    check("改线宽作用到选中对象上", AnnotationView.lineWidth(of: rect) == 24,
+          "\(AnnotationView.lineWidth(of: rect) ?? -1)")
+    check("两次改动各记了一步撤销", view.undoStack.count == undoBefore + 2,
+          "\(undoBefore) → \(view.undoStack.count)")
+
+    // 撤销回线宽，再撤销回颜色
+    view.performUndo()
+    check("撤销改线宽", AnnotationView.lineWidth(of: rect) == 8,
+          "\(AnnotationView.lineWidth(of: rect) ?? -1)")
+    view.performUndo()
+    let backToRed = rect.color.usingColorSpace(.deviceRGB)?.redComponent ?? 0
+    check("撤销换色", backToRed > 0.8, String(format: "红分量 %.2f", backToRed))
+
+    // 没有选中对象时应当安全地什么都不做
+    view.selectedKey = nil
+    check("无选中时 restyle 安全返回 false", view.restyleSelection(color: .green) == false)
+}
+
+// MARK: - 9. 权限判定：不破坏已授权的情况
+
+print("\n=== 9. 权限判定 ===")
+do {
+    // 这条只保证"已授权时一定返回 true"（兜底探测不得把好情况判坏）。
+    // canCaptureRealPixels 依赖真实的屏幕录制权限与当前会话，取值随环境变化，
+    // 所以只报事实、不断言具体值。
+    let delegate = AppDelegate()
+    let preflight = CGPreflightScreenCaptureAccess()
+    let decided = delegate.checkScreenCapturePermission()
+    check("preflight 为真时判定必须为真", !preflight || decided,
+          "preflight=\(preflight) 判定=\(decided)")
+    print("     [INFO] 真实像素探测（2×2 截图）= \(delegate.canCaptureRealPixels())"
+          + " —— 取决于本进程有没有屏幕录制权限，不作断言")
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

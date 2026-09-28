@@ -121,7 +121,9 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     ///
     /// - Parameter anchor: 选区在 AppKit 屏幕坐标下的矩形；传 nil 则按普通方式居中开窗
     ///   （窗口截图走这条路）。
-    init(image: NSImage, anchor: NSRect? = nil) {
+    /// - Parameter pixelSize: 源截图的**像素**尺寸。导出分辨率以它为准 ——
+    ///   不传的话导出会退化成"按当前显示器分辨率"，在 1x 外接屏上标注 2x 截图会掉一半像素。
+    init(image: NSImage, anchor: NSRect? = nil, pixelSize: CGSize? = nil) {
         let imageSize = image.size
 
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -226,7 +228,7 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
                                                           height: contentHeight)))
 
         // 标注画布
-        annotationView = AnnotationView(image: image)
+        annotationView = AnnotationView(image: image, pixelSize: pixelSize)
         annotationView.frame = NSRect(x: 0, y: canvasBottom,
                                       width: canvasW, height: canvasH)
         if fitScale < 1.0 {
@@ -786,7 +788,8 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
     @objc private func lineWidthChanged(_ sender: NSSlider) {
         let value = CGFloat(sender.doubleValue)
-        annotationView.currentLineWidth = value
+        annotationView.currentLineWidth = value           // 影响之后新画的对象
+        annotationView.restyleSelection(lineWidth: value) // 有选中对象时同时改它
         lineWidthLabel.stringValue = "\(Int(value))px"
     }
 
@@ -839,7 +842,11 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     @objc private func colorButtonClicked(_ sender: NSButton) {
         let palette = ColorPalette.allPalettes[paletteIndex]
         if sender.tag >= 0 && sender.tag < palette.colors.count {
-            annotationView.currentColor = palette.colors[sender.tag]
+            let color = palette.colors[sender.tag]
+            annotationView.currentColor = color        // 影响之后新画的对象
+            // 选中了已有对象时，直接把这一个改成新颜色（可撤销）。
+            // 少了这一句，用户选中一个箭头再点色点会以为"改了"，其实只改了下一个新对象。
+            annotationView.restyleSelection(color: color)
             for btn in colorButtons {
                 btn.layer?.borderColor = NSColor.clear.cgColor
             }
