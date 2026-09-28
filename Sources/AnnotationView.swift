@@ -223,6 +223,55 @@ class AnnotationView: NSView {
         return true
     }
 
+    // MARK: - 连续改样式（滑杆拖拽）
+
+    /// 一次连续调整开始时的样式快照（`nil` = 当时没有选中对象）
+    private var continuousRestyleBaseline: (color: NSColor, lineWidth: CGFloat?)?
+
+    /// 连续调整开始：记下起点样式，供结束时合成**一条**撤销记录。
+    ///
+    /// 为什么需要它：`NSSlider` 连续发 action，一次拖拽几十次。若每次都记一条撤销，
+    /// 用户按 ⌘Z 只会退回 0.24px 的一小步 —— 从 30 退回 15 得按几十次
+    /// （实测 37 次 action → 37 条撤销记录）。
+    func beginContinuousRestyle() {
+        guard let key = selectedKey, let obj = objects[key] else {
+            continuousRestyleBaseline = nil
+            return
+        }
+        continuousRestyleBaseline = (obj.color, Self.lineWidth(of: obj))
+    }
+
+    /// 拖拽过程中实时改，但**不**记撤销。
+    ///
+    /// 刻意不重绘命中层：拖拽期间用户不会去点画布，而整张 Layer B 重绘是 MB 级
+    /// 工作量，每帧做一次会卡。`endContinuousRestyle` 会补上那一次。
+    func updateContinuousRestyle(lineWidth newLineWidth: CGFloat) {
+        guard let key = selectedKey, let obj = objects[key],
+              let current = Self.lineWidth(of: obj),
+              abs(current - newLineWidth) > 0.01 else { return }
+        Self.setLineWidth(newLineWidth, on: obj)
+        needsDisplay = true
+    }
+
+    /// 连续调整结束：把"起点 → 终点"合成一条撤销记录。
+    func endContinuousRestyle() {
+        defer { continuousRestyleBaseline = nil }
+        guard let key = selectedKey, let obj = objects[key],
+              let baseline = continuousRestyleBaseline else { return }
+        let newLineWidth = Self.lineWidth(of: obj)
+        // 转了一圈又回到原值就不记 —— 撤销栈里不该出现"什么也没变"的一步
+        guard baseline.lineWidth != newLineWidth else { return }
+
+        undoStack.append(.restyle(colorKey: key,
+                                  oldColor: baseline.color, newColor: obj.color,
+                                  oldLineWidth: baseline.lineWidth,
+                                  newLineWidth: newLineWidth))
+        redoStack.removeAll()
+        hitTestBuffer.redrawAll(objects: objects, zOrder: zOrder)   // 拖拽期间省下的那一次
+        refreshDebugView()
+        needsDisplay = true
+    }
+
     // MARK: 橡皮擦状态
     //
     // 橡皮擦不是"拖拽构造一个对象"，而是边拖边删，所以它有自己的一组状态，

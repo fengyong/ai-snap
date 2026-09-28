@@ -16,6 +16,12 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     private var watermarkField: NSTextField!
     private var lineWidthLabel: NSTextField!
 
+    /// 线宽滑杆是否正处于**一次拖拽**当中。
+    ///
+    /// 拖拽期间实时改选中对象但不记撤销，松手时把"起点 → 终点"合成一条 ——
+    /// 否则一次拖拽会往撤销栈里塞几十条记录（实测 37 条），⌘Z 一次只退 0.24px。
+    private var lineWidthSliderDragging = false
+
     /// 工具栏实际排布出来的内容宽度（在 `createToolbar` 末尾由布局游标写入）。
     /// 窗口宽度据此决定，而不是用硬编码常量 —— 否则新增控件会被静默裁掉。
     private var toolbarContentWidth: CGFloat = 0
@@ -518,13 +524,24 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         // ── 5. 线宽 ──
         baseY = openGroup("线宽", labelWidth: 100)
         let widthX = cursor.place(width: 104, gapAfter: 4)
-        let lineWidthSlider = NSSlider(frame: NSRect(x: widthX, y: baseY + 14, width: 70, height: 20))
+        let lineWidthSlider = GestureReportingSlider(frame: NSRect(x: widthX, y: baseY + 14, width: 70, height: 20))
         lineWidthSlider.minValue = 1
         lineWidthSlider.maxValue = 30
         lineWidthSlider.doubleValue = Double(annotationView.currentLineWidth)
         lineWidthSlider.target = self
         lineWidthSlider.action = #selector(lineWidthChanged(_:))
         lineWidthSlider.toolTip = "调节线条粗细 (1-30)"
+        // 整段拖拽只记一条撤销：见 GestureReportingSlider 与 lineWidthChanged
+        lineWidthSlider.onGestureBegin = { [weak self] in
+            guard let self = self else { return }
+            self.lineWidthSliderDragging = true
+            self.annotationView.beginContinuousRestyle()
+        }
+        lineWidthSlider.onGestureEnd = { [weak self] in
+            guard let self = self else { return }
+            self.lineWidthSliderDragging = false
+            self.annotationView.endContinuousRestyle()
+        }
         toolbar.addSubview(lineWidthSlider)
 
         lineWidthLabel = NSTextField(labelWithString: "\(Int(annotationView.currentLineWidth))px")
@@ -789,7 +806,13 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     @objc private func lineWidthChanged(_ sender: NSSlider) {
         let value = CGFloat(sender.doubleValue)
         annotationView.currentLineWidth = value           // 影响之后新画的对象
-        annotationView.restyleSelection(lineWidth: value) // 有选中对象时同时改它
+        if lineWidthSliderDragging {
+            // 拖拽中：实时改选中对象，撤销留到松手时合成一条
+            annotationView.updateContinuousRestyle(lineWidth: value)
+        } else {
+            // 键盘方向键 / 点击轨道跳档：一次就是一档，各记一条撤销正好
+            annotationView.restyleSelection(lineWidth: value)
+        }
         lineWidthLabel.stringValue = "\(Int(value))px"
     }
 
@@ -1256,4 +1279,24 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
+}
+
+// MARK: - 会报告"一次拖拽从哪开始、到哪结束"的滑杆
+
+/// `NSSlider` 是**连续**发 action 的：一次拖拽会发出几十次 action。
+/// 若每次 action 都记一条撤销，用户按一次 ⌘Z 只退回 0.24px 的一小步 ——
+/// 从 30 拖到 15 得按几十次才退得回去（实测 37 次 action → 37 条撤销记录）。
+///
+/// 重写 `mouseDown` 是最可靠的切分点：`super.mouseDown` 内部会一直跑到鼠标松开
+/// （NSSlider 自己的拖拽跟踪循环），所以"调用前"与"返回后"正好是这次拖拽的两端。
+/// `NSSlider` 本身没有 begin/end 回调，`isContinuous = false` 又会牺牲拖拽时的实时预览。
+final class GestureReportingSlider: NSSlider {
+    var onGestureBegin: (() -> Void)?
+    var onGestureEnd: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        onGestureBegin?()
+        super.mouseDown(with: event)   // 内部跑到鼠标松开
+        onGestureEnd?()
+    }
 }

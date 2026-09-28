@@ -1,4 +1,14 @@
 import Cocoa
+import ScreenCaptureKit
+
+/// 跨队列传一个 Bool 的盒子。
+///
+/// `canQueryShareableContent` 的信号量回调在别的队列上写、调用方在信号量之后读。
+/// 用一个明确的引用类型（而不是 `var` 捕获）是为了让"这里有个共享可变状态"写在脸上；
+/// 同步由信号量负责。
+private final class BoolBox {
+    var value = false
+}
 
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
@@ -9,6 +19,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var annotationWindow: AnnotationWindow?
     private var settingsWindowController: SettingsWindowController?
     private var historyWindow: HistoryWindow?
+
+    /// ⌘Q / 菜单里的「退出 AISnap」也要走一遍"放弃标注"的确认。
+    ///
+    /// 之前只覆盖了标题栏 X 与工具栏「放弃」按钮 —— 按 ⌘Q 会**直接退出**，
+    /// 图上的标注静默丢失，连一句提示都没有。数据丢失的口子留一个就等于没堵。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let window = annotationWindow else { return .terminateNow }
+        return window.confirmDiscardIfNeeded() ? .terminateNow : .terminateCancel
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -190,43 +209,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// 授权之后，**同一个进程生命周期内它仍可能返回 false**（系统要求重启应用才更新
     /// 这个标志）。只信它的话，用户明明已经授权，却被反复引导去授权 —— 怎么点都没用。
     ///
-    /// 所以再加一次**真实的极小截图探测**兜底：能拍到非透明像素就说明确实有权限。
-    /// 非 private：探针要直接验证"已授权时不得被判成无权限"
+    /// 所以 preflight 返回 false 时再探一次。**但兜底判据不能用像素**：
+    /// 没有权限时 `CGWindowListCreateImage` 依然会返回一张**非 nil、完全不透明**的
+    /// 桌面图 —— 按"有没有非透明像素"判定会**恒为真**，等于把权限门整个删掉。
+    /// 实测对照（同一个二进制，只换运行身份）：
+    ///
+    /// | 运行方式 | preflight | 像素探测 |
+    /// |---|---|---|
+    /// | 直接跑（已授权） | `true` | `true` |
+    /// | 经 `launchctl` 跑（无授权） | `false` | **`true`** ← 误判 |
+    ///
+    /// 无权限那次的探测像素是 `(45,45,50,255)`，四个像素一模一样 —— 那是壁纸，不是屏幕内容。
+    ///
+    /// 改用 ScreenCaptureKit 的**权限专属信号**：没有权限时 `SCShareableContent`
+    /// 抛 `SCStreamErrorDomain -3801`（「用户拒绝了…TCC」），有权限时正常返回。
+    /// 这也正是抓图本身用的框架，顺带把已经迁走的 deprecated API 从本文件清掉。
+    ///
+    /// 非 private：探针要直接验证"已授权时不得被判成无权限"。
     func checkScreenCapturePermission() -> Bool {
-        if #available(macOS 10.15, *) {
-            if CGPreflightScreenCaptureAccess() { return true }
-            return canCaptureRealPixels()
-        }
-        return true
+        if CGPreflightScreenCaptureAccess() { return true }
+        return canQueryShareableContent()
     }
 
-    /// 用一张极小截图探测"到底能不能拍到东西"。
+    /// 用 `SCShareableContent` 探测权限（权限专属信号，见上）。
     ///
-    /// 探测矩形取 **2×2 点**而不是 1×1：在 1x 屏上 1pt 就只有 1 个像素，
-    /// 而"全透明"判定至少要 2×2 才有意义 —— 1 个像素时任何实现都容易把
-    /// 不透明误判成透明，于是兜底探测在 1x 屏上恒为 false（这个坑踩过）。
-    func canCaptureRealPixels() -> Bool {
-        guard let probe = CGWindowListCreateImage(CGRect(x: 0, y: 0, width: 2, height: 2),
-                                                  .optionOnScreenOnly, kCGNullWindowID,
-                                                  [.bestResolution]) else {
-            return false
+    /// 底层是 async API，而两个调用点（区域/窗口截图入口）都是同步 `guard`，
+    /// 所以这里用信号量等结果。两点trade-off都写清楚：
+    ///   · **会阻塞主线程**，所以超时取 1 秒（实测 SCK 毫秒级返回，1 秒只兜异常）；
+    ///   · **任何失败都按无权限处理**（fail-closed）—— 超时、报错、拿不到答案
+    ///     一律返回 false，宁可多弹一次授权引导，也不能让用户在没有权限的情况下
+    ///     截出一张黑图还不知道为什么。反方向不可能出错：只有 SCK **成功**才判 true，
+    ///     而成功本身就等于实时 TCC 说"允许"。
+    func canQueryShareableContent(timeout: TimeInterval = 1) -> Bool {
+        let semaphore = DispatchSemaphore(value: 0)
+        // 用 final class 而不是 var 捕获：闭包在别的队列上写、这里读，需要明确的可变盒子
+        let box = BoolBox()
+        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { _, error in
+            box.value = (error == nil)
+            semaphore.signal()
         }
-        let w = probe.width, h = probe.height
-        guard w >= 1, h >= 1 else { return false }
-
-        var buffer = [UInt8](repeating: 0, count: w * h * 4)
-        guard let ctx = CGContext(data: &buffer, width: w, height: h,
-                                  bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            return false
-        }
-        ctx.draw(probe, in: CGRect(x: 0, y: 0, width: w, height: h))
-        // 只要有一个像素不是全透明，就说明真的拍到了屏幕内容
-        for i in stride(from: 3, to: buffer.count, by: 4) where buffer[i] != 0 {
-            return true
-        }
-        return false
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut { return false }
+        return box.value
     }
 
     /// 展示屏幕录制权限引导。

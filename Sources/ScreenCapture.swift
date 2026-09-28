@@ -130,13 +130,23 @@ enum ScreenCapture {
 
     /// 返回鼠标下方**所有**可截图的候选窗口，按 Z 序（最前面的在前）。
     ///
-    /// 过滤条件是必须的：只判 `pid != 自己` + 坐标命中的话，会选到
-    /// Window Server 的窗口、菜单栏、控制中心、Dock 之类 —— 对它们截图要么抛错、
-    /// 要么返回一张空图，用户看到的就是"点了窗口截图没反应"。
-    ///   · `layer == 0`  —— 普通应用窗口层；菜单栏(layer 25)、Dock(20)、
-    ///     Window Server 的大覆盖层都排在这个之外
-    ///   · `alpha > 0`   —— 完全透明的窗口截不出东西
-    ///   · 尺寸 ≥ 1×1    —— 排除零尺寸的占位条目
+    /// 过滤是必须的：只判 `pid != 自己` + 坐标命中的话，会选到 Window Server 的窗口、
+    /// 菜单栏、Dock 之类 —— 对它们截图要么抛错、要么返回一张空图，用户看到的就是
+    /// "点了窗口截图没反应"。**程序坞尤其阴**：它是 `layer 20`、铺满整个屏幕，
+    /// 鼠标停在桌面上时它必然命中。
+    ///
+    /// 判据只保留 `0 <= layer < 20`：
+    ///   · 这一档既包含普通应用窗口（`layer == 0`），也包含**浮动面板 / 画中画**
+    ///     （`NSFloatingWindowLevel` = 3 等）。早先只认 `layer == 0` 会把浮层静默跳过，
+    ///     于是截到它**后面**那个窗口 —— 用户点的明明是浮窗，拿到的却是别的东西，
+    ///     比"没反应"更难察觉。
+    ///   · `layer >= 20` 是系统 UI：程序坞 20、菜单栏 24、Window Server 覆盖层
+    ///     2147483630；`layer < 0` 是通知中心之类。这些才是该挡掉的。
+    ///
+    /// **不要**把 `layer == 0` 单独提到前面：那等于放弃 Z 序，浮窗在普通窗口前面时
+    /// 反而会去截后面那个 —— 又一次同样的错误。Z 序本身就是正确答案。
+    ///
+    /// `alpha > 0`（完全透明的截不出东西）与尺寸 ≥ 1×1（零尺寸占位条目）同理。
     ///
     /// 纯函数（只吃窗口信息列表 + 点 + 自身 pid），便于用构造数据直接验证。
     static func windowCandidates(from windowList: [[String: Any]],
@@ -145,7 +155,7 @@ enum ScreenCapture {
         var result: [(id: CGWindowID, bounds: CGRect)] = []
         for info in windowList {
             guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
-                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer >= 0, layer < 20,
                   let alpha = info[kCGWindowAlpha as String] as? Double, alpha > 0,
                   let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat],
                   let windowID = info[kCGWindowNumber as String] as? CGWindowID else {

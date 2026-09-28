@@ -244,6 +244,36 @@ do {
     let rot2After = (v2.objects[k2] as? RectangleShape)?.rotation ?? -99
     check("对照：按在对象上 Option 拖拽确实旋转", abs(rot2After - rot2Before) > 0.01,
           "rotation \(rot2Before) → \(rot2After)")
+
+    // C) 短粗箭头：**看得见的头**必须能被 Option 抓住
+    //
+    // 头部长度随线宽放大（线宽 30 → 96pt），而 `boundingBox` 的 padding 一度仍用
+    // 样式自带的 14 —— 于是可见头部有一圈落在包围盒之外，按在头上 Option 拖拽
+    // 却转不动它（用户看到的是"这个头点不动"）。
+    //
+    // 抓取点 (232, 200) 是刻意挑的**有判别力**的位置：三角头的后缘在 x=227
+    // （尖端 310 − 头长 96·cos30°），所以它落在可见头部内；而旧包围盒 inset −8 后
+    // 左边界是 248，所以它在旧门控**之外**。
+    let v3 = AnnotationView(image: blankCanvas(600, 400))
+    let k3 = v3.hitTestBuffer.generateUniqueColorKey()
+    let thick = Arrow(startPoint: CGPoint(x: 300, y: 200), endPoint: CGPoint(x: 310, y: 200),
+                      color: .black, lineWidth: 30, hitTestColorKey: k3, style: .default)
+    v3.objects[k3] = thick
+    v3.zOrder = [k3]
+    v3.hitTestBuffer.drawObject(thick)
+    v3.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 305, y: 200)))
+    v3.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 305, y: 200)))
+    check("短粗箭头能被点中选中", v3.selectedKey == k3,
+          "selected=\(String(describing: v3.selectedKey))")
+
+    let grab = CGPoint(x: 232, y: 200)
+    let rot3Before = thick.rotation
+    v3.mouseDown(with: mouse(.leftMouseDown, grab, .option))
+    v3.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: grab.x, y: grab.y + 50), .option))
+    v3.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: grab.x, y: grab.y + 50), .option))
+    check("按在可见头部上 Option 拖拽能旋转（旧包围盒下这一下点不动）",
+          abs(thick.rotation - rot3Before) > 0.01,
+          String(format: "rotation %.4f → %.4f", rot3Before, thick.rotation))
 }
 
 // MARK: - 4. 水印文本实时同步
@@ -280,6 +310,21 @@ do {
     check("标题栏 X 的关闭确认已接线（delegate 已设置）",
           window.delegate === window,
           window.delegate == nil ? "delegate 为 nil —— windowShouldClose 永远不会被调用" : "已设置")
+
+    // ⌘Q 也要走同一道确认。
+    //
+    // 只覆盖 X 与「放弃」按钮等于留了个数据丢失的口子：按 ⌘Q 直接退出，
+    // 图上的标注静默丢失。这里能自动验的是**接线**（且没有标注窗口时必须直接放行）；
+    // "有未保存标注时会拦下来"复用的是同一个 confirmDiscardIfNeeded()，
+    // 它的行为由上面那几条守着。
+    let appDelegate = AppDelegate()
+    let hasTerminateHook = appDelegate.responds(
+        to: #selector(NSApplicationDelegate.applicationShouldTerminate(_:)))
+    check("⌘Q 的退出确认已接线（applicationShouldTerminate 已实现）",
+          hasTerminateHook, hasTerminateHook ? "已实现" : "没实现 —— ⌘Q 会静默丢标注")
+    check("没有标注窗口时退出直接放行，不无谓拦一下",
+          appDelegate.applicationShouldTerminate(NSApplication.shared) == .terminateNow,
+          "\(appDelegate.applicationShouldTerminate(NSApplication.shared))")
     window.close()
 }
 
@@ -472,15 +517,101 @@ do {
 print("\n=== 9. 权限判定 ===")
 do {
     // 这条只保证"已授权时一定返回 true"（兜底探测不得把好情况判坏）。
-    // canCaptureRealPixels 依赖真实的屏幕录制权限与当前会话，取值随环境变化，
-    // 所以只报事实、不断言具体值。
+    // **反方向**（无权限时不得判成有权限）需要一个人家确实没授权的进程 ——
+    // 本探针多半从宿主继承了授权，进程内构造不出来；那条由
+    // `probes/permission_probe.swift` 用 launchctl 另起一个身份来验。
     let delegate = AppDelegate()
     let preflight = CGPreflightScreenCaptureAccess()
+    let sck = delegate.canQueryShareableContent()
     let decided = delegate.checkScreenCapturePermission()
     check("preflight 为真时判定必须为真", !preflight || decided,
           "preflight=\(preflight) 判定=\(decided)")
-    print("     [INFO] 真实像素探测（2×2 截图）= \(delegate.canCaptureRealPixels())"
-          + " —— 取决于本进程有没有屏幕录制权限，不作断言")
+    check("已授权时实时探测也得说有权限（不然会误报缺权限）", !preflight || sck,
+          "preflight=\(preflight) SCK 探测=\(sck)")
+    print("     [INFO] 实时探测 \(sck)；无权限方向见 probes/permission_probe.swift")
+}
+
+// MARK: - 10. 窗口挑选：浮层不能跳过、系统层必须挡掉
+
+print("\n=== 10. 窗口挑选：浮层不跳过、程序坞/菜单栏挡掉 ===")
+do {
+    // 注意字典值的类型必须是 CGFloat：windowCandidates 里是 `as? [String: CGFloat]`，
+    // 用 Int 字面量会整条转换失败、函数返回空数组 —— 合成用例时踩过这个坑。
+    func win(_ id: UInt32, pid: Int32, layer: Int, alpha: Double,
+             _ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> [String: Any] {
+        [kCGWindowNumber as String: id,
+         kCGWindowOwnerPID as String: pid,
+         kCGWindowLayer as String: layer,
+         kCGWindowAlpha as String: alpha,
+         kCGWindowBounds as String: ["X": x, "Y": y, "Width": w, "Height": h]]
+    }
+    let point = CGPoint(x: 100, y: 100)
+    // Z 序：最前面的在前
+    let list = [
+        win(1, pid: 900, layer: 3,  alpha: 1.0, 0, 0, 400, 400),      // 浮动面板（在前）
+        win(2, pid: 901, layer: 0,  alpha: 1.0, 0, 0, 400, 400),      // 普通窗口（在后）
+        win(3, pid: 902, layer: 20, alpha: 1.0, 0, 0, 2000, 2000),    // 程序坞（铺满全屏）
+        win(4, pid: 903, layer: 24, alpha: 1.0, 0, 0, 2000, 30),      // 菜单栏
+        win(5, pid: 904, layer: -1, alpha: 1.0, 0, 0, 400, 400),      // 通知中心
+        win(6, pid: 999, layer: 0,  alpha: 1.0, 0, 0, 400, 400),      // 自己（应按 pid 排除）
+    ]
+    let got = ScreenCapture.windowCandidates(from: list, at: point, ownPID: 999).map { $0.id }
+    // 浮层若被跳过，就会去截它**后面**那个窗口 —— 用户点的明明是浮窗却拿到别的东西
+    check("浮层窗口在候选里，且按 Z 序排在普通窗口前面", got == [1, 2], "\(got)")
+    check("程序坞 / 菜单栏 / 通知中心被挡掉", !got.contains(3) && !got.contains(4) && !got.contains(5),
+          "\(got)")
+    check("自己的窗口按 pid 排除", !got.contains(6), "\(got)")
+}
+
+// MARK: - 11. 线宽滑杆：一次拖拽只记一条撤销
+
+print("\n=== 11. 线宽滑杆一次拖拽只记一条撤销 ===")
+do {
+    let window = AnnotationWindow(image: blankCanvas(400, 300))
+    func findCanvas(_ v: NSView) -> AnnotationView? {
+        if let c = v as? AnnotationView { return c }
+        for s in v.subviews { if let c = findCanvas(s) { return c } }
+        return nil
+    }
+    func findSlider(_ v: NSView) -> GestureReportingSlider? {
+        if let s = v as? GestureReportingSlider { return s }
+        for s in v.subviews { if let f = findSlider(s) { return f } }
+        return nil
+    }
+    guard let root = window.contentView,
+          let canvas = findCanvas(root),
+          let slider = findSlider(root) else {
+        check("能拿到画布与线宽滑杆", false); exit(1)
+    }
+
+    // 选中一个对象，滑杆才会作用到它身上
+    let key = canvas.hitTestBuffer.generateUniqueColorKey()
+    let rect = RectangleShape(center: CGPoint(x: 200, y: 150), width: 120, height: 80,
+                              color: .black, lineWidth: 15, hitTestColorKey: key)
+    canvas.objects[key] = rect
+    canvas.zOrder = [key]
+    canvas.selectedKey = key
+
+    let before = canvas.undoStack.count
+    slider.onGestureBegin?()                                   // ≈ 按下鼠标
+    for v in stride(from: 15.0, through: 30.0, by: 0.25) {     // ≈ 连续拖拽（61 次 action）
+        slider.doubleValue = v
+        _ = slider.sendAction(slider.action, to: slider.target)
+    }
+    let mid = canvas.undoStack.count
+    slider.onGestureEnd?()                                     // ≈ 松开鼠标
+    let after = canvas.undoStack.count
+
+    check("拖拽过程中实时改但不记撤销", mid == before, "\(before) → \(mid)")
+    check("松手后只多一条撤销", after == before + 1, "\(before) → \(after)")
+    check("线宽改到了终点值", AnnotationView.lineWidth(of: rect) == 30,
+          "\(AnnotationView.lineWidth(of: rect) ?? -1)")
+
+    // 一次 ⌘Z 就该退回拖拽**起点**，而不是退回 0.25px（旧实现要按几十次）
+    canvas.performUndo()
+    check("一次撤销就退回拖拽起点 15（而不是退一小步）",
+          AnnotationView.lineWidth(of: rect) == 15,
+          "\(AnnotationView.lineWidth(of: rect) ?? -1)")
 }
 
 print("\n========================================")
