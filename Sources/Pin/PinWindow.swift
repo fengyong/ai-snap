@@ -266,14 +266,57 @@ final class PinWindow: NSPanel {
 }
 
 /// 贴图的内容视图：负责绘制（带描边与圆角）与鼠标事件转发。
-private final class PinContentView: NSView {
+///
+/// 非 private：探针要直接验证「透明区穿透 / 不透明区不穿透」，以及**上下方向
+/// 不能搞反** —— 掩码构建里的 y 翻转错了不会报错，只会表现为点哪儿都不对。
+final class PinContentView: NSView {
     private let image: NSImage
 
-    /// 惰性缓存的位图，专供透明度采样。一次 TIFF 转换，之后 hitTest 只读像素。
-    private lazy var alphaRep: NSBitmapImageRep? = {
-        guard let tiff = image.tiffRepresentation else { return nil }
-        return NSBitmapImageRep(data: tiff)
-    }()
+    /// alpha 掩码：只留不透明度，每像素 **1 字节**。
+    ///
+    /// 原来这里是在**首次点击**时才 `tiffRepresentation` + `NSBitmapImageRep(data:)`
+    /// —— 一次整图 TIFF 编码加解码，Retina 全屏可以到 60MB，主线程当场卡住；
+    /// 之后每次鼠标事件还要 `colorAt` 逐像素取。
+    ///
+    /// 现在改成：把已有的 CGImage 一次画进 **alpha-only** 上下文（每像素 1 字节），
+    /// 之后查表。内存降到原来的 1/4，且没有 TIFF 往返。
+    ///
+    /// **刻意不降分辨率**：先试过缩到 1/8（全屏才 100KB），但那样一个格子会横跨界线，
+    /// "贴着透明区边缘 2pt 处还算不算不透明"就会判错 —— 而边界恰恰是穿透判定最需要准的
+    /// 地方（上一版探针里就有一条中线附近的断言把它抓了出来）。全分辨率下判定与原来
+    /// 逐像素的语义完全一致。
+    private struct AlphaMask {
+        let width: Int
+        let height: Int
+        let data: [UInt8]     // 0 = 全透明 … 255 = 不透明
+    }
+
+    private lazy var alphaMask: AlphaMask? = PinContentView.buildAlphaMask(from: image)
+
+    private static func buildAlphaMask(from image: NSImage) -> AlphaMask? {
+        // 用 cgImage 而不是 tiffRepresentation：后者要先把整幅图重新编码成 TIFF
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              cg.width > 0, cg.height > 0 else { return nil }
+        let w = cg.width, h = cg.height
+
+        // 直接建 alpha-only 上下文：每像素就一个不透明度字节。
+        // （实测 `CGColorSpaceCreateDeviceGray()` + `.alphaOnly` 能建出来；建不出来的话
+        //   这里会返回 nil，而 nil 掩码会让穿透**静默失效** —— 所以下面的探针专门断言了
+        //   "全透明区必须穿透"，一旦建不出来就会红，而不是悄悄退化成点不穿。）
+        var data = [UInt8](repeating: 0, count: w * h)
+        let ok = data.withUnsafeMutableBytes { buf -> Bool in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h,
+                                      bitsPerComponent: 8, bytesPerRow: w,
+                                      space: CGColorSpaceCreateDeviceGray(),
+                                      bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else {
+                return false
+            }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        guard ok else { return nil }
+        return AlphaMask(width: w, height: h, data: data)
+    }
 
     var onMouseDown: ((NSEvent) -> Void)?
     var onMouseDragged: ((NSEvent) -> Void)?
@@ -306,10 +349,10 @@ private final class PinContentView: NSView {
     /// 阈值 0.05（约 13/255）：完全为 0 的像素必须穿过；压缩/缩放产生的
     /// 近透明边缘也一并穿过，避免"点在空气上却抓住了贴图"。
     /// 完全不透明的普通截图在此阈值下行为与原先完全一致。
-    private func isPassThrough(at point: NSPoint) -> Bool {
+    /// 非 private：探针要直接验证"哪一半该穿透"（含上下方向不能搞反）。
+    func isPassThrough(at point: NSPoint) -> Bool {
         guard bounds.width > 0, bounds.height > 0,
-              let rep = alphaRep,
-              rep.pixelsWide > 0, rep.pixelsHigh > 0 else {
+              let mask = alphaMask, mask.width > 0, mask.height > 0 else {
             return false
         }
         // 视图 y=0 在底部（isFlipped == false），位图原点在左上
@@ -317,11 +360,11 @@ private final class PinContentView: NSView {
         let fy = (point.y - bounds.minY) / bounds.height
         guard fx >= 0, fx < 1, fy >= 0, fy < 1 else { return false }
 
-        let px = min(Int(fx * CGFloat(rep.pixelsWide)), rep.pixelsWide - 1)
-        let py = min(Int((1 - fy) * CGFloat(rep.pixelsHigh)), rep.pixelsHigh - 1)
-        guard px >= 0, py >= 0,
-              let color = rep.colorAt(x: px, y: py) else { return false }
-        return color.alphaComponent < 0.05
+        let px = min(Int(fx * CGFloat(mask.width)), mask.width - 1)
+        let py = min(Int((1 - fy) * CGFloat(mask.height)), mask.height - 1)
+        guard px >= 0, py >= 0 else { return false }
+        // 阈值与原来一致：0.05 × 255 ≈ 13
+        return mask.data[py * mask.width + px] < 13
     }
 
     override func draw(_ dirtyRect: NSRect) {

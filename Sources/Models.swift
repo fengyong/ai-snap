@@ -37,6 +37,20 @@ func distanceBetween(_ a: CGPoint, _ b: CGPoint) -> CGFloat {
 /// 与 `RectangleShape` 一直以来的约定保持一致。
 ///
 /// 矩形、贴纸（正方形）、文字标注三种形状共用。
+/// 一组点的轴对齐包围盒（可外扩）。
+///
+/// 返回可选值而不是强解包：形状的角点数组由形状自己决定，`xs.min()!` 这类写法
+/// 建立在"一定非空"的隐含假设上 —— 现在成立，以后加形状类型时未必。
+/// 调用方拿到 nil 自己决定怎么退化（通常是退回一个以中心为原点的空矩形）。
+func enclosingBox(of points: [CGPoint], padding: CGFloat) -> CGRect? {
+    let xs = points.map(\.x), ys = points.map(\.y)
+    guard let minX = xs.min(), let maxX = xs.max(),
+          let minY = ys.min(), let maxY = ys.max() else { return nil }
+    return CGRect(x: minX - padding, y: minY - padding,
+                  width: (maxX - minX) + padding * 2,
+                  height: (maxY - minY) + padding * 2)
+}
+
 enum RectPerimeter {
 
     /// 点 → 周长参数 (0...1)
@@ -57,6 +71,40 @@ enum RectPerimeter {
         else if ly >= hh - 0.1 { d = size.width + size.height + (hw - lx) }  // 上边
         else { d = 2 * size.width + size.height + (hh - ly) }                // 左边
         return max(0, min(1, d / perimeter))
+    }
+
+    /// 点 → 矩形周长上最近的点（世界坐标）。
+    ///
+    /// 语义：点落在矩形**内部**时推到最近的那条边；落在外部时取它的钳制点
+    /// （也就是角或边上离它最近的位置）。
+    ///
+    /// 这段几何原来在 RectangleShape / StepBadge / SpotlightShape / RedactionShape
+    /// 里**各有一份逐字重复的实现**（连注释都差不多），改一处漏三处 —— 而这里算错了
+    /// 不会报错，只会表现为"吸附点/吸附指示跑到奇怪的地方"。收进来与
+    /// `parameter(for:)` / `point(at:)` 作伴，让矩形周长几何只有一个来源。
+    static func nearestPoint(to point: CGPoint, center: CGPoint,
+                             size: CGSize, rotation: CGFloat) -> CGPoint {
+        let localPt = rotatePoint(point, around: center, by: -rotation)
+        let lx = localPt.x - center.x
+        let ly = localPt.y - center.y
+        let hw = size.width / 2, hh = size.height / 2
+        let cx = max(-hw, min(hw, lx))
+        let cy = max(-hh, min(hh, ly))
+
+        var nearest: CGPoint
+        if abs(cx) < hw && abs(cy) < hh {
+            // 在内部：推到最近的一条边
+            let dists = [cx + hw, hw - cx, cy + hh, hh - cy]
+            let minD = dists.min() ?? 0
+            if minD == dists[0] { nearest = CGPoint(x: -hw, y: cy) }
+            else if minD == dists[1] { nearest = CGPoint(x: hw, y: cy) }
+            else if minD == dists[2] { nearest = CGPoint(x: cx, y: -hh) }
+            else { nearest = CGPoint(x: cx, y: hh) }
+        } else {
+            nearest = CGPoint(x: cx, y: cy)
+        }
+        return rotatePoint(CGPoint(x: center.x + nearest.x, y: center.y + nearest.y),
+                           around: center, by: rotation)
     }
 
     /// 周长参数 (0...1) → 边界上的世界坐标点
@@ -479,6 +527,26 @@ protocol AnnotationObject: AnyObject {
 extension AnnotationObject {
     /// 默认：导出与屏幕所见一致
     func drawForExport(in ctx: CGContext) { draw(in: ctx) }
+
+    /// 形状**本体**缩到这个尺寸就不再继续缩。
+    ///
+    /// 为什么下限必须放在形状自己的 `scale` 里，而不是只靠画布那层的包围盒判定：
+    /// `boundingBox` 含线宽、箭头头部、文字留白这些**绘制外扩**，拿它当判据时形状本体
+    /// 可以一路缩到 0（包围盒仍有几十点）—— 结果是对象变成一个看不见的点、却还留在
+    /// 图层里。StepBadge（半径 ≥ 6）与 TextShape（字号 8~300）本来就是这么做的；
+    /// 这里把其余几种补齐，让"能缩多小"只有一个来源。
+    static var minimumExtent: CGFloat { 4 }
+
+    /// 缩小时算新的本体尺寸：**只止损，不放大**。
+    ///
+    /// - 结果 ≥ 下限 → 正常缩放；
+    /// - 结果 < 下限 → 停在下限；但**本来就已经比下限小**的形状（例如手工拖出来的
+    ///   很小的图形）原样保持，不把它"抬"大 —— 否则用户什么都没做，对象却在一次
+    ///   缩放操作里自己变大了。写成 `max(缩放值, 下限)` 就会踩这个坑（实测过）。
+    static func scaledExtent(_ value: CGFloat, by factor: CGFloat) -> CGFloat {
+        let scaled = value * factor
+        return scaled >= minimumExtent ? scaled : min(value, minimumExtent)
+    }
 }
 
 // MARK: - Arrow
@@ -726,8 +794,14 @@ class Arrow: AnnotationObject {
 
     func scale(by factor: CGFloat) {
         let c = center
-        startPoint = scalePoint(startPoint, from: c, by: factor)
-        endPoint = scalePoint(endPoint, from: c, by: factor)
+        let newStart = scalePoint(startPoint, from: c, by: factor)
+        let newEnd = scalePoint(endPoint, from: c, by: factor)
+        // 箭头的"本体尺寸"就是两端点之间的距离。缩到 0 就只剩一个点 ——
+        // 看不出是箭头，也看不出它原来指向哪。放大（|factor| ≥ 1）永远放行。
+        let length = hypot(newEnd.x - newStart.x, newEnd.y - newStart.y)
+        guard length >= Self.minimumExtent || abs(factor) >= 1 else { return }
+        startPoint = newStart
+        endPoint = newEnd
     }
 }
 
@@ -773,13 +847,15 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
     }
 
     var boundingBox: CGRect {
-        let corners = cornerPoints()
-        let xs = corners.map { $0.x }
-        let ys = corners.map { $0.y }
         let padding = lineWidth
-        return CGRect(x: xs.min()! - padding, y: ys.min()! - padding,
-                      width: (xs.max()! - xs.min()!) + padding * 2,
-                      height: (ys.max()! - ys.min()!) + padding * 2)
+        return enclosingBox(of: cornerPoints(), padding: padding) ?? fallbackBox(padding: padding)
+    }
+
+    /// 角点算不出包围盒时的退化值（理论上不可达 —— 矩形永远有 4 个角点）。
+    /// 退回"以中心为原点、尺寸为 0"的框，比强解包崩掉强。
+    private func fallbackBox(padding: CGFloat) -> CGRect {
+        CGRect(x: center.x - padding, y: center.y - padding,
+               width: padding * 2, height: padding * 2)
     }
 
     /// 4 corner points in canvas coordinates (after rotation)
@@ -867,29 +943,7 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
     }
 
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        // Transform to local coordinates
-        let localPt = rotatePoint(point, around: center, by: -rotation)
-        let lx = localPt.x - center.x
-        let ly = localPt.y - center.y
-        let hw = width / 2, hh = height / 2
-        let cx = max(-hw, min(hw, lx))
-        let cy = max(-hh, min(hh, ly))
-
-        var nearest: CGPoint
-        if abs(cx) < hw && abs(cy) < hh {
-            // Inside: find nearest edge
-            let dists = [cx + hw, hw - cx, cy + hh, hh - cy]
-            let minD = dists.min()!
-            if minD == dists[0] { nearest = CGPoint(x: -hw, y: cy) }
-            else if minD == dists[1] { nearest = CGPoint(x: hw, y: cy) }
-            else if minD == dists[2] { nearest = CGPoint(x: cx, y: -hh) }
-            else { nearest = CGPoint(x: cx, y: hh) }
-        } else {
-            nearest = CGPoint(x: cx, y: cy)
-        }
-
-        return rotatePoint(CGPoint(x: center.x + nearest.x, y: center.y + nearest.y),
-                           around: center, by: rotation)
+        RectPerimeter.nearestPoint(to: point, center: center, size: CGSize(width: width, height: height), rotation: rotation)
     }
 
     /// 周长参数 (0...1) → 对应的周长上的世界坐标点
@@ -911,8 +965,9 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
     }
 
     func scale(by factor: CGFloat) {
-        width *= abs(factor)
-        height *= abs(factor)
+        let f = abs(factor)
+        width = Self.scaledExtent(width, by: f)
+        height = Self.scaledExtent(height, by: f)
     }
 }
 
@@ -1040,8 +1095,10 @@ class CircleShape: AnnotationObject, LineStyleSupporting {
     }
 
     func scale(by factor: CGFloat) {
-        radiusX *= abs(factor)
-        radiusY *= abs(factor)
+        let f = abs(factor)
+        // 半径口径：下限取一半（本体"尺寸"按直径看更直观）
+        radiusX = Self.scaledExtent(radiusX * 2, by: f) / 2
+        radiusY = Self.scaledExtent(radiusY * 2, by: f) / 2
     }
 }
 
@@ -1178,27 +1235,9 @@ class StampObject: AnnotationObject {
     }
 
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        let localPt = rotatePoint(point, around: center, by: -rotation)
-        let lx = localPt.x - center.x
-        let ly = localPt.y - center.y
-        let half = size / 2
-        let cx = max(-half, min(half, lx))
-        let cy = max(-half, min(half, ly))
-
-        var nearest: CGPoint
-        if abs(cx) < half && abs(cy) < half {
-            let dists = [cx + half, half - cx, cy + half, half - cy]
-            let minD = dists.min()!
-            if minD == dists[0] { nearest = CGPoint(x: -half, y: cy) }
-            else if minD == dists[1] { nearest = CGPoint(x: half, y: cy) }
-            else if minD == dists[2] { nearest = CGPoint(x: cx, y: -half) }
-            else { nearest = CGPoint(x: cx, y: half) }
-        } else {
-            nearest = CGPoint(x: cx, y: cy)
-        }
-
-        return rotatePoint(CGPoint(x: center.x + nearest.x, y: center.y + nearest.y),
-                           around: center, by: rotation)
+        RectPerimeter.nearestPoint(to: point, center: center,
+                                   size: CGSize(width: size, height: size),
+                                   rotation: rotation)
     }
 
     /// 周长参数 (0...1) → 正方形包围盒周长上的世界坐标点
@@ -1221,7 +1260,7 @@ class StampObject: AnnotationObject {
     }
 
     func scale(by factor: CGFloat) {
-        size *= abs(factor)
+        size = Self.scaledExtent(size, by: abs(factor))
     }
 }
 
@@ -1560,13 +1599,14 @@ class SpotlightShape: AnnotationObject {
     }
 
     var boundingBox: CGRect {
-        let corners = cornerPoints()
-        let xs = corners.map { $0.x }
-        let ys = corners.map { $0.y }
         let padding: CGFloat = 2 // stroke width used in draw()
-        return CGRect(x: xs.min()! - padding, y: ys.min()! - padding,
-                      width: (xs.max()! - xs.min()!) + padding * 2,
-                      height: (ys.max()! - ys.min()!) + padding * 2)
+        return enclosingBox(of: cornerPoints(), padding: padding) ?? fallbackBox(padding: padding)
+    }
+
+    /// 同 RectangleShape：兜住"角点算不出包围盒"这种不可达情况
+    private func fallbackBox(padding: CGFloat) -> CGRect {
+        CGRect(x: center.x - padding, y: center.y - padding,
+               width: padding * 2, height: padding * 2)
     }
 
     func cornerPoints() -> [CGPoint] {
@@ -1636,25 +1676,7 @@ class SpotlightShape: AnnotationObject {
     }
 
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        let localPt = rotatePoint(point, around: center, by: -rotation)
-        let lx = localPt.x - center.x
-        let ly = localPt.y - center.y
-        let hw = width / 2, hh = height / 2
-        let cx = max(-hw, min(hw, lx))
-        let cy = max(-hh, min(hh, ly))
-        var nearest: CGPoint
-        if abs(cx) < hw && abs(cy) < hh {
-            let dists = [cx + hw, hw - cx, cy + hh, hh - cy]
-            let minD = dists.min()!
-            if minD == dists[0] { nearest = CGPoint(x: -hw, y: cy) }
-            else if minD == dists[1] { nearest = CGPoint(x: hw, y: cy) }
-            else if minD == dists[2] { nearest = CGPoint(x: cx, y: -hh) }
-            else { nearest = CGPoint(x: cx, y: hh) }
-        } else {
-            nearest = CGPoint(x: cx, y: cy)
-        }
-        return rotatePoint(CGPoint(x: center.x + nearest.x, y: center.y + nearest.y),
-                           around: center, by: rotation)
+        RectPerimeter.nearestPoint(to: point, center: center, size: CGSize(width: width, height: height), rotation: rotation)
     }
 
     // MARK: Transform
@@ -1669,7 +1691,8 @@ class SpotlightShape: AnnotationObject {
     }
 
     func scale(by factor: CGFloat) {
-        width *= abs(factor)
-        height *= abs(factor)
+        let f = abs(factor)
+        width = Self.scaledExtent(width, by: f)
+        height = Self.scaledExtent(height, by: f)
     }
 }

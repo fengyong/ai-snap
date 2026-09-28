@@ -49,8 +49,8 @@ extension AnnotationView {
 
         // 3. 右上角删除叉号按钮
         let deleteSize: CGFloat = 16
-        let deleteCenter = CGPoint(x: selRect.maxX + deleteSize * 0.3,
-                                   y: selRect.maxY + deleteSize * 0.3)
+        let deleteCenter = AnnotationView.deleteButtonCenter(for: selRect,
+                                                            deleteSize: deleteSize)
         // 红色圆底
         ctx.saveGState()
         ctx.setShadow(offset: CGSize(width: 0, height: -1), blur: 3,

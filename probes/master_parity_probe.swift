@@ -799,6 +799,100 @@ do {
           view.activeSnapPoint != nil, "\(String(describing: view.activeSnapPoint))")
 }
 
+// MARK: - 17. 形状缩不到「看不见」
+
+print("\n=== 17. 各形状的本体尺寸有下限（判据不能用包围盒）===")
+do {
+    // `boundingBox` 含线宽 / 箭头头部这些**绘制外扩**：拿它当"最小 5pt"的判据时，
+    // 形状本体可以一路缩到 0 而包围盒仍有几十点 —— 结果是对象变成一个看不见的点、
+    // 却还留在图层里。这里对每种形状连缩 60 次（每次减半），断言本体没塌掉。
+    func report(_ w: CGFloat, _ h: CGFloat) -> String { String(format: "%.4f × %.4f", w, h) }
+
+    let rect = RectangleShape(center: CGPoint(x: 200, y: 150), width: 120, height: 100,
+                              color: .black, lineWidth: 15, hitTestColorKey: 1)
+    for _ in 0..<60 { rect.scale(by: 0.5) }
+    check("矩形本体不会缩到看不见", rect.width >= 4 - 0.01 && rect.height >= 4 - 0.01,
+          report(rect.width, rect.height))
+
+    let circle = CircleShape(center: CGPoint(x: 200, y: 150), radiusX: 60, radiusY: 50,
+                             color: .black, lineWidth: 15, hitTestColorKey: 2)
+    for _ in 0..<60 { circle.scale(by: 0.5) }
+    check("椭圆本体不会缩到看不见", circle.radiusX >= 2 - 0.01 && circle.radiusY >= 2 - 0.01,
+          report(circle.radiusX, circle.radiusY))
+
+    let spot = SpotlightShape(center: CGPoint(x: 200, y: 150), width: 120, height: 100,
+                              hitTestColorKey: 3)
+    for _ in 0..<60 { spot.scale(by: 0.5) }
+    check("聚光灯本体不会缩到看不见", spot.width >= 4 - 0.01 && spot.height >= 4 - 0.01,
+          report(spot.width, spot.height))
+
+    let red = RedactionShape(center: CGPoint(x: 200, y: 150), width: 120, height: 100,
+                             style: .mosaic(blockSize: 12), hitTestColorKey: 4)
+    for _ in 0..<60 { red.scale(by: 0.5) }
+    check("打码本体不会缩到看不见", red.width >= 4 - 0.01 && red.height >= 4 - 0.01,
+          report(red.width, red.height))
+
+    // 箭头：本体尺寸就是两端点距离
+    let arrow = Arrow(startPoint: CGPoint(x: 100, y: 150), endPoint: CGPoint(x: 300, y: 150),
+                      color: .black, lineWidth: 15, hitTestColorKey: 5, style: .default)
+    func arrowLength(_ a: Arrow) -> CGFloat {
+        hypot(a.endPoint.x - a.startPoint.x, a.endPoint.y - a.startPoint.y)
+    }
+    for _ in 0..<60 { arrow.scale(by: 0.5) }
+    let shortLength = arrowLength(arrow)
+    check("箭头长度不会缩到看不见", shortLength >= 4 - 0.01, String(format: "%.4f", shortLength))
+
+    // 下限不能把**放大**也挡住 —— 那是本末倒置
+    for _ in 0..<5 { arrow.scale(by: 2) }
+    check("放大不受下限影响（下限只管缩小）", arrowLength(arrow) > shortLength * 20,
+          String(format: "%.1f → %.1f", shortLength, arrowLength(arrow)))
+
+    // 已经比下限还小的形状：再缩不该被"抬"大（max 的作用是止损，不是放大）
+    let tiny = RectangleShape(center: CGPoint(x: 10, y: 10), width: 2, height: 2,
+                              color: .black, lineWidth: 1, hitTestColorKey: 6)
+    tiny.scale(by: 1.0)
+    check("factor=1 不会改变尺寸", abs(tiny.width - 2) < 0.001, "\(tiny.width)")
+}
+
+// MARK: - 18. 贴图透明区穿透（低分辨率 alpha 掩码）
+
+print("\n=== 18. 贴图透明区穿透判定（含上下方向）===")
+do {
+    // 下半透明、上半不透明。NSImage 的 lockFocus 坐标 y=0 在**底部**，
+    // 视图 isFlipped == false 也是 y 向上 —— 两边一致才对。
+    //
+    // 掩码构建里如果把 y 搞反了，**不会有任何报错**，只会表现为"点哪儿都不对"，
+    // 所以这里特别验方向。
+    let img = NSImage(size: NSSize(width: 200, height: 100))
+    img.lockFocus()
+    NSColor.clear.setFill()
+    NSRect(x: 0, y: 0, width: 200, height: 100).fill()
+    NSColor(red: 1, green: 0, blue: 0, alpha: 1).setFill()
+    NSRect(x: 0, y: 50, width: 200, height: 50).fill()      // 上半不透明
+    img.unlockFocus()
+
+    let content = PinContentView(image: img)
+    content.frame = NSRect(x: 0, y: 0, width: 200, height: 100)
+
+    let topOpaque = content.isPassThrough(at: NSPoint(x: 100, y: 75))
+    let bottomClear = content.isPassThrough(at: NSPoint(x: 100, y: 25))
+    check("不透明区不吃穿透", topOpaque == false,
+          topOpaque ? "把不透明区判成透明了" : "正常")
+    check("全透明区要穿透（否则贴图会挡住下面的窗口）", bottomClear == true,
+          bottomClear ? "正常" : "没穿透 —— 掩码没建出来或方向反了")
+    // 两个方向必须给出不同答案，才说明 y 没有被整体翻过来
+    check("上下判定不能同号（y 方向搞反时会同号）",
+          topOpaque != bottomClear,
+          "上=\(topOpaque) 下=\(bottomClear)")
+
+    // 普通截图（完全不透明）不能被穿透 —— 这是"改动不影响原有手感"的底线
+    let opaque = blankCanvas(200, 100)
+    let plain = PinContentView(image: opaque)
+    plain.frame = NSRect(x: 0, y: 0, width: 200, height: 100)
+    check("完全不透明的普通截图不会被穿透",
+          plain.isPassThrough(at: NSPoint(x: 100, y: 50)) == false, "正常")
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)
