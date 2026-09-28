@@ -191,21 +191,44 @@ echo "已写入 Info.plist（${VERSION} / ${BUILD_NUMBER}）"
 #
 # 所以优先用证书；没有证书才回退 ad-hoc，并把代价明确说出来。
 SIGN_IDENTITY="${SIGN_IDENTITY:-AISnap Local Signing}"
+NOTARY_PROFILE="${NOTARY_PROFILE:-AC_NOTARY}"
 step "签名"
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
-# 三种状态必须分开报，否则会误导：
-#   ① 身份有效           → 用证书签名
-#   ② 证书在、但不受信任  → 用户会以为"没建成功"而重新生成一遍，其实只差设信任
-#   ③ 完全没有证书        → 让他去跑生成脚本
-# ②是实际踩到的：脚本跑完、证书进了钥匙串，但 security 报 CSSMERR_TP_NOT_TRUSTED，
+# 证书身份**优先级链**（命中即停）。多种状态必须分开报，否则会误导：
+#   ① Developer ID Application → 对外分发专用。签名时开 Hardened Runtime + 安全时间戳
+#     （公证的硬性前提；本项目不需要任何 entitlements 豁免 —— 屏幕录制是运行时
+#     TCC 权限，不是 entitlement）。TCC 按「证书 + bundle ID」关联授权，
+#     重新编译、重装都不再让屏幕录制权限失效。
+#   ② 自签名证书（有效）       → 本机 TCC 稳定用
+#   ③ 证书在、但不受信任        → 用户会以为"没建成功"而重新生成一遍，其实只差设信任
+#   ④ 完全没有证书              → 让他去跑生成脚本
+# ③是实际踩到的：脚本跑完、证书进了钥匙串，但 security 报 CSSMERR_TP_NOT_TRUSTED，
 # `find-identity -v`（只列有效身份）看不到它，于是笼统地报"未找到"。
-if security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
+# 引号写法注意：这里整条命令在 "$( )" 的双引号上下文里，单引号不生效，
+# 字面双引号必须写成 \"（试过 -d'"' 会得到 bad delimiter）
+# 末尾 || true 必须有：set -euo pipefail 下没有 Developer ID 证书时 grep 无匹配
+# 返回 1，会连这里的赋值一起判失败、整个脚本静默退出（实测踩到）
+DEV_ID_IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+  | grep -oE "\"Developer ID Application: [^\"]+" | head -1 | cut -d\" -f2 || true)"
+
+if [ -n "$DEV_ID_IDENTITY" ]; then
+  SIGN_MODE="developer-id"
+  codesign --force --sign "$DEV_ID_IDENTITY" --identifier "$BUNDLE_ID" \
+           --options runtime --timestamp "$APP_BUNDLE"
+  codesign --verify --strict --verbose=1 "$APP_BUNDLE"
+  echo "✅ 用 Developer ID 证书签名（Hardened Runtime + 安全时间戳）"
+  echo "   $DEV_ID_IDENTITY"
+  echo "   TCC 按「证书 + bundle ID」关联，重新编译不再让屏幕录制权限失效"
+  echo "   此身份用于公证分发（见下方公证段）"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
+  SIGN_MODE="local"
   codesign --force --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$APP_BUNDLE"
   codesign --verify --strict --verbose=1 "$APP_BUNDLE"
   echo "✅ 用自签名证书「${SIGN_IDENTITY}」签名"
   echo "   重新编译不会让屏幕录制权限失效"
 elif security find-identity -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTITY"; then
+  SIGN_MODE="adhoc"
   codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
   codesign --verify --strict --verbose=1 "$APP_BUNDLE"
   cat <<EOF
@@ -222,6 +245,7 @@ elif security find-identity -p codesigning 2>/dev/null | grep -qF "$SIGN_IDENTIT
     完成后重新运行 ./build.sh，就会自动改用它签名。
 EOF
 else
+  SIGN_MODE="adhoc"
   codesign --force --sign - --identifier "$BUNDLE_ID" "$APP_BUNDLE"
   codesign --verify --strict --verbose=1 "$APP_BUNDLE"
   cat <<EOF
@@ -236,6 +260,39 @@ EOF
 fi
 echo "签名校验通过"
 codesign -dv "$APP_BUNDLE" 2>&1 | grep -E "Identifier|Signature|Authority|TeamIdentifier" | sed 's/^/   /'
+
+# ── 公证 app（仅 Developer ID + 已配置 notarytool 凭据时）──────────────
+#
+# app 与 DMG **都**公证并 staple：
+#   app  staple 后，用户拖进「应用程序」的那份副本自带票据，离线也能过 Gatekeeper；
+#        只公证 DMG 的话，拖出来的 app 每次首启都要在线查询。
+#   DMG  自己也要公证：下载的 DMG 带 quarantine 标记，Gatekeeper 会验它本体。
+#
+# 凭据一次性配置（需要 Apple Developer Program 账号，公证不另收费）：
+#   xcrun notarytool store-credentials $NOTARY_PROFILE \
+#     --apple-id <AppleID> --team-id <TeamID> --password <App 专用密码>
+#
+# 凭据缺失**不阻断构建**（本地开发照常），只给出明确指引。
+if [ "${SIGN_MODE:-adhoc}" = "developer-id" ]; then
+  if xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    step "公证 app"
+    NOTARY_ZIP="$(mktemp -d)/$APP_NAME-app.zip"
+    ditto -c -k --keepParent "$APP_BUNDLE" "$NOTARY_ZIP"
+    if xcrun notarytool submit "$NOTARY_ZIP" --keychain-profile "$NOTARY_PROFILE" --wait; then
+      xcrun stapler staple "$APP_BUNDLE"
+      xcrun stapler validate "$APP_BUNDLE"
+      echo "✅ app 公证完成并已 staple（离线可过 Gatekeeper）"
+    else
+      echo "❌ 公证被拒。排查：xcrun notarytool history --keychain-profile $NOTARY_PROFILE "
+      echo "   拿到 submission ID 后 xcrun notarytool log <ID> 看具体原因，修因后重跑。" >&2
+      exit 1
+    fi
+  else
+    echo "⚠️  检测到 Developer ID 证书，但没有 notarytool 凭据「$NOTARY_PROFILE」，本次跳过公证。"
+    echo "    不公证的包发给别人的 Mac 会被 Gatekeeper 拦。一次性配置："
+    echo "      xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <AppleID> --team-id <TeamID> --password <App专用密码>"
+  fi
+fi
 
 # ── 4. 安装到 /Applications（可选）────────────────────────────────────
 #
@@ -306,6 +363,21 @@ hdiutil create -volname "$APP_NAME" -srcfolder "$DMG_TEMP" \
                -ov -format UDZO -quiet "$DMG_NAME"
 rm -rf "$DMG_TEMP"
 
+# DMG 本体签名 + 公证（Developer ID 路径）。staple 把票据钉在 DMG 上，离线可验。
+# 注意 stapler staple 对 DMG 直接可用；notarytool 也直接吃 .dmg，不必再打包。
+if [ "${SIGN_MODE:-adhoc}" = "developer-id" ] \
+   && xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+  step "签名并公证 DMG"
+  codesign --force --sign "$DEV_ID_IDENTITY" --timestamp "$DMG_NAME"
+  if xcrun notarytool submit "$DMG_NAME" --keychain-profile "$NOTARY_PROFILE" --wait; then
+    xcrun stapler staple "$DMG_NAME"
+    echo "✅ DMG 公证完成并已 staple"
+  else
+    echo "❌ DMG 公证被拒：xcrun notarytool history 查日志后重跑" >&2
+    exit 1
+  fi
+fi
+
 # ── 5. 验证 DMG（这一步才是"能不能装"的真正判据）────────────────────
 step "验证 DMG"
 # 挂载点必须在**任何**退出路径上卸载。
@@ -336,6 +408,16 @@ fi
 echo "挂载点：$MOUNT_POINT"
 echo "  内含：$(ls "$MOUNT_POINT" | tr '\n' ' ')"
 codesign --verify --strict "$MOUNT_POINT/$APP_NAME.app" && echo "  包内签名校验通过"
+if [ "${SIGN_MODE:-adhoc}" = "developer-id" ]; then
+  # Gatekeeper 终检：期望 "accepted，source=Notarized Developer ID"。
+  # 不过 = 公证/staple 没生效，发出去必被拦 —— 在这里就拦下，而不是让用户当测试员。
+  if spctl -a -vv -t exec "$MOUNT_POINT/$APP_NAME.app" 2>&1 | grep -q "accepted"; then
+    echo "  Gatekeeper 接受（Notarized Developer ID）"
+  else
+    echo "❌ Gatekeeper 拒绝包内应用 —— 公证/staple 未生效，检查上方公证段日志" >&2
+    exit 1
+  fi
+fi
 [ -L "$MOUNT_POINT/Applications" ] && echo "  存在指向 /Applications 的快捷方式"
 detach_dmg
 

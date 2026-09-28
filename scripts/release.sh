@@ -126,6 +126,20 @@ fi
 git rev-parse "v$NEW_VERSION" >/dev/null 2>&1 && die "tag v$NEW_VERSION 已存在"
 info "tag v$NEW_VERSION 可用"
 
+# 公证预检（实际公证在 build.sh 里做；这里提前把"这次发出去的包是什么身份"
+# 说清楚，别等用户下载被 Gatekeeper 拦了才知道）。**不阻断**本地发版。
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
+  if xcrun notarytool history --keychain-profile "${NOTARY_PROFILE:-AC_NOTARY}" >/dev/null 2>&1; then
+    info "公证凭据就绪（${NOTARY_PROFILE:-AC_NOTARY}）—— 构建将产出 Notarized Developer ID 包"
+  else
+    info "⚠️  有 Developer ID 证书但没有公证凭据「${NOTARY_PROFILE:-AC_NOTARY}」，本次发版不会公证。"
+    info "    未公证的 DMG 发给用户会被 Gatekeeper 拦（左键打开都过不去）。"
+    info "    配置：xcrun notarytool store-credentials ${NOTARY_PROFILE:-AC_NOTARY} --apple-id <AppleID> --team-id <TeamID> --password <App专用密码>"
+  fi
+else
+  info "未检测到 Developer ID 证书 —— 本次产出自签名/ad-hoc 包，仅适合本机或互信小范围使用"
+fi
+
 if [ "$DRY_RUN" = "1" ]; then
   step "dry-run：以上检查都通过，未改动任何文件"
   info "将执行：改 $BUILD_SCRIPT / $VERSION_FILE / $MANIFEST → 构建 → 提交 → push → gh release create"
@@ -180,6 +194,16 @@ APP_VERSION="$(plutil -extract CFBundleShortVersionString raw "$MOUNT/AISnap.app
 [ "$APP_VERSION" = "$NEW_VERSION" ] || die "包内版本是 ${APP_VERSION}，不是 $NEW_VERSION"
 APP_BUILD="$(plutil -extract CFBundleVersion raw "$MOUNT/AISnap.app/Contents/Info.plist")"
 info "包内版本：$APP_VERSION / $APP_BUILD"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "Developer ID Application"; then
+  # 有 Developer ID 时，成品必须是公证过的：不过就是公证段没生效，
+  # 在这里拦下比发出去被用户 Gatekeeper 拦好得多。
+  if spctl -a -vv -t exec "$MOUNT/AISnap.app" 2>&1 | grep -q "accepted"; then
+    info "Gatekeeper 接受包内应用（Notarized Developer ID）"
+  else
+    hdiutil detach "$MOUNT" -quiet 2>/dev/null || true
+    die "包内应用未通过 Gatekeeper —— 公证/staple 未生效，检查 build.sh 公证段日志"
+  fi
+fi
 hdiutil detach "$MOUNT" -quiet
 MOUNT=""
 
