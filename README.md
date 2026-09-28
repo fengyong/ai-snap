@@ -154,18 +154,48 @@ swift run AISnap
 ### 打包成安装包
 
 ```bash
-./build.sh              # 产出 AISnap.app 与 AISnap.dmg
-./build.sh --skip-dmg   # 只要 .app
+./build.sh                        # 产出 AISnap.app 与 AISnap.dmg
+./build.sh --skip-dmg             # 只要 .app
+./build.sh --install              # 打包并装到 /Applications
+./build.sh --skip-dmg --install   # 开发时常用：快出包 + 直接装上
 ```
 
 脚本会：校验版本号一致 → `swift build -c release` → 组装 .app（含 Info.plist 与图标）
 → **ad-hoc 签名并校验** → 打 DMG → **挂载 DMG 复验包内应用与签名**。
 
+`--install` 用 `rm -rf` **删除**旧版本，而不是移到废纸篓：废纸篓里堆积的旧包会被
+LaunchServices 一直保留注册，「打开方式」与 Spotlight 里就会冒出一串重复的 AISnap，
+看起来像装了好几个。装完会顺手刷新一次注册。目标目录可用 `INSTALL_DIR` 覆盖。
+
 > 在已被沙箱包裹的环境里（CI 容器、自动化工具）SwiftPM 给清单套的那层 sandbox-exec
 > 会失败，加 `SWIFT_FLAGS=--disable-sandbox` 即可。默认不关 ——
 > 那层沙箱是为了防止恶意 `Package.swift` 在构建期乱来。
 
+### 发版（GitHub Releases）
+
+```bash
+./scripts/release.sh 0.1.1              # 完整发版（含装到本机）
+./scripts/release.sh 0.1.1 --dry-run    # 只检查与打印，不改任何东西
+./scripts/release.sh 0.1.1 --no-install --no-push   # 只到本地提交为止
+```
+
+「发版」要同时动**四个**地方，漏掉任何一处都**不会报错**，只会在用户那边表现成
+「检查更新永远说已是最新」或「下载到的还是旧包」：
+
+| 位置 | 作用 |
+|---|---|
+| `build.sh` 的 `VERSION` | 打进包里的版本号 |
+| `UpdateChecker.swift` 的 `AppInfo.bundledFallbackVersion` | 拿不到 Info.plist 时的兜底版本（build.sh 会校验两者一致） |
+| `latest.json` 的 `version` | **应用读的就是它** —— 忘了改等于没发新版 |
+| GitHub Release 的 tag 与附件 | 清单里的下载地址指向 `releases/latest/download/AISnap.dmg`，没有对应 release 就是 404 |
+
+脚本按「改版本号 → 构建 → 校验包内版本 → 提交 → push → `gh release create`」的顺序
+把四处一起改掉，每步之后校验结果。版本号必须**递增**（应用按版本大小判定新旧），
+相同或更低会被拒绝；另外还要求当前在 `master` 上、`gh` 已登录、tag 尚未存在。
+
 ### 安装
+
+最快的路子是 `./build.sh --install`（会先删掉旧版本）。手动装的话：
 
 1. 双击 `AISnap.dmg`
 2. 把 **AISnap** 拖进「应用程序」

@@ -230,6 +230,16 @@ if [ "$DO_INSTALL" = "1" ]; then
     exit 1
   fi
 
+  # 先拷到旁边的临时名，**成功之后**再换掉旧包。
+  #
+  # 不能"先 rm -rf 旧包再 cp"：cp 中途失败（磁盘满、权限、被中断）会留下一个
+  # 装了一半的包，而旧版本已经删了 —— 用户手上就没有能用的应用了。
+  # 现在这个顺序下，拷贝失败等于什么都没发生，旧版本原封不动。
+  STAGING="$TARGET.new"
+  rm -rf "$STAGING"
+  cp -R "$APP_BUNDLE" "$STAGING"
+  echo "  已拷贝到临时位置：$STAGING"
+
   if [ -e "$TARGET" ] || [ -L "$TARGET" ]; then
     # 用 rm -rf **删除**旧版本，而不是移到废纸篓。
     #
@@ -239,8 +249,14 @@ if [ "$DO_INSTALL" = "1" ]; then
     rm -rf "$TARGET"
     echo "  已删除旧版本：$TARGET"
   fi
-  cp -R "$APP_BUNDLE" "$TARGET"
+  mv "$STAGING" "$TARGET"
   echo "  已安装：$TARGET"
+
+  # 应用正在跑的话，换掉磁盘上的包并不会换掉已经在跑的那个进程 ——
+  # 不提醒的话用户会觉得"装完了怎么没变化"（要完全退出再启动才是新版）。
+  if pgrep -x "$APP_NAME" >/dev/null 2>&1; then
+    echo "  ⚠️  $APP_NAME 正在运行：请完全退出后重新启动，新版才会生效（旧进程仍跑旧代码）"
+  fi
 
   # 立刻把这份注册给 LaunchServices，别留着旧路径的注册指向已经不存在的包
   LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
