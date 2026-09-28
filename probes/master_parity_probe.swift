@@ -1146,6 +1146,72 @@ do {
           "未附着时锚点处应无环")
 }
 
+// MARK: - 24. 拖拽箭头时预览附着锚点（落笔前就该看见）
+
+print("\n=== 24. 拖拽箭头时，会附着的端点要当场标出来 ===")
+do {
+    // 附着是"看不见的状态"：落笔那一刻悄悄记下关系，之后要么父对象移动时箭头跟着走、
+    // 要么父对象被删时箭头一起消失。原来**全程没有任何反馈**。
+    //
+    // 关键：这里故意把端点放在**边的中点**，它离该矩形的所有吸附点（4 角 + 中心）
+    // 都 > 12pt —— 所以吸附指示器**不会**亮。这正好证明：
+    //   · 看见锚点标记不是因为"吸附阈值被调大了"；
+    //   · 吸附点指示与周长附着是两套东西（上一轮评审曾把这两件事混起来）。
+    func renderDrag(to end: CGPoint) -> (rep: NSBitmapImageRep, view: AnnotationView) {
+        let view = AnnotationView(image: blankCanvas(400, 300))
+        let key = view.hitTestBuffer.generateUniqueColorKey()
+        view.objects[key] = RectangleShape(center: CGPoint(x: 150, y: 150), width: 100, height: 80,
+                                           color: .black, lineWidth: 4, hitTestColorKey: key)
+        view.zOrder = [key]
+        view.currentTool = .arrow
+        view.currentColor = .black          // 别让红色的箭头干扰"找蓝色小环"
+        view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 350, y: 40)))
+        view.mouseDragged(with: mouse(.leftMouseDragged, end))
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 400, pixelsHigh: 300,
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        if let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = ctx
+            view.draw(view.bounds)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        return (rep, view)
+    }
+
+    func isRingBlue(_ c: NSColor) -> Bool {
+        c.blueComponent > 0.7 && c.redComponent < 0.6 && c.greenComponent < 0.8
+    }
+
+    /// 全画布扫一遍有没有小环的蓝色（y 要翻转：位图行号从顶部算、视图从底部算）
+    func anyRingInk(_ rep: NSBitmapImageRep) -> Bool {
+        for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+            for y in stride(from: 0, to: rep.pixelsHigh, by: 2) {
+                if let c = rep.colorAt(x: x, y: y), isRingBlue(c) { return true }
+            }
+        }
+        return false
+    }
+
+    // 端点落在矩形上边、但**避开边中点**（x=125 而不是 150）：
+    // 矩形的吸附点 = 中心 + 4 角 + **4 个边中点**，所以边中点本身就是吸附点 ——
+    // 选在那里就成了"吸附指示亮着"，证明不了什么（第一版就是这么写错的）。
+    // (125,190) 离最近的吸附点（(100,190) 与 (150,190)）各 25pt > 12，
+    // 吸附指示**不会**亮，但它确实在周长上 —— 正是要验的情形。
+    let onEdge = CGPoint(x: 125, y: 190)
+    let hit = renderDrag(to: onEdge)
+    check("端点贴着形状周长拖拽时，吸附指示器**没有**亮（与吸附点无关）",
+          hit.view.activeSnapPoint == nil,
+          "\(String(describing: hit.view.activeSnapPoint))")
+    check("此时画面上出现了附着锚点小环（松手就会挂在这里）",
+          anyRingInk(hit.rep), anyRingInk(hit.rep) ? "已画出" : "没画出来 —— 用户无从知道会附着")
+
+    // 对照：拖到远离一切形状的地方 → 不该有任何小环
+    let miss = renderDrag(to: CGPoint(x: 350, y: 260))
+    check("对照：端点远离形状时不画锚点", !anyRingInk(miss.rep), anyRingInk(miss.rep) ? "不该有小环" : "无小环")
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)
