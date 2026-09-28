@@ -161,8 +161,20 @@ enum UpdateChecker {
         }
 
         if remote > local {
-            guard URL(string: manifest.downloadURL) != nil else {
-                return .failed(reason: "更新清单里的下载地址无效：\(manifest.downloadURL)")
+            // downloadURL 是**会被 `NSWorkspace.open` 打开**的东西，所以必须限制 scheme。
+            //
+            // 只判 `URL(string:) != nil` 的话，`file:` / `javascript:` / 任意 app 的
+            // 自定义 scheme 都能从清单一路送进「前往下载」—— 清单来源一旦被投毒
+            // （或用户把 feed 指到了不可信地址），就能让应用去打开本地文件或唤起别的应用。
+            //
+            // 只放 **https**：http 连中间人都挡不住，而更新下载页没有任何理由不是 https。
+            // 刻意**不做 host 白名单**：feed 是用户可配的（内网自建更新源是既有用法），
+            // 钉死 github.com 会把这条用法直接砍掉；而"打开一个 https 页面"本身不是
+            // 提权行为 —— 应用从不自动下载或安装。
+            guard let download = URL(string: manifest.downloadURL),
+                  download.scheme?.lowercased() == "https",
+                  !(download.host ?? "").isEmpty else {
+                return .failed(reason: "更新清单里的下载地址必须是 https 链接：\(manifest.downloadURL)")
             }
             return .updateAvailable(current: local.raw, version: remote.raw,
                                     downloadURL: manifest.downloadURL,

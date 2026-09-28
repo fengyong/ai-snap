@@ -254,8 +254,12 @@ class RegionSelectionView: NSView {
         guard let start = dragStart, let end = dragEnd else { return }
         let rect = rectFromPoints(start, end)
 
-        if rect.width > 5 && rect.height > 5 {
+        if rect.width > Self.minimumSelectionSide && rect.height > Self.minimumSelectionSide {
             onSelectionComplete?(rect)
+        } else {
+            // 太小：以前是**静默什么都不做** —— 界面上没有任何反应，用户只会以为截图坏了。
+            // 给一声提示音，并保留覆盖层让用户重拖（不销毁状态，直接再来一次即可）。
+            NSSound.beep()
         }
 
         dragStart = nil
@@ -306,11 +310,23 @@ class RegionSelectionView: NSView {
         drawSizeLabel(ctx: ctx, for: selectionRect)
     }
 
+    /// 认为"这是一次有效选区"的最小边长（点）。
+    ///
+    /// 比它更小的拖拽按误触处理。这个数以前是散在 `mouseUp` 里的字面量 `5`，
+    /// 现在抽出来，好让尺寸标签也能拿它给出"太小了"的可见提示。
+    static let minimumSelectionSide: CGFloat = 5
+
     private func drawSizeLabel(ctx: CGContext, for rect: NSRect) {
-        let text = "\(Int(rect.width)) × \(Int(rect.height))"
+        // 小于阈值的选区会被 mouseUp 拒收，所以标签上要说清"为什么点了没反应"
+        let tooSmall = rect.width <= Self.minimumSelectionSide
+            || rect.height <= Self.minimumSelectionSide
+        let side = Int(Self.minimumSelectionSide)
+        let text = tooSmall
+            ? "\(Int(rect.width)) × \(Int(rect.height))　太小，至少 \(side) × \(side)"
+            : "\(Int(rect.width)) × \(Int(rect.height))"
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: NSColor.white,
+            .foregroundColor: tooSmall ? NSColor.systemOrange : NSColor.white,
         ]
         let size = (text as NSString).size(withAttributes: attributes)
         let padding: CGFloat = 6

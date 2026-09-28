@@ -51,6 +51,40 @@ func enclosingBox(of points: [CGPoint], padding: CGFloat) -> CGRect? {
                   height: (maxY - minY) + padding * 2)
 }
 
+/// 椭圆的周长参数化：参数 0 从 `phase` 角起算，绕一圈回到 0。
+///
+/// 与 `RectPerimeter` 对称。`phase` 是必须的：CircleShape 的 0 在正右方（3 点钟），
+/// 而 StepBadge 的 0 在正上方（12 点钟，`-π/2`）—— 两者各自的历史行为都得保留，
+/// 所以把相位做成参数，而不是硬塞进一个约定。
+enum CirclePerimeter {
+
+    /// 点 → 周长参数 (0...1)
+    ///
+    /// 用**参数角**（`atan2(dy / ry, dx / rx)`）而不是几何角：椭圆上只有参数角才能与
+    /// `point(at:)` 里的 `cos/sin` 严格互逆。
+    static func parameter(for point: CGPoint, center: CGPoint,
+                          radiusX: CGFloat, radiusY: CGFloat,
+                          rotation: CGFloat, phase: CGFloat = 0) -> CGFloat {
+        let local = rotatePoint(point, around: center, by: -rotation)
+        let dx = local.x - center.x
+        let dy = local.y - center.y
+        var angle = atan2(dy / max(radiusY, 0.0001), dx / max(radiusX, 0.0001)) - phase
+        while angle < 0 { angle += 2 * .pi }
+        while angle >= 2 * .pi { angle -= 2 * .pi }
+        return angle / (2 * .pi)
+    }
+
+    /// 周长参数 (0...1) → 边界上的世界坐标点
+    static func point(at parameter: CGFloat, center: CGPoint,
+                      radiusX: CGFloat, radiusY: CGFloat,
+                      rotation: CGFloat, phase: CGFloat = 0) -> CGPoint {
+        let angle = parameter * 2 * .pi + phase
+        let local = CGPoint(x: center.x + radiusX * cos(angle),
+                            y: center.y + radiusY * sin(angle))
+        return rotatePoint(local, around: center, by: rotation)
+    }
+}
+
 enum RectPerimeter {
 
     /// 点 → 周长参数 (0...1)
@@ -522,6 +556,19 @@ protocol AnnotationObject: AnyObject {
     /// Nearest point on perimeter to a given point
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint
 
+    /// 周长参数 (0...1) → 周长上的世界坐标点
+    ///
+    /// 与 `perimeterParameter(for:)` 必须**互逆** —— 附着系统就靠这一对：
+    /// 记录时把落点换成参数，解析时再把参数换回坐标。
+    ///
+    /// 两个都**不给默认实现**：给了默认值，新形状就会静默拿到"参数恒为 0"的行为 ——
+    /// 表现是箭头能挂上去、父对象移动时却不跟，而父对象删除时它又被级联删掉。
+    /// 列进协议（且无默认）能让编译器逼着新类型表态，这才叫闭环。
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint
+
+    /// 周长上的点 → 参数 (0...1)，`pointOnPerimeter` 的逆
+    func perimeterParameter(for point: CGPoint) -> CGFloat
+
     /// Transform operations
     func move(by delta: CGVector)
     func rotate(by angle: CGFloat)
@@ -781,6 +828,23 @@ class Arrow: AnnotationObject {
         return CGPoint(x: startPoint.x + t * dx, y: startPoint.y + t * dy)
     }
 
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        // 箭头没有"周长"，但两端点之间有天然的参数化：0 = 起点，1 = 终点。
+        // 今天箭头不作为附着父对象（`detectAttachment` 里显式跳过），实现它是为了让
+        // 协议闭环 —— 万一以后允许箭头套箭头，这一对已经是互逆的。
+        CGPoint(x: startPoint.x + (endPoint.x - startPoint.x) * parameter,
+                y: startPoint.y + (endPoint.y - startPoint.y) * parameter)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        let dx = endPoint.x - startPoint.x
+        let dy = endPoint.y - startPoint.y
+        let lenSq = dx * dx + dy * dy
+        guard lenSq > 0.0001 else { return 0 }
+        let t = ((point.x - startPoint.x) * dx + (point.y - startPoint.y) * dy) / lenSq
+        return min(max(t, 0), 1)
+    }
+
     // MARK: Transform
 
     func move(by delta: CGVector) {
@@ -950,6 +1014,12 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
         RectPerimeter.nearestPoint(to: point, center: center, size: CGSize(width: width, height: height), rotation: rotation)
     }
 
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        RectPerimeter.parameter(for: point, center: center,
+                                size: CGSize(width: width, height: height),
+                                rotation: rotation)
+    }
+
     /// 周长参数 (0...1) → 对应的周长上的世界坐标点
     func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
         RectPerimeter.point(at: parameter, center: center,
@@ -1080,11 +1150,13 @@ class CircleShape: AnnotationObject, LineStyleSupporting {
 
     /// 周长参数 (0...1) → 椭圆周上的世界坐标点
     func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        let angle = parameter * 2 * .pi
-        let localX = radiusX * cos(angle)
-        let localY = radiusY * sin(angle)
-        return rotatePoint(CGPoint(x: center.x + localX, y: center.y + localY),
-                           around: center, by: rotation)
+        CirclePerimeter.point(at: parameter, center: center,
+                              radiusX: radiusX, radiusY: radiusY, rotation: rotation)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        CirclePerimeter.parameter(for: point, center: center,
+                                  radiusX: radiusX, radiusY: radiusY, rotation: rotation)
     }
 
     // MARK: Transform
@@ -1244,6 +1316,12 @@ class StampObject: AnnotationObject {
                                    rotation: rotation)
     }
 
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        RectPerimeter.parameter(for: point, center: center,
+                                size: CGSize(width: size, height: size),
+                                rotation: rotation)
+    }
+
     /// 周长参数 (0...1) → 正方形包围盒周长上的世界坐标点
     func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
         // 正方形 → 尺寸就是边长；与「点 → 参数」共用 RectPerimeter 的同一套分段
@@ -1378,10 +1456,17 @@ class StepBadge: AnnotationObject {
 
     /// 周长参数 (0...1) → 圆周上的世界坐标点
     func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        let angle = parameter * 2 * .pi - .pi / 2
-        let local = CGPoint(x: center.x + radius * cos(angle),
-                            y: center.y + radius * sin(angle))
-        return rotatePoint(local, around: center, by: rotation)
+        // 相位 -π/2：StepBadge 的参数 0 一直在正上方（与 CircleShape 的"正右方"不同），
+        // 这是它原有的行为，不能顺手改成 0 —— 已经挂上去的箭头会集体挪位置。
+        CirclePerimeter.point(at: parameter, center: center,
+                              radiusX: radius, radiusY: radius, rotation: rotation,
+                              phase: -.pi / 2)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        CirclePerimeter.parameter(for: point, center: center,
+                                  radiusX: radius, radiusY: radius, rotation: rotation,
+                                  phase: -.pi / 2)
     }
 
     // MARK: Transform
@@ -1532,12 +1617,18 @@ final class TextShape: AnnotationObject {
     }
 
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        let local = rotatePoint(point, around: center, by: -rotation)
-        let size = contentSize
-        let hw = size.width / 2, hh = size.height / 2
-        let clamped = CGPoint(x: min(max(local.x, center.x - hw), center.x + hw),
-                              y: min(max(local.y, center.y - hh), center.y + hh))
-        return rotatePoint(clamped, around: center, by: rotation)
+        // 文字的周长也是一个矩形（内容框），所以走与矩形家族同一套几何。
+        //
+        // 原来这里是"只钳制、不推边"：**内部点原样返回**。矩形 / 印章 / 聚光灯 / 打码
+        // 上一轮都收敛到 RectPerimeter 了，唯独漏了文字 —— 于是"点在文字内部"时
+        // 附着锚点落在框内而不是框上，与其它形状的行为不一致。
+        RectPerimeter.nearestPoint(to: point, center: center,
+                                   size: contentSize, rotation: rotation)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        RectPerimeter.parameter(for: point, center: center,
+                                size: contentSize, rotation: rotation)
     }
 
     /// 周长参数 (0...1) → 矩形边界上的世界坐标点。
@@ -1681,6 +1772,16 @@ class SpotlightShape: AnnotationObject {
 
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
         RectPerimeter.nearestPoint(to: point, center: center, size: CGSize(width: width, height: height), rotation: rotation)
+    }
+
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        RectPerimeter.point(at: parameter, center: center,
+                            size: CGSize(width: width, height: height), rotation: rotation)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        RectPerimeter.parameter(for: point, center: center,
+                                size: CGSize(width: width, height: height), rotation: rotation)
     }
 
     // MARK: Transform

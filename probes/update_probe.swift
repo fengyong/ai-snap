@@ -98,6 +98,27 @@ do {
             == .upToDate(current: "1.2.0"))
     check("远端版本号看不懂 → failed（不是静默当作最新）",
           UpdateChecker.evaluate(current: "1.2.0", manifest: manifestBadVersion).isFailure)
+    // downloadURL 会被 NSWorkspace.open 打开，所以 scheme 必须受限（只放 https）。
+    // 以前只判 `URL(string:) != nil`，`file:` / `javascript:` / 自定义 scheme 都能过。
+    func verdict(_ url: String) -> UpdateCheckResult {
+        UpdateChecker.evaluate(current: "1.0.0",
+                               manifest: UpdateManifest(version: "2.0.0",
+                                                        downloadURL: url, notes: nil))
+    }
+    func isUpdate(_ r: UpdateCheckResult) -> Bool {
+        if case .updateAvailable = r { return true }
+        return false
+    }
+    for bad in ["file:///tmp/evil.dmg", "javascript:alert(1)",
+                "http://example.com/a.dmg", "myapp://do-something",
+                "https:no-host", "/relative/path.dmg"] {
+        check("下载地址 \(bad) 必须被拒（它会被 NSWorkspace.open 打开）",
+              !isUpdate(verdict(bad)), "\(verdict(bad))")
+    }
+    check("对照：https 且带主机的下载地址照常放行",
+          isUpdate(verdict("https://example.com/a.dmg")),
+          "\(verdict("https://example.com/a.dmg"))")
+
     check("远端更新但下载地址为空 → failed",
           UpdateChecker.evaluate(current: "1.2.0", manifest: manifestBadURL).isFailure)
     check("本地版本号读不出来 → failed（报失败比报已是最新诚实）",

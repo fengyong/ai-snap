@@ -19,19 +19,28 @@ final class ImagePixelSampler {
     init?(image: CGImage) {
         let w = image.width, h = image.height
         guard w > 0, h > 0 else { return nil }
-        guard let ctx = CGContext(data: nil, width: w, height: h,
-                                  bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: CGColorSpaceCreateDeviceRGB(),
-                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-            return nil
+
+        // **一次分配**：先把 Swift 数组建好，再把它的内存交给 CGContext 直接画进去。
+        //
+        // 原来是 `CGContext(data: nil, ...)` 让 CG 分配一块缓冲、画完再
+        // `Array(UnsafeBufferPointer(...))` 拷进 Swift 数组 —— 峰值两份整图 RGBA
+        // （Retina 全屏各 60MB+），而且那份拷贝纯属白搬。
+        // 现在只有一份，画完直接把它交给 `data`。
+        var buffer = [UInt8](repeating: 0, count: w * h * 4)
+        let ok = buffer.withUnsafeMutableBytes { raw -> Bool in
+            guard let ctx = CGContext(data: raw.baseAddress, width: w, height: h,
+                                      bitsPerComponent: 8, bytesPerRow: w * 4,
+                                      space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
         }
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
-        guard let raw = ctx.data else { return nil }
+        guard ok else { return nil }
 
         self.pixelWidth = w
         self.pixelHeight = h
-        let buffer = raw.bindMemory(to: UInt8.self, capacity: w * h * 4)
-        self.data = Array(UnsafeBufferPointer(start: buffer, count: w * h * 4))
+        self.data = buffer
     }
 
     // MARK: - 坐标换算
