@@ -102,10 +102,21 @@ run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
 run_probe postfix_probe          "${ALL_SOURCES[@]}"
 # A 区分叉里那些 master 仍然缺失的修复：重新实现后的对齐验证
 run_probe master_parity_probe    "${ALL_SOURCES[@]}"
-# 权限判定：无权限时不得判成有权限。
-# 它会用 launchctl 把**自己**再起一份（launchd 的子进程没有 TCC 授权），
-# 因为本进程多半已从宿主继承授权，兜底分支根本不会被执行。
-run_probe permission_probe       "${ALL_SOURCES[@]}"
+
+# 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
+# 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次
+# 就多一条垃圾记录；这类按路径识别的裸可执行文件 `tccutil reset` 清不掉，只能手删。
+# （2026-09-28 实测踩到：用户列表里冒出了 `run`、`scktest` 等条目。）
+#
+#   AISNAP_PROBE_ALLOW_CAPTURE=1 ./probes/run_all.sh permission    # 要验时显式跑
+case "${AISNAP_PROBE_ALLOW_CAPTURE:-0}" in 1) _perm=1 ;; *) _perm=0 ;; esac
+case "${FILTER:-}" in *permission*) _perm=1 ;; esac
+if [ "$_perm" = "1" ]; then
+  run_probe permission_probe     "${ALL_SOURCES[@]}"
+else
+  echo "⏭️  permission_probe  已跳过（会往「屏幕录制」列表里加一条记录，默认不跑）"
+  echo "     要跑：AISNAP_PROBE_ALLOW_CAPTURE=1 ./probes/run_all.sh permission"
+fi
 
 # ── 清理测试偏好域 ─────────────────────────────────────────────────────
 #
