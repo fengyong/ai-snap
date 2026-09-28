@@ -487,8 +487,8 @@ class AnnotationView: NSView {
             let padding: CGFloat = 4
             let selRect = box.insetBy(dx: -padding, dy: -padding)
             let deleteSize: CGFloat = 16
-            let deleteCenter = CGPoint(x: selRect.maxX + deleteSize * 0.3,
-                                        y: selRect.maxY + deleteSize * 0.3)
+            let deleteCenter = AnnotationView.deleteButtonCenter(for: selRect,
+                                                                deleteSize: deleteSize)
             let distToDelete = hypot(point.x - deleteCenter.x, point.y - deleteCenter.y)
             if distToDelete <= deleteSize / 2 + 4 {
                 // 与 Delete 键、菜单「删除选中」走同一条路（原先这里是一份复制粘贴的
@@ -611,9 +611,13 @@ class AnnotationView: NSView {
             let currentDist = hypot(point.x - obj.center.x, point.y - obj.center.y)
             if currentDist > 1 && lastDistance > 1 {
                 let factor = currentDist / lastDistance
+                // 缩放下限由**各形状自己的 scale** 负责 —— 它才知道自己的本体尺寸。
+                // 包围盒含线宽/箭头头部这些绘制外扩，原来拿它判"最小 5pt"时形状本体
+                // 可以一路缩到 0（包围盒仍有几十点），于是对象变成看不见的一点。
+                // 这里只留一道"别缩成真正的零"的兜底。
                 let box = obj.boundingBox
                 let minDim = min(box.width, box.height)
-                if minDim * factor >= 5 || factor >= 1 {
+                if minDim * factor > 0.5 || factor >= 1 {
                     obj.scale(by: factor)
                     scaleStartFactor *= factor
                     state = .scaling(colorKey: colorKey, lastDistance: currentDist)
@@ -1408,6 +1412,16 @@ class AnnotationView: NSView {
     // 附着相关的方法已拆到 AnnotationView+Attachments.swift
 
     // MARK: - Debug Visualization
+
+    /// 选中框右上角那个删除按钮的中心。
+    ///
+    /// **命中判定与绘制必须用同一个公式**：原来这一行在
+    /// `AnnotationView`（判命中）与 `AnnotationView+Rendering`（画按钮）里各写了一遍，
+    /// 改一处就是"看得见的按钮点不中"或"点到看不见的地方"，而且不会有任何报错。
+    static func deleteButtonCenter(for selectionRect: CGRect, deleteSize: CGFloat) -> CGPoint {
+        CGPoint(x: selectionRect.maxX + deleteSize * 0.3,
+                y: selectionRect.maxY + deleteSize * 0.3)
+    }
 
     /// 刷新右侧的 Layer B 调试面板。非 private：撤销/重做扩展要用
     ///

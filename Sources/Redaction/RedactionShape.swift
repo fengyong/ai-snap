@@ -93,10 +93,7 @@ final class RedactionShape: AnnotationObject {
 
     /// 取样区域 = 形状旋转后的**外接矩形**（画布坐标，轴对齐）。
     var sampleRect: CGRect {
-        let corners = cornerPoints()
-        let xs = corners.map(\.x), ys = corners.map(\.y)
-        return CGRect(x: xs.min()!, y: ys.min()!,
-                      width: xs.max()! - xs.min()!, height: ys.max()! - ys.min()!)
+        return enclosingBox(of: cornerPoints(), padding: 0) ?? .zero
     }
 
     var boundingBox: CGRect {
@@ -217,24 +214,9 @@ final class RedactionShape: AnnotationObject {
     }
 
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        let local = rotatePoint(point, around: center, by: -rotation)
-        let hw = width / 2, hh = height / 2
-        let lx = local.x - center.x, ly = local.y - center.y
-        let clamped = CGPoint(x: max(-hw, min(hw, lx)), y: max(-hh, min(hh, ly)))
-
-        var nearest = clamped
-        if abs(clamped.x) < hw && abs(clamped.y) < hh {
-            // 在内部 → 推到最近的一条边
-            let distances = [clamped.x + hw, hw - clamped.x, clamped.y + hh, hh - clamped.y]
-            switch distances.firstIndex(of: distances.min()!) {
-            case 0: nearest = CGPoint(x: -hw, y: clamped.y)
-            case 1: nearest = CGPoint(x: hw, y: clamped.y)
-            case 2: nearest = CGPoint(x: clamped.x, y: -hh)
-            default: nearest = CGPoint(x: clamped.x, y: hh)
-            }
-        }
-        return rotatePoint(CGPoint(x: center.x + nearest.x, y: center.y + nearest.y),
-                           around: center, by: rotation)
+        RectPerimeter.nearestPoint(to: point, center: center,
+                                   size: CGSize(width: width, height: height),
+                                   rotation: rotation)
     }
 
     // MARK: - 变换
@@ -249,7 +231,8 @@ final class RedactionShape: AnnotationObject {
     }
 
     func scale(by factor: CGFloat) {
-        width *= abs(factor)
-        height *= abs(factor)
+        let f = abs(factor)
+        width = Self.scaledExtent(width, by: f)
+        height = Self.scaledExtent(height, by: f)
     }
 }
