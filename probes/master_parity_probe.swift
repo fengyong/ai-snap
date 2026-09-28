@@ -1212,6 +1212,27 @@ do {
     check("对照：端点远离形状时不画锚点", !anyRingInk(miss.rep), anyRingInk(miss.rep) ? "不该有小环" : "无小环")
 }
 
+// MARK: - 25. 探针进程不该因为建了标注窗就变成 Dock 应用
+
+print("\n=== 25. 构造标注窗不会让进程变成 Dock 应用 ===")
+do {
+    // `setupMainMenu` 会把激活策略切成 `.regular`（真应用要靠它露出菜单栏、进 Dock/⌘Tab）。
+    // 探针是裸可执行文件，默认策略是 `.prohibited`；以前无条件切换，于是**每跑一个
+    // 构造窗口的探针，Dock 里就蹦出一个叫 `run` 的图标**，跑一遍套件就是一路闪过去，
+    // 还会把前台焦点抢走（用户实测报过）。
+    //
+    // 现在只在 `NSApp.delegate is AppDelegate` 时才切 —— 真应用的入口 main.swift 会设
+    // delegate，探针不会。
+    let before = NSApp.activationPolicy()
+    let window = AnnotationWindow(image: blankCanvas(200, 150))
+    window.makeKeyAndOrderFront(nil)
+    let after = NSApp.activationPolicy()
+    check("建窗（并上屏）之后进程仍不进 Dock",
+          after != .regular,
+          "before=\(before.rawValue) after=\(after.rawValue)")
+    window.close()
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

@@ -431,7 +431,20 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         mainMenu.addItem(helpMenuItem)
 
         NSApp.mainMenu = mainMenu
-        NSApp.setActivationPolicy(.regular)
+
+        // 只有**真正的应用**才把激活策略切回 .regular（露出菜单栏、进 Dock 与 ⌘Tab）。
+        //
+        // 探针进程也会构造标注窗、走到这里 —— 它们是裸可执行文件（都叫 `run`）。
+        // 以前无条件切换，于是每跑一个构造窗口的探针，Dock 里就蹦出一个 "run" 图标，
+        // 跑一遍套件就是一路闪过去，还会把前台焦点抢走。
+        //
+        // 判据用「NSApp.delegate 是不是 AppDelegate」：真应用的入口 `main.swift`
+        // 第一件事就是 `app.delegate = delegate`；探针只 `_ = NSApplication.shared`，
+        // 有些虽然 `AppDelegate()` 一个实例来调方法，但不会把它设成 delegate。
+        // 这样不必给生产代码加"测试开关"，也不必靠 bundle id（`swift run` 开发时也没有）。
+        if NSApp.delegate is AppDelegate {
+            NSApp.setActivationPolicy(.regular)
+        }
     }
 
     // MARK: - Toolbar

@@ -33,6 +33,19 @@ AISNAP_PROBE_ALLOW_CAPTURE=1 ./probes/run_all.sh master_parity
 
 跑完记得去系统设置里把新出现的条目删掉。
 
+## 另一个副作用：Dock 里的 `run` 图标（已修）
+
+`AnnotationWindow.setupMainMenu` 会把激活策略切成 `.regular`（真应用要靠它露出菜单栏、
+进 Dock 与 ⌘Tab）。裸可执行文件（探针都叫 `run`）默认策略是 `.prohibited`，所以以前
+**每跑一个构造标注窗的探针，Dock 里就蹦出一个 `run` 图标**、还会抢走前台焦点。
+
+现在只在 `NSApp.delegate is AppDelegate` 时才切 —— 真应用的入口 `main.swift` 会设
+delegate，探针不会。两条不变式都有断言守着（`postfix_probe` 第 4 节：装 delegate 时
+必须切成 `.regular`、不装时必须不进 Dock）。
+
+另外 `run_all.sh` 加了 `trap ... RETURN`：脚本被 Ctrl-C 或超时杀掉时也会清掉编译目录
+（实测漏过一次，`$TMPDIR` 里留下 5 个探针目录）。
+
 ## 为什么值得单独一个目录
 
 - **参数都有据可查**：dash 长度、圆角半径、马赛克块大小与插值质量、每帧成本上限，
