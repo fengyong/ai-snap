@@ -1,7 +1,7 @@
 import Cocoa
 
 /// 标注窗口 — 包含工具栏和标注画布，右侧附带 Layer B 调试面板
-class AnnotationWindow: NSWindow {
+class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     private var annotationView: AnnotationView!
     private var toolButtons: [NSButton] = []
     private var colorButtons: [NSButton] = []
@@ -208,6 +208,10 @@ class AnnotationWindow: NSWindow {
         self.title = "AISnap - 标注"
         self.isReleasedWhenClosed = false
         self.anchoredRect = anchored
+        // 【必须】windowShouldClose 只有在 delegate 被设上之后才会被调用。
+        // 少了这一行，`windowShouldClose` 只是类上一个没人调用的普通方法 ——
+        // 点标题栏 X / 「放弃」按钮都会**静默丢掉**整张图的标注。
+        self.delegate = self
 
         if anchored != nil {
             // 压在冻结覆盖层之上（覆盖层是 .statusBar + 1）
@@ -577,6 +581,7 @@ class AnnotationWindow: NSWindow {
         watermarkField.font = NSFont.systemFont(ofSize: 11)
         watermarkField.placeholderString = "水印文本"
         watermarkField.toolTip = "输入水印文本内容"
+        watermarkField.delegate = self      // 实时同步，见 controlTextDidChange
         watermarkField.target = self
         watermarkField.action = #selector(watermarkTextChanged(_:))
         toolbar.addSubview(watermarkField)
@@ -956,6 +961,16 @@ class AnnotationWindow: NSWindow {
 
     @objc private func watermarkTextChanged(_ sender: NSTextField) {
         annotationView.watermarkConfig.text = sender.stringValue
+    }
+
+    /// 水印文本**边打字边同步**。
+    ///
+    /// 只挂 `action` 是不够的：`NSTextField` 默认 `sendsActionOnEndEditing` 相关行为下，
+    /// action 只在回车/失焦时才发 —— 用户输完自定义文本直接点「保存」，
+    /// `watermarkConfig.text` 还是旧值，导出的水印和输入框里看到的根本不是一回事。
+    func controlTextDidChange(_ obj: Notification) {
+        guard let field = obj.object as? NSTextField, field === watermarkField else { return }
+        annotationView.watermarkConfig.text = field.stringValue
     }
 
     @objc func saveImage() {

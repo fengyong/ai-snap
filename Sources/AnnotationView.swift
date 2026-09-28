@@ -328,8 +328,12 @@ class AnnotationView: NSView {
             }
         }
 
-        // 已选中对象时，修饰键触发旋转/缩放
-        if let key = selectedKey, let obj = objects[key] {
+        // 已选中对象时，修饰键触发旋转/缩放。
+        // **必须要求按下的位置落在该对象上**：否则在画布空白处按 Option/Shift 拖拽
+        // 会莫名其妙地改动一个远处的对象，而用户的本意是"画个新图形"。
+        // 不满足时**不 return**，继续往下走正常的命中/绘制流程。
+        if let key = selectedKey, let obj = objects[key],
+           obj.boundingBox.insetBy(dx: -8, dy: -8).contains(point) {
             if flags.contains(.option) {
                 // Option+拖拽 → 旋转
                 let angle = atan2(point.y - obj.center.y, point.x - obj.center.x)
