@@ -1,6 +1,6 @@
 import Cocoa
 
-/// 全屏冰结覆盖层，用于区域选择。
+/// 多屏冻结覆盖层协调器，用于区域选择。
 ///
 /// **设计：先冻结屏幕，再在冻结帧上选区。**
 ///
@@ -13,98 +13,98 @@ import Cocoa
 /// 用户看到的是静止画面。选区确定后只需要把冻结图**裁一刀** ——
 /// 不调用捕获 API、不需要等待、也不会拍到覆盖层。
 ///
-/// 多屏：每块屏各一张冻结图、各一个覆盖层；但只有主屏可交互（与原先一致）。
-class RegionSelectionWindow: NSWindow {
+/// **多屏（对等交互）**：每块屏各一个交互覆盖层，鼠标在哪块屏上按下拖拽，
+/// 那块屏就是本次的选区屏 —— 选区矩形、冻结帧裁剪、就地标注的 `anchorRect`
+/// 全部锚定它，其余屏幕保持「冻结 + 压暗」当背景。此前只有主屏可交互、
+/// 副屏仅遮罩（半成品）。鼠标拖拽天然跟随 `mouseDown` 落在的那个 view
+/// （AppKit 在 mouseDown 之后把后续 drag/up 事件派发给同一 view），多屏之间
+/// 不存在竞态；坐标换算全部走 `ScreenGeometry` 的纯函数（它们本就接受任意
+/// screenFrame，含负坐标），这是当初把「换算」与「交互」拆开时买下的保险。
+///
+/// 协调器自身不是窗口：它只持有每屏一个的覆盖层窗口并裁决「谁赢了」。
+final class RegionSelectionWindow: NSObject {
     /// 选区完成时回调。传 nil 表示取消 / 失败。
     ///
     /// 结果里除裁好的图，还带**选区在屏幕坐标下的矩形**（调用方据此把标注窗口
-    /// 「就地」摆在选区上）与**实测的像素倍率**（见 `CapturedImage`）。
+    /// 「就地」摆在选区上，且落点锚定选区所在的那块屏）与**实测的像素倍率**。
     private let completionHandler: (CapturedImage?) -> Void
-    private var selectionView: RegionSelectionView!
-    private var overlayWindows: [NSWindow] = []
 
-    /// 主屏的冻结帧，选区确定后从它裁剪。
-    private var frozenMainImage: CGImage?
+    private var overlays: [ScreenOverlay] = []
 
-    /// 交互屏（主屏）的框架，用于把视图坐标换算成屏幕坐标。
-    private let mainScreenFrame: NSRect
-    /// 交互屏本身。**init 时冻结一次**，之后全程复用。
-    ///
-    /// 不能每次要用时重取 `NSScreen.main`：它的语义是"当前 key window 所在屏"，
-    /// 而覆盖层上屏后自己就成了 key window —— 之后再取可能换了一块屏。
-    /// 冻结帧、副屏枚举、坐标换算必须锚在同一块屏上。
-    private let mainScreen: NSScreen?
     /// 光标是否已 push（用于让 pop 幂等，见 restoreCursorIfNeeded）
     private var cursorPushed = false
     private var cursorRestored = false
 
-    init(completion: @escaping (CapturedImage?) -> Void) {
-        self.completionHandler = completion
+    /// 一块屏的覆盖层：窗口 + 选区视图。
+    ///
+    /// 三者绑定在一起，选区屏的判定（谁赢了）就不再依赖任何「主屏」概念。
+    /// 屏幕对象在 init 时冻结 —— 覆盖层上屏后 `NSScreen.main` 会变
+    /// （它的语义是「当前 key window 所在屏」），不能到用时再取。
+    private final class ScreenOverlay {
+        let window: RegionOverlayWindow
+        let view: RegionSelectionView
+        let screen: NSScreen
 
-        // 只取一次 NSScreen.main，屏幕对象与它的 frame 都从这里派生
-        let screen = NSScreen.main
-        self.mainScreen = screen
-        let screenFrame = screen?.frame ?? .zero
-        self.mainScreenFrame = screenFrame
-        super.init(
-            contentRect: screenFrame,
-            styleMask: .borderless,
-            backing: .buffered,
-            defer: false
-        )
-
-        // 窗口外观交给 OverlayWindowStyle（关键点是**背景透明而非纯黑**：
-        // 冻结帧画好之前透出的是真实屏幕，若是纯黑就会全屏黑闪。见那里的说明）
-        OverlayWindowStyle.apply(to: self)
-        self.ignoresMouseEvents = false
-        self.acceptsMouseMovedEvents = true
-
-        selectionView = RegionSelectionView(frame: screenFrame)
-        selectionView.onSelectionComplete = { [weak self] rect in
-            self?.finishSelection(rect: rect)
+        var frozenImage: CGImage? {
+            get { view.frozenImage }
+            set { view.frozenImage = newValue }
         }
-        selectionView.onCancel = { [weak self] in
-            self?.cancelSelection()
-        }
-        self.contentView = selectionView
 
-        // 其他屏幕：各一个不可交互的覆盖层，同样画自己的冻结帧
-        for screen in NSScreen.screens where screen !== mainScreen {
-            let overlay = NSWindow(
+        init(screen: NSScreen) {
+            self.screen = screen
+            let window = RegionOverlayWindow(
                 contentRect: screen.frame,
                 styleMask: .borderless,
                 backing: .buffered,
                 defer: false
             )
-            // 与主屏覆盖层共用同一份外观配置（透明背景的理由见 OverlayWindowStyle）
-            OverlayWindowStyle.apply(to: overlay)
-            overlay.ignoresMouseEvents = true
-            overlay.contentView = FrozenScreenView(frame: NSRect(origin: .zero, size: screen.frame.size))
-            overlayWindows.append(overlay)
+            // 所有屏共用同一份外观配置（透明背景防黑闪的理由见 OverlayWindowStyle）
+            OverlayWindowStyle.apply(to: window)
+            window.ignoresMouseEvents = false
+            window.acceptsMouseMovedEvents = true
+            let view = RegionSelectionView(frame: NSRect(origin: .zero, size: screen.frame.size))
+            window.contentView = view
+            self.window = window
+            self.view = view
         }
     }
 
-    /// 冻结屏幕。
+    init(completion: @escaping (CapturedImage?) -> Void) {
+        self.completionHandler = completion
+        super.init()
+
+        for screen in NSScreen.screens {
+            let overlay = ScreenOverlay(screen: screen)
+            overlay.view.onSelectionComplete = { [weak self, weak overlay] rect in
+                guard let self, let overlay else { return }
+                self.finishSelection(overlay: overlay, rect: rect)
+            }
+            overlay.view.onCancel = { [weak self] in
+                self?.cancelSelection()
+            }
+            overlays.append(overlay)
+        }
+    }
+
+    /// 冻结所有屏幕。
     ///
     /// 必须在**显示覆盖层之前**调用，否则拍到的就是覆盖层自己。
-    /// 返回 false 表示主屏冻结失败，调用方应放弃本次截屏（与旧流程的失败语义相同：
-    /// 旧流程抓不到图同样只会得到 nil）。
+    /// 目标屏 = 光标所在屏（用户最可能直接在那里开始拖拽）：它失败 → 整体放弃
+    /// （与旧流程「主屏失败即失败」同语义，只是判定基准从「主屏」换成「光标屏」）；
+    /// 其余屏失败 → 该屏覆盖层只压暗不冻结（透出的是真实屏幕，降级但可用，
+    /// 比整个截图失败好 —— 极少见，通常是那块屏恰好在权限/睡眠边界上）。
     @discardableResult
     func freezeScreens() async -> Bool {
-        // 用 init 时冻结下来的那块屏，而不是此刻重取 NSScreen.main：
-        // 覆盖层上屏后自己是 key window，重取可能换屏，导致"冻结的是 A 屏、
-        // 坐标按 B 屏算"这类错位（副屏 Y 翻转 bug 与此同源）。
-        guard let targetScreen = mainScreen else { return false }
+        guard !overlays.isEmpty else { return false }
 
-        let mainImage = try? await ScreenCapture.captureRegion(ScreenCapture.quartzRect(for: targetScreen))
-        guard let mainImage = mainImage else { return false }
-        frozenMainImage = mainImage
-        selectionView.frozenImage = mainImage
+        let mouseLocation = NSEvent.mouseLocation
+        let target = overlays.first { $0.screen.frame.contains(mouseLocation) } ?? overlays[0]
+        let others = overlays.filter { $0 !== target }
 
-        for (index, screen) in NSScreen.screens.filter({ $0 !== targetScreen }).enumerated() {
-            guard index < overlayWindows.count else { break }
-            let image = try? await ScreenCapture.captureRegion(ScreenCapture.quartzRect(for: screen))
-            (overlayWindows[index].contentView as? FrozenScreenView)?.frozenImage = image
+        for overlay in [target] + others {
+            let image = try? await ScreenCapture.captureRegion(ScreenCapture.quartzRect(for: overlay.screen))
+            overlay.frozenImage = image
+            if overlay === target && image == nil { return false }
         }
         return true
     }
@@ -114,55 +114,57 @@ class RegionSelectionWindow: NSWindow {
         // （Esc 取消会失效、拖拽也可能不响应）。从菜单点进来时这行无害。
         NSApp.activate(ignoringOtherApps: true)
 
-        makeKeyAndOrderFront(nil)
-        for overlay in overlayWindows {
-            overlay.orderFront(nil)
-        }
+        // 初始 key 窗 = 光标所在屏：用户在副屏上按热键之后直接按 Esc 必须生效，
+        // 不该要求先点一下那块屏。后续 mouseDown 会把拖拽屏再设为 key（见视图）。
+        let mouseLocation = NSEvent.mouseLocation
+        let keyOverlay = overlays.first { $0.screen.frame.contains(mouseLocation) } ?? overlays.first
 
-        // 上屏之后补一次同步绘制，让「冻结帧 + 变暗」尽早出现。
-        // 顺序不能反过来：**未上屏的窗口没有 window device**，实测那时
-        // `display()` / `displayIfNeeded()` 都是 no-op（draw 根本不被调用）。
-        // 窗口是透明的，所以即便这一帧迟到，用户看到的也只是「还没变暗的真实屏幕」，
-        // 不会有黑闪 —— 这次调用只是把变暗提前，不是正确性的前提。
-        selectionView.display()
-        for overlay in overlayWindows {
-            overlay.contentView?.display()
+        for overlay in overlays {
+            overlay.window.orderFront(nil)
+            // 上屏之后补一次同步绘制，让「冻结帧 + 变暗」尽早出现。
+            // 顺序不能反过来：**未上屏的窗口没有 window device**，实测那时
+            // `display()` / `displayIfNeeded()` 都是 no-op（draw 根本不被调用）。
+            // 窗口是透明的，所以即便这一帧迟到，用户看到的也只是「还没变暗的真实屏幕」，
+            // 不会有黑闪 —— 这次调用只是把变暗提前，不是正确性的前提。
+            overlay.view.display()
         }
+        keyOverlay?.window.makeKey()
 
         NSCursor.crosshair.push()
         cursorPushed = true
         cursorRestored = false
     }
 
-    private func finishSelection(rect: NSRect) {
-        // 视图坐标 → AppKit 屏幕坐标（覆盖层是无边框窗，视图原点即屏原点，但副屏可为负，
-        // 所以显式偏移一次而不是假定主屏在 (0,0)）
-        let screenRect = rect.offsetBy(dx: mainScreenFrame.minX, dy: mainScreenFrame.minY)
+    /// 选区在某块屏上完成：从**那块屏**的冻结帧裁剪。
+    ///
+    /// 视图坐标 → AppKit 屏幕坐标：覆盖层是无边框窗、视图原点即屏原点，
+    /// 而副屏原点可为负，所以显式偏移该屏的 frame（init 时冻结的那块屏对象，
+    /// 不是此刻重取 —— 后者可能换屏，见 ScreenOverlay 的说明）。
+    private func finishSelection(overlay: ScreenOverlay, rect: NSRect) {
+        let screenRect = rect.offsetBy(dx: overlay.screen.frame.minX, dy: overlay.screen.frame.minY)
 
-        // 不再立刻收掉覆盖层：它要留着当「就地编辑」的背景（周围保持变暗），
+        // 不再立刻收掉覆盖层：它们要留着当「就地编辑」的背景（周围保持变暗），
         // 等标注窗口关闭时由调用方调 hideOverlays() 收掉。
-        // 但必须停止接收鼠标事件，否则它会挡住标注窗口的交互。
+        // 但必须停止接收鼠标事件，否则会挡住标注窗口的交互。
         stopInteracting()
 
-        // 用 **init 时存下的** mainScreenFrame，而不是此刻再取 NSScreen.main ——
-        // 后者的定义是"当前 key window 所在屏"，冻结帧之后覆盖层成了 key window，
-        // 取值可能与冻屏时不是同一块屏（这与之前修掉的副屏 Y 翻转 bug 同源）。
-        guard let frozen = frozenMainImage,
+        guard let frozen = overlay.frozenImage,
               let cropped = frozen.cropped(fromAppKitRect: screenRect,
-                                           screenFrame: mainScreenFrame) else {
+                                           screenFrame: overlay.screen.frame) else {
             hideOverlays()
             completionHandler(nil)
             return
         }
         // 纯裁剪，没有异步等待 —— 这正是「先截后选」换来的收益
         //
-        // 倍率在这里**按实际尺寸反推**（冻结图像素宽 ÷ 屏幕点宽），随后一路传到标注窗口。
+        // 倍率在这里**按实际尺寸反推**（该屏冻结图像素宽 ÷ 该屏点宽），随后一路传到标注窗口。
         // 于是裁剪与显示两侧用的是同一个数：即便捕获返回的分辨率与屏幕倍率不符，
         // 画布尺寸仍然与选区像素严格对应，不会出现"画布缩成选区一半"。
+        // 注意倍率按**选区屏**算：副屏与主屏的 Retina 倍率可以不同。
         completionHandler(CapturedImage(
             image: cropped,
             pixelScale: CapturedImage.scale(pixelWidth: frozen.width,
-                                            pointWidth: mainScreenFrame.width),
+                                            pointWidth: overlay.screen.frame.width),
             anchorRect: screenRect))
     }
 
@@ -174,18 +176,16 @@ class RegionSelectionWindow: NSWindow {
     /// 保留冻结画面，但不再吃鼠标事件。
     private func stopInteracting() {
         restoreCursorIfNeeded()
-        ignoresMouseEvents = true
-        for overlay in overlayWindows {
-            overlay.ignoresMouseEvents = true
+        for overlay in overlays {
+            overlay.window.ignoresMouseEvents = true
         }
     }
 
     /// 收掉全部覆盖层。标注窗口关闭时由 AppDelegate 调用。
     func hideOverlays() {
         restoreCursorIfNeeded()
-        orderOut(nil)
-        for overlay in overlayWindows {
-            overlay.orderOut(nil)
+        for overlay in overlays {
+            overlay.window.orderOut(nil)
         }
     }
 
@@ -200,7 +200,12 @@ class RegionSelectionWindow: NSWindow {
         NSCursor.pop()
         cursorRestored = true
     }
+}
 
+/// 单块屏幕的覆盖层窗口。每屏一个、彼此对等（多屏选区后不再有"主窗"）。
+final class RegionOverlayWindow: NSWindow {
+    // 无边框窗默认不能成为 key window；不能成为 key 就收不到键盘事件，
+    // Esc 取消会失效 —— 与原先主覆盖层的处理一致。
     override var canBecomeKey: Bool { true }
 }
 
@@ -209,7 +214,7 @@ class RegionSelectionWindow: NSWindow {
 extension CGImage {
     /// 从「整屏冻结图」里裁出 AppKit 选区。
     ///
-    /// 换算逻辑在 `ScreenGeometry.pixelRect`（纯函数，已离屏测试）。
+    /// 换算逻辑在 `ScreenGeometry.pixelRect`（纯函数，已离屏测试，含负坐标副屏案例）。
     /// 参数是**屏幕矩形**而不是 `NSScreen`：调用方应当把它在冻屏时记下的那块屏的
     /// frame 传进来，而不是在这里重新取 `NSScreen.main`（那可能已经换了一块屏）。
     func cropped(fromAppKitRect rect: NSRect, screenFrame: NSRect) -> CGImage? {
@@ -225,13 +230,14 @@ extension CGImage {
 
 // MARK: - Selection View
 
-/// 主屏的可交互覆盖层：画冻结帧 + 变暗，并处理拖拽选区。
+/// 一块屏幕上的可交互覆盖层：画该屏冻结帧 + 变暗，并处理拖拽选区。
 class RegionSelectionView: NSView {
     var onSelectionComplete: ((NSRect) -> Void)?
     var onCancel: (() -> Void)?
 
     /// 本屏的冻结帧。**不是可选装饰** —— 没有它，选区内部会露出真实屏幕，
     /// 而真实屏幕上的画面可能已经变了，看起来就像选区没生效。
+    /// （多屏下某块屏冻结失败时它可为 nil：那块屏只压暗，见 freezeScreens 的降级说明。）
     var frozenImage: CGImage?
 
     private var dragStart: NSPoint?
@@ -240,6 +246,9 @@ class RegionSelectionView: NSView {
     private let dimAlpha: CGFloat = 0.35
 
     override func mouseDown(with event: NSEvent) {
+        // 拖拽所在屏成为 key：拖拽过程中按 Esc 必须落在**这块屏**的视图上，
+        // 而不是初始 key 的那块（用户可能换了屏开始拖拽）。
+        window?.makeKey()
         dragStart = convert(event.locationInWindow, from: nil)
         dragEnd = dragStart
         needsDisplay = true
@@ -355,21 +364,5 @@ class RegionSelectionView: NSView {
             width: abs(a.x - b.x),
             height: abs(a.y - b.y)
         )
-    }
-}
-
-// MARK: - 非主屏覆盖层
-
-/// 只负责把本屏的冻结帧画出来并压暗，不参与交互。
-private final class FrozenScreenView: NSView {
-    var frozenImage: CGImage?
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
-        if let frozen = frozenImage {
-            ctx.draw(frozen, in: bounds)
-        }
-        ctx.setFillColor(NSColor.black.withAlphaComponent(0.35).cgColor)
-        ctx.fill(bounds)
     }
 }

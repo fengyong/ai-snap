@@ -141,7 +141,7 @@ ai-snap/
 | `Models` | 对象协议与全部标注类；`UndoAction` 显式记录 add/delete 的 before/after z 序 |
 | `HitTestBuffer` | Layer B：唯一色 key、关抗锯齿、O(1) 读像素命中 |
 | `ScreenCapture` + `Capture/` | 「截哪个」与「真抓图」分离；SCK 主路径 + legacy 回滚 |
-| `RegionSelectionWindow` | 先冻结后选区；主屏可交互，副屏仅冻帧（已知限制） |
+| `RegionSelectionWindow` | 先冻结后选区的协调器：每屏一个对等交互覆盖层，鼠标在哪屏拖拽就在哪屏选区，其余屏保持冻结压暗 |
 | `AnchoredPlacement` / `ToolbarLayout` | 就地落点与工具栏折行，纯函数可离屏测 |
 | `AnnotationWindow` | 窗口容器、工具栏（单一来源 `toolbarTools`）、导出/OCR/Pin 入口 |
 | `AnnotationView*` | 画布核心；Handler 协议化后加工具不必改画布 |
@@ -444,9 +444,10 @@ macOS 存在两套坐标系:
 > ScreenCaptureKit 沿用左上原点的屏幕坐标空间（已实测确认，见 6.1 的说明），
 > 所以这两套 API 可以互换使用同一份 rect，迁移时坐标换算无需修改。
 
-> ⚠️ **已知限制**：`SCScreenshotManager.captureImage(in:)` 在矩形**跨越多块显示器**时会降级到
-> 1x 分辨率（实测：三块 2x 屏的跨屏矩形返回的像素数与点数相同）。当前选区只在主屏交互，
-> 不触及该路径；将来若做多屏交互，需按屏拆分后分别捕获再拼接。
+> ℹ️ **跨屏降级的规避**：`SCScreenshotManager.captureImage(in:)` 在矩形**跨越多块显示器**时会降级到
+> 1x 分辨率（实测：三块 2x 屏的跨屏矩形返回的像素数与点数相同）。多屏选区因此**不走跨屏矩形**：
+> 每块屏各截一张整屏冻结帧（单屏矩形，倍率不降级），选区确定后从**所在屏**的冻结帧纯裁剪 ——
+> 换算走 `ScreenGeometry.pixelRect`（纯函数，含负坐标副屏探针案例），倍率按该屏实测反推。
 
 ---
 

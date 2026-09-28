@@ -54,6 +54,11 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     /// 就地编辑模式下要覆盖的选区（AppKit 屏幕坐标）。非 nil 时窗口不允许被居中搬走。
     private var anchoredRect: NSRect?
 
+    /// 就地编辑的宿主屏（选区所在屏）的物理 frame。落点计算与重算（resizeWindow）
+    /// 都用它，不再取 `NSScreen.main` —— 后者在多屏下会随 key window 漂移。
+    /// 非 nil 的兜底值与原先的 `NSScreen.main` 缺省一致（1440×900）。
+    private let hostScreenFrame: NSRect
+
     /// 关闭时回调（AppDelegate 用它把冻结的覆盖层收掉）。
     var onClose: (() -> Void)?
 
@@ -141,10 +146,23 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     ///   （窗口截图走这条路）。
     /// - Parameter pixelSize: 源截图的**像素**尺寸。导出分辨率以它为准 ——
     ///   不传的话导出会退化成"按当前显示器分辨率"，在 1x 外接屏上标注 2x 截图会掉一半像素。
+    /// 就地编辑的宿主屏：选区矩形落在哪块屏上就是哪块。
+    /// 无锚（窗口截图路径）时退回 `NSScreen.main`，行为与旧版一致。
+    private static func hostScreen(for anchor: NSRect?) -> NSScreen? {
+        guard let anchor else { return NSScreen.main }
+        return NSScreen.screens.first { $0.frame.intersects(anchor) } ?? NSScreen.main
+    }
+
     init(image: NSImage, anchor: NSRect? = nil, pixelSize: CGSize? = nil) {
         let imageSize = image.size
 
-        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        // 宿主屏 = 选区所在的那块屏。折行上限、缩放适配、就地落点与后续重算落点
+        // 全部锚定它，而不是 `NSScreen.main` —— 后者的语义是「当前 key window 所在屏」，
+        // 开窗时取决于上一个 key 窗在哪。多屏选区之后选区完全可能在副屏上，
+        // 用 main 会把窗口锚到错误的屏（折行按错屏宽度、落点被夹到错误边界）。
+        let hostScreen = Self.hostScreen(for: anchor)
+        let screenFrame = hostScreen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        self.hostScreenFrame = hostScreen?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
         // 工具栏占几行，必须在开窗**之前**定下来：它决定窗口要留多高，
         // 而窗口高度又参与画布缩放（maxH）与就地编辑的落点计算。
@@ -201,7 +219,7 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
                 anchor: anchor,
                 windowSize: NSSize(width: initialWidth, height: contentHeight),
                 toolbarHeight: toolbarHeight,
-                screenFrame: NSScreen.main?.frame ?? screenFrame)
+                screenFrame: hostScreenFrame)
             placement = result
             initialOrigin = result.origin
         } else {
@@ -348,7 +366,7 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         let originBefore = frame.origin
         resizeWindow(to: NSSize(width: newWidth, height: contentHeight),
                      container: container, toolbar: toolbar,
-                     screen: NSScreen.main?.visibleFrame ?? frame)
+                     screen: hostScreenFrame)
         setFrameOrigin(originBefore)
     }
 
@@ -367,12 +385,13 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         positionToolbarSeparator(for: toolbar)
 
         if let anchor = anchoredRect {
-            // 宽度变了要重算落点：同一个选区，窗口更宽时可能从"放得下"变成"要左移"
+            // 宽度变了要重算落点：同一个选区，窗口更宽时可能从"放得下"变成"要左移"。
+            // 屏幕边界用 init 时定下的宿主屏 —— 选区在副屏时 NSScreen.main 可能已漂移。
             let result = AnchoredPlacement.compute(
                 anchor: anchor,
                 windowSize: size,
                 toolbarHeight: toolbarHeight,
-                screenFrame: NSScreen.main?.frame ?? screen)
+                screenFrame: hostScreenFrame)
             setFrameOrigin(result.origin)
         } else {
             setFrameOrigin(NSPoint(x: screen.midX - frame.width / 2,
