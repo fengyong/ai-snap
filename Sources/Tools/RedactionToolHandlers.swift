@@ -47,16 +47,17 @@ struct RedactionToolHandler: AnnotationToolHandler {
         preview.draw(in: ctx)
     }
 
-    /// 打码强度。暂时固定，不给 UI 入口 —— 12 点的块/半径已经足以让屏幕上的
-    /// 正文和数字无法辨认，而多一个滑块就多一个要持久化、要在帮助里解释的东西。
-    /// 将来若需要，把这两个常量接到工具栏的一个「强度」滑块上即可。
+    /// 打码强度**基准值**。12 点的块/半径已经足以让屏幕上的正文和数字无法辨认。
+    /// 实际值 = 基准 × 偏好系数（`Preferences.redactionStrength`，0.5…3.0，
+    /// 设置窗口可调）—— 小图（表情包）可以调细，4K 大屏截图可以调粗。
     static let mosaicBlockSize: CGFloat = 12
     static let blurRadius: CGFloat = 12
 
     private func style(for tool: DrawingTool) -> RedactionStyle? {
+        let strength = CGFloat(Preferences.shared.redactionStrength)
         switch tool {
-        case .mosaic: return .mosaic(blockSize: Self.mosaicBlockSize)
-        case .blur:   return .blur(radius: Self.blurRadius)
+        case .mosaic: return .mosaic(blockSize: Self.mosaicBlockSize * strength)
+        case .blur:   return .blur(radius: Self.blurRadius * strength)
         default:      return nil
         }
     }

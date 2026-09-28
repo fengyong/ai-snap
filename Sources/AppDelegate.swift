@@ -25,6 +25,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var windowCaptureInFlight = false
     /// 窗口选择模式覆盖层。非 nil 即处于模态选择中（热键/菜单入口据此拒绝重入）。
     private var windowPickOverlay: WindowPickOverlay?
+    /// 延迟截图的倒计时。非 nil 即倒计时中（此时不再接受第二次延迟请求）。
+    private var countdownHUD: CountdownHUD?
     private var annotationWindow: AnnotationWindow?
     private var settingsWindowController: SettingsWindowController?
     private var historyWindow: HistoryWindow?
@@ -317,6 +319,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
         menu.addItem(NSMenuItem(title: "区域截图", action: #selector(startRegionCapture), keyEquivalent: "1"))
         menu.addItem(NSMenuItem(title: "窗口截图", action: #selector(startWindowCapture), keyEquivalent: "2"))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(makeDelayedCaptureSubmenu())
         menu.addItem(NSMenuItem(title: "截图历史…", action: #selector(showHistory), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "检查更新…", action: #selector(checkForUpdatesManually), keyEquivalent: ""))
         // 不给 keyEquivalent：状态栏菜单只在菜单展开时响应按键，
@@ -378,6 +381,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     // MARK: - Actions
 
+    /// 「延迟截图」子菜单：3 秒 / 5 秒后进入区域选区。
+    /// 给用户时间去排画面（收起通知、切到目标窗口）—— 这与窗口选择模式消灭的
+    /// 0.5 秒赛跑不同：延迟是**用户主动要的**等待，有可见的倒计时与取消入口。
+    private func makeDelayedCaptureSubmenu() -> NSMenuItem {
+        let item = NSMenuItem(title: "延迟截图", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for seconds in [3, 5] {
+            let entry = NSMenuItem(title: "\(seconds) 秒后区域截图",
+                                   action: #selector(startDelayedRegionCapture(_:)),
+                                   keyEquivalent: "")
+            entry.representedObject = seconds
+            entry.target = self
+            submenu.addItem(entry)
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    /// 倒计时结束后走 `startRegionCapture`（权限预检 + 丢弃确认都在同一条路上）。
+    @objc private func startDelayedRegionCapture(_ sender: NSMenuItem) {
+        guard let seconds = sender.representedObject as? Int else { return }
+        guard countdownHUD == nil, windowPickOverlay == nil else { return }
+        countdownHUD = CountdownHUD(
+            seconds: seconds,
+            onEnd: { [weak self] in
+                self?.countdownHUD = nil
+                self?.startRegionCapture()
+            },
+            onCancel: { [weak self] in
+                self?.countdownHUD = nil
+            })
+        countdownHUD?.begin()
+    }
+
     @objc private func startRegionCapture() {
         // 权限预检改成 await（不再用信号量卡主线程）。整个流程挪进 Task：
         // AppKit 的 action 本身跑在主 actor 上，所以这里显式 @MainActor，UI 操作照旧安全。
@@ -392,6 +429,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
 
     /// 权限通过之后的实际流程（从 `startRegionCapture` 拆出来，便于 async 化）
     private func beginRegionCapture() {
+        // 倒计时还挂着就先收（onEnd 路径上它自己已经清了，这里是「立即截图」路径的防御）
+        countdownHUD?.cancel()
+        countdownHUD = nil
         // 窗口选择覆盖层还开着时先收掉：macOS 15.2+ 的 display-agnostic 捕获
         // 不排除自家窗口，开着冻结会把覆盖层拍进冻结帧
         // （14.x 的 filter 路径反而排除了自家窗口 —— 两条路径行为不同，一并规避）。

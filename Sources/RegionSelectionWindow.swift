@@ -231,6 +231,13 @@ extension CGImage {
 // MARK: - Selection View
 
 /// 一块屏幕上的可交互覆盖层：画该屏冻结帧 + 变暗，并处理拖拽选区。
+///
+/// ## 选区状态机：idle → dragging → adjusting → 确认
+///
+/// `mouseUp` 不再立即确认：有效选区进入 **adjusting（待确认）** —— 方向键整框
+/// 微调（±1px，Shift ±10px）、再拖 = 重选、Enter / 双击确认、Esc 取消。
+/// 之前松手即定，差 1px 也只能整张重截；键盘微调是「不用回鼠标就能对齐」的
+/// 最后一步（与标注画布「全程不碰鼠标」的键盘闭环同一设计取向）。
 class RegionSelectionView: NSView {
     var onSelectionComplete: ((NSRect) -> Void)?
     var onCancel: (() -> Void)?
@@ -240,8 +247,22 @@ class RegionSelectionView: NSView {
     /// （多屏下某块屏冻结失败时它可为 nil：那块屏只压暗，见 freezeScreens 的降级说明。）
     var frozenImage: CGImage?
 
-    private var dragStart: NSPoint?
-    private var dragEnd: NSPoint?
+    private enum SelectionState {
+        case idle
+        case dragging(start: NSPoint)
+        /// 松手后的待确认态：矩形已有效，等微调 / 确认 / 重拖
+        case adjusting
+    }
+    private var state: SelectionState = .idle
+    /// 当前画出来的矩形（dragging 中实时更新；adjusting 中被方向键挪动）
+    private var activeRect: NSRect?
+
+    /// 探针观测点：adjusting 态的待确认矩形（nil = 不在该状态）。
+    /// 离屏探针里 `needsDisplay` 不可观测，状态本身才是可靠的断言锚点。
+    var pendingAdjustmentRect: NSRect? {
+        guard case .adjusting = state else { return nil }
+        return activeRect
+    }
 
     private let dimAlpha: CGFloat = 0.35
 
@@ -249,37 +270,69 @@ class RegionSelectionView: NSView {
         // 拖拽所在屏成为 key：拖拽过程中按 Esc 必须落在**这块屏**的视图上，
         // 而不是初始 key 的那块（用户可能换了屏开始拖拽）。
         window?.makeKey()
-        dragStart = convert(event.locationInWindow, from: nil)
-        dragEnd = dragStart
+        // 双击落在 adjusting 态 = 确认（第一击进入待确认、第二击即确认）。
+        // 必须在转 dragging 之前判，否则第二击会莫名其妙开始一次新拖拽。
+        if case .adjusting = state, event.clickCount >= 2 {
+            if let rect = activeRect { confirm(rect: rect) }
+            return
+        }
+        state = .dragging(start: convert(event.locationInWindow, from: nil))
+        activeRect = nil
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
-        dragEnd = convert(event.locationInWindow, from: nil)
+        guard case .dragging(let start) = state else { return }
+        activeRect = rectFromPoints(start, convert(event.locationInWindow, from: nil))
         needsDisplay = true
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard let start = dragStart, let end = dragEnd else { return }
-        let rect = rectFromPoints(start, end)
+        guard case .dragging = state, let rect = activeRect else { return }
 
         if rect.width > Self.minimumSelectionSide && rect.height > Self.minimumSelectionSide {
-            onSelectionComplete?(rect)
+            // 有效选区 → 待确认（不立即确认，留出微调余地）
+            state = .adjusting
         } else {
             // 太小：以前是**静默什么都不做** —— 界面上没有任何反应，用户只会以为截图坏了。
             // 给一声提示音，并保留覆盖层让用户重拖（不销毁状态，直接再来一次即可）。
             NSSound.beep()
+            state = .idle
+            activeRect = nil
         }
-
-        dragStart = nil
-        dragEnd = nil
         needsDisplay = true
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { // Escape
+        if event.keyCode == 53 { // Escape：任何状态都取消
+            state = .idle
+            activeRect = nil
             onCancel?()
+            return
         }
+        guard case .adjusting = state, var rect = activeRect else { return }
+
+        let step: CGFloat = event.modifierFlags.contains(.shift) ? 10 : 1
+        switch event.keyCode {
+        case 123: rect.origin.x -= step          // ←
+        case 124: rect.origin.x += step          // →
+        case 125: rect.origin.y -= step          // ↓（AppKit y 轴向上，向下是减）
+        case 126: rect.origin.y += step          // ↑
+        case 36, 52:                             // Return / 小键盘 Enter → 确认
+            confirm(rect: rect)
+            return
+        default:
+            return
+        }
+        activeRect = rect
+        needsDisplay = true
+    }
+
+    private func confirm(rect: NSRect) {
+        state = .idle
+        activeRect = nil
+        needsDisplay = true
+        onSelectionComplete?(rect)
     }
 
     override var acceptsFirstResponder: Bool { true }
@@ -296,8 +349,7 @@ class RegionSelectionView: NSView {
         ctx.setFillColor(NSColor.black.withAlphaComponent(dimAlpha).cgColor)
         ctx.fill(bounds)
 
-        guard let start = dragStart, let end = dragEnd else { return }
-        let selectionRect = rectFromPoints(start, end)
+        guard let selectionRect = activeRect else { return }
 
         // 3. 选区内把冻结帧**再画一遍**（而不是用 .clear 挖洞）。
         //    挖洞会露出覆盖层后面的真实屏幕 —— 那就不是冻结画面了。
@@ -308,15 +360,23 @@ class RegionSelectionView: NSView {
         }
         ctx.restoreGState()
 
-        // 4. 虚线边框
+        // 4. 虚线边框（待确认态用实线：一眼区分「还在拖」与「等确认」）
+        var adjusting = false
+        if case .adjusting = state { adjusting = true }
         ctx.setStrokeColor(NSColor.white.cgColor)
         ctx.setLineWidth(1.5)
-        ctx.setLineDash(phase: 0, lengths: [6, 3])
+        if !adjusting {
+            ctx.setLineDash(phase: 0, lengths: [6, 3])
+        }
         ctx.stroke(selectionRect)
         ctx.setLineDash(phase: 0, lengths: [])
 
         // 5. 尺寸提示：贴在选区上方（太靠上时改放下方）
         drawSizeLabel(ctx: ctx, for: selectionRect)
+        // 6. 待确认提示（只在该态出现一次，不常驻打扰）
+        if adjusting {
+            drawConfirmHint(ctx: ctx, for: selectionRect)
+        }
     }
 
     /// 认为"这是一次有效选区"的最小边长（点）。
@@ -324,6 +384,32 @@ class RegionSelectionView: NSView {
     /// 比它更小的拖拽按误触处理。这个数以前是散在 `mouseUp` 里的字面量 `5`，
     /// 现在抽出来，好让尺寸标签也能拿它给出"太小了"的可见提示。
     static let minimumSelectionSide: CGFloat = 5
+
+    /// 待确认态的操作提示，贴在尺寸标签旁（同样有上/下两种落位）。
+    private func drawConfirmHint(ctx: CGContext, for rect: NSRect) {
+        let text = "Enter 确认 · 方向键微调 · Esc 取消"
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11),
+            .foregroundColor: NSColor.white,
+        ]
+        let size = (text as NSString).size(withAttributes: attributes)
+        let padding: CGFloat = 6
+        let box = NSSize(width: size.width + padding * 2, height: size.height + padding)
+
+        var origin = NSPoint(x: rect.minX, y: rect.maxY + 26)
+        if origin.y + box.height > bounds.maxY {
+            origin.y = rect.minY - box.height - 22
+        }
+        origin.x = min(max(origin.x, bounds.minX), max(bounds.maxX - box.width, bounds.minX))
+        origin.y = min(max(origin.y, bounds.minY), max(bounds.maxY - box.height, bounds.minY))
+
+        ctx.setFillColor(NSColor.black.withAlphaComponent(0.65).cgColor)
+        ctx.fill(NSRect(origin: origin, size: box))
+        (text as NSString).draw(
+            at: NSPoint(x: origin.x + padding, y: origin.y + padding / 2),
+            withAttributes: attributes
+        )
+    }
 
     private func drawSizeLabel(ctx: CGContext, for rect: NSRect) {
         // 小于阈值的选区会被 mouseUp 拒收，所以标签上要说清"为什么点了没反应"
