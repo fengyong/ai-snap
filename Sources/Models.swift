@@ -547,8 +547,26 @@ class Arrow: AnnotationObject {
         }
 
         // Shaft
+        //
+        // 箭杆终点要分两种情况（头部是实心还是开放）：
+        //  · 实心三角/菱形头部有实体盖住接缝 → 箭杆提前收住，否则 `.round` 端帽
+        //    会从尖端多凸出半个线宽（线宽 15 时就是 7.5pt 的圆头凸起）；
+        //  · 开放头（两条线）没有实体覆盖 → 箭杆必须画到尖端，否则会看到明显断口。
+        let shaftDX = endPoint.x - startPoint.x
+        let shaftDY = endPoint.y - startPoint.y
+        let shaftLen = hypot(shaftDX, shaftDY)
+        let hasSolidHead = (style.headType == .triangle || style.headType == .diamond)
+        let shaftEnd: CGPoint
+        if hasSolidHead && shaftLen > 0.001 {
+            let ux = shaftDX / shaftLen, uy = shaftDY / shaftLen
+            let len = Self.headLength(for: style, lineWidth: lineWidth)
+            shaftEnd = CGPoint(x: endPoint.x - ux * len * 0.85,
+                               y: endPoint.y - uy * len * 0.85)
+        } else {
+            shaftEnd = endPoint
+        }
         ctx.move(to: startPoint)
-        ctx.addLine(to: endPoint)
+        ctx.addLine(to: shaftEnd)
         ctx.strokePath()
 
         // 头部/尾部一律用实线 + 圆头（虚线只作用于箭身）
@@ -591,10 +609,19 @@ class Arrow: AnnotationObject {
 
     /// 在指定端点绘制箭头头部。`angle` 是箭头指向的方向（弧度）。
     ///
+    /// 头部长度。**必须随线宽缩放**。
+    ///
+    /// 固定 14pt 的三角头，宽度只有 `2 · 14 · sin(headAngle) = 14`（headAngle 默认 30°），
+    /// 而默认线宽是 15 —— 头比箭杆还窄，画出来就是一根**没有头的粗棒**。
+    /// 取 `lineWidth * 3.2` 保证头部始终明显宽于箭杆。
+    static func headLength(for style: ArrowStyle, lineWidth: CGFloat) -> CGFloat {
+        max(style.headLength, lineWidth * 3.2)
+    }
+
     /// 头尾共用本方法：头部传 `angle`，尾部传 `angle + π`。
     private func drawHead(_ type: ArrowHeadType, at tip: CGPoint, angle: CGFloat,
                           in ctx: CGContext, color drawColor: NSColor) {
-        let len = style.headLength
+        let len = Self.headLength(for: style, lineWidth: lineWidth)
         let spread = style.headAngle
 
         switch type {
