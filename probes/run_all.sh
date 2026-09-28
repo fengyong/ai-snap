@@ -35,6 +35,9 @@ run_probe() {
 
   local tmp
   tmp="$(mktemp -d)"
+  # 脚本被 Ctrl-C / 超时杀掉时也要把编译目录清掉 —— 否则 TMPDIR 里会留下一堆
+  # 名叫 `run` 的探针二进制（实测被我自己的 60 秒超时杀掉过一次，就漏了）。
+  trap 'rm -rf "$tmp"' RETURN
   cp "probes/$name.swift" "$tmp/main.swift"
 
   # 拼成数组再执行：空数组直接展开在 bash 3.2 + set -u 下会报 unbound variable

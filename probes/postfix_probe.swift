@@ -167,14 +167,32 @@ do {
 print("\n=== 4. 关闭标注窗口后激活策略回到 .accessory ===")
 do {
     NSApp.setActivationPolicy(.accessory)
+    // 先把这个进程"装扮成真应用"。
+    //
+    // `setupMainMenu` 现在只在 `NSApp.delegate is AppDelegate` 时才把激活策略切成
+    // `.regular` —— 那条判据是为了让**探针进程**（裸可执行文件，默认策略 .prohibited）
+    // 不往 Dock 里冒 `run` 图标。所以这里必须装上 delegate 来模拟真应用，
+    // 否则下面两条测的就不是真应用的行为了。
+    let appDelegate = AppDelegate()
+    NSApp.delegate = appDelegate
+
     let window = AnnotationWindow(image: makeCanvas(200, 150))
     let afterOpen = NSApp.activationPolicy()
     window.close()
     let afterClose = NSApp.activationPolicy()
+    NSApp.delegate = nil
 
     check("开窗后为 .regular（菜单栏可用）", afterOpen == .regular, "rawValue \(afterOpen.rawValue)")
     check("关窗后回到 .accessory（否则 Dock 图标永久残留）",
           afterClose == .accessory, "rawValue \(afterClose.rawValue)")
+
+    // 反向对照：**没有** delegate（= 探针进程的真实身份）时不许切进 Dock
+    NSApp.setActivationPolicy(.accessory)
+    let probeWindow = AnnotationWindow(image: makeCanvas(120, 90))
+    let probeOpen = NSApp.activationPolicy()
+    probeWindow.close()
+    check("裸进程建窗也不会进 Dock（否则跑一遍套件 Dock 里一串 run 图标）",
+          probeOpen != .regular, "rawValue \(probeOpen.rawValue)")
 }
 
 // MARK: - 5. 画笔颜色不被开窗销毁
