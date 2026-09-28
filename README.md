@@ -11,6 +11,7 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
 - **先冻屏、再选区** - 显示覆盖层**之前**先截一次屏，覆盖层画的是冻结帧。
   于是选区确定只需裁一刀：不必等覆盖层消失，也不可能把覆盖层自己拍进去
 - **就地进入标注** - 标注画布精确压在刚框住的选区上，四周保持变暗，没有窗口跳变
+- **多屏选区** - 每块屏各一张冻结帧、各一个对等交互覆盖层；鼠标在哪块屏拖拽就在哪块屏选区，标注窗口就地锚定**那块屏**（倍率按该屏实测反推，副屏可与主屏倍率不同）
 
 ### 标注工具
 - **箭头** - 拖拽绘制，支持 8 种预设样式（实心、开放、虚线、菱形、圆端、点菱、**双向**、**双开放**）
@@ -106,7 +107,7 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
 | `Capture/CaptureProviderLegacy.swift` | 旧 CGWindowList 实现的备份（回滚通道） |
 | `Capture/ScreenCaptureError.swift` | 截图失败的结构化错误 |
 | `Capture/ScreenGeometry.swift` | 屏幕 ↔ 图像坐标换算（纯函数，可离屏测） |
-| `RegionSelectionWindow.swift` | 全屏覆盖层：冻结帧选区 |
+| `RegionSelectionWindow.swift` | 冻结帧选区协调器：每屏一个对等交互覆盖层 |
 | `OverlayWindowStyle.swift` | 覆盖层窗口外观（主屏与副屏共用一份配置） |
 | `AnchoredPlacement.swift` | 就地编辑的落点（纯函数，可离屏测） |
 | `AnnotationWindow.swift` | 标注窗口、工具栏、菜单栏、导出与 OCR 入口 |
