@@ -87,7 +87,26 @@ BIN_PATH="$BIN_DIR/$APP_NAME"
 
 # ── 2. 组装 .app ──────────────────────────────────────────────────────
 step "组装 $APP_NAME.app"
-APP_BUNDLE="$APP_NAME.app"
+
+# 产物放在 `.build/` 下面，而**不是**仓库根目录。
+#
+# 原因是踩过的坑：`.app` 放在仓库根（可见目录）会被 Spotlight 索引、进而注册进
+# LaunchServices，于是「启动台」/「程序」里会多出一个跟 /Applications 里那份**重名**
+# 的 AISnap，看起来像装了两份。`.build` 以点开头，Spotlight 默认不索引隐藏目录，
+# 从根上不会冒出来。（2026-09-28 用户报「还是能看到两个 ai-snap」，就是这个。）
+APP_BUNDLE=".build/out/$APP_NAME.app"
+
+# 顺手清掉旧版本遗留在仓库根目录的那份 —— 它正是上面那个问题的来源。
+# 只认我们自己的 bundle id，不会误删别人的东西。
+LEGACY_BUNDLE="$APP_NAME.app"
+LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+if [ -d "$LEGACY_BUNDLE" ] && \
+   [ "$(plutil -extract CFBundleIdentifier raw "$LEGACY_BUNDLE/Contents/Info.plist" 2>/dev/null)" = "$BUNDLE_ID" ]; then
+  "$LSREGISTER" -u "$LEGACY_BUNDLE" 2>/dev/null || true
+  rm -rf "$LEGACY_BUNDLE"
+  echo "  已清掉仓库根目录的旧构建产物（那个位置会被 Spotlight 索引成第二个 AISnap）"
+fi
+
 rm -rf "$APP_BUNDLE"
 mkdir -p "$APP_BUNDLE/Contents/MacOS" "$APP_BUNDLE/Contents/Resources"
 cp "$BIN_PATH" "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
@@ -223,7 +242,10 @@ codesign -dv "$APP_BUNDLE" 2>&1 | grep -E "Identifier|Signature|Authority|TeamId
 # 必须放在 SKIP_DMG 的提前 return **之前**，否则 `--skip-dmg --install` 会直接退出、装不上。
 if [ "$DO_INSTALL" = "1" ]; then
   step "安装到 $INSTALL_DIR"
-  TARGET="$INSTALL_DIR/$APP_BUNDLE"
+  # 注意：这里**只取文件名** —— APP_BUNDLE 现在是 `.build/out/AISnap.app`，
+  # 直接拼上去会装成 `/Applications/.build/out/AISnap.app`。
+  INSTALLED_BUNDLE="$INSTALL_DIR/$APP_NAME.app"
+  TARGET="$INSTALLED_BUNDLE"
 
   if [ ! -d "$INSTALL_DIR" ]; then
     echo "❌ 目标目录不存在：$INSTALL_DIR" >&2
@@ -259,7 +281,6 @@ if [ "$DO_INSTALL" = "1" ]; then
   fi
 
   # 立刻把这份注册给 LaunchServices，别留着旧路径的注册指向已经不存在的包
-  LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
   if [ -x "$LSREGISTER" ] && "$LSREGISTER" -f "$TARGET" >/dev/null 2>&1; then
     echo "  已刷新 LaunchServices 注册"
   fi
@@ -268,7 +289,7 @@ fi
 if [ "$SKIP_DMG" = "1" ]; then
   step "完成（已跳过 DMG）"
   echo "  $(pwd)/$APP_BUNDLE"
-  [ "$DO_INSTALL" = "1" ] && echo "  已安装：$INSTALL_DIR/$APP_BUNDLE"
+  [ "$DO_INSTALL" = "1" ] && echo "  已安装：$INSTALLED_BUNDLE"
   exit 0
 fi
 

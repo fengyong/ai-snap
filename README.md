@@ -154,11 +154,16 @@ swift run AISnap
 ### 打包成安装包
 
 ```bash
-./build.sh                        # 产出 AISnap.app 与 AISnap.dmg
+./build.sh                        # 产出 .build/out/AISnap.app 与 AISnap.dmg
 ./build.sh --skip-dmg             # 只要 .app
 ./build.sh --install              # 打包并装到 /Applications
 ./build.sh --skip-dmg --install   # 开发时常用：快出包 + 直接装上
 ```
+
+`AISnap.app` 组装在 **`.build/out/`** 下面，而不是仓库根目录 —— 这一步是必须的：
+放在可见目录里的 `.app` 会被 Spotlight 索引、注册进 LaunchServices，于是「启动台」里
+会多出一个跟 `/Applications` 那份**重名**的 AISnap，看起来像装了两份。`.build` 以点开头，
+Spotlight 默认不索引隐藏目录。（脚本还会顺手清掉旧版本遗留在仓库根目录的那份。）
 
 脚本会：校验版本号一致 → `swift build -c release` → 组装 .app（含 Info.plist 与图标）
 → **ad-hoc 签名并校验** → 打 DMG → **挂载 DMG 复验包内应用与签名**。
