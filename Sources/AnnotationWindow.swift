@@ -881,6 +881,8 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         ("模糊", "拖拽框选一块区域做高斯模糊（隐私打码）", .blur),
         ("橡皮", "拖拽抹掉经过的标注对象（整笔合并为一步撤销）", .eraser),
         ("取色", "从截图上取色：移到目标处单击，HEX 自动进剪贴板", .picker),
+        ("画笔", "自由绘制（快捷键 P）：拖拽逐点采样，整条笔画可选中/移动/旋转", .pen),
+        ("马克", "马克笔（快捷键 M）：半透明宽笔触，来回涂抹颜色均匀不变深", .marker),
     ]
 
     @objc private func toolButtonClicked(_ sender: NSButton) {
@@ -1033,6 +1035,13 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     }
 
     /// 按工具栏下标选中工具（数字键直选、Tab 循环、按钮点击都走这里）。
+    /// 按工具类型选中（键盘助记键 P/M 走这里，不依赖工具栏顺序 ——
+    /// 顺序会随加工具漂移，类型不会）。
+    func selectTool(_ tool: DrawingTool) {
+        guard let index = Self.toolbarTools.firstIndex(where: { $0.tool == tool }) else { return }
+        selectTool(atIndex: index)
+    }
+
     func selectTool(atIndex index: Int) {
         guard index >= 0 && index < Self.toolbarTools.count else { return }
         annotationView.currentTool = Self.toolbarTools[index].tool
