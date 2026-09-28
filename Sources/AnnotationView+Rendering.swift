@@ -47,6 +47,35 @@ extension AnnotationView {
             ctx.strokeEllipse(in: handleRect)
         }
 
+        // 2.5 附着的端点：画一个小环
+        //
+        // 没有它的话，"这一端挂在了别的形状上"在界面上**毫无迹象** —— 用户只能等到
+        // 移动父对象时发现箭头跟着动了才知道；而删掉父对象时箭头又被一起删掉，
+        // 那时就更摸不着头脑（"我只是删了个矩形，箭头怎么也没了"）。
+        //
+        // 只在**选中**时画：平时画会与箭头自己的端点圆头糊在一起。
+        // 用 save/restore 把状态圈起来，别影响后面删除叉号的绘制。
+        if let arrow = obj as? Arrow {
+            let anchors = [arrow.startAttachment, arrow.endAttachment]
+                .compactMap { $0 }
+                .compactMap { resolveAttachmentPosition($0) }
+            if !anchors.isEmpty {
+                ctx.saveGState()
+                ctx.setLineDash(phase: 0, lengths: [])
+                for anchor in anchors {
+                    let r: CGFloat = 5
+                    let ring = CGRect(x: anchor.x - r, y: anchor.y - r,
+                                      width: r * 2, height: r * 2)
+                    ctx.setFillColor(NSColor.systemBlue.withAlphaComponent(0.25).cgColor)
+                    ctx.fillEllipse(in: ring)
+                    ctx.setStrokeColor(NSColor.systemBlue.cgColor)
+                    ctx.setLineWidth(1.5)
+                    ctx.strokeEllipse(in: ring)
+                }
+                ctx.restoreGState()
+            }
+        }
+
         // 3. 右上角删除叉号按钮
         let deleteSize: CGFloat = 16
         let deleteCenter = AnnotationView.deleteButtonCenter(for: selRect,

@@ -1,4 +1,5 @@
 import Cocoa
+import ImageIO
 
 /// 标注窗口 — 包含工具栏和标注画布，右侧附带 Layer B 调试面板
 class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
@@ -941,8 +942,16 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         flashHUD("正在识别文字…")
 
         let canvasSize = annotationView.baseImage.size
-        TextRecognizer.recognize(in: image, canvasSize: canvasSize) { [weak self] items in
+        TextRecognizer.recognize(in: image, canvasSize: canvasSize) { [weak self] result in
             guard let self = self else { return }
+            // 「引擎失败」与「图里没有文字」必须给出不同的提示：
+            // 前者用户该重试或查环境，后者用户该换一张图 —— 混在一起就成了误导。
+            if case .failure(let error) = result {
+                self.annotationView.showOCRHighlights([])
+                self.flashHUD("文字识别失败：\(error.localizedDescription)")
+                return
+            }
+            let items = (try? result.get()) ?? []
             guard !items.isEmpty else {
                 self.annotationView.showOCRHighlights([])
                 self.flashHUD("未识别到文字")
@@ -1027,7 +1036,12 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
                   let self = self else { return }
 
             let image = self.annotationView.compositeImage()
-            guard let data = self.pngData(from: image) else { return }
+            // 编码失败与写盘失败是两件事，提示也要分开。
+            // 这条以前是静默 return：用户点了「保存」什么都没发生，也不知道没存上。
+            guard let data = self.pngData(from: image) else {
+                self.presentEncodeFailure()
+                return
+            }
             do {
                 try data.write(to: url)
                 self.flashHUD("已保存")
@@ -1073,7 +1087,8 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     ///
     /// 快捷键必须有反馈：⌘C 之后界面上什么都不变的话，用户不确定到底生效没有，
     /// 会重复按很多次。Enter 虽然会关窗口（本身就是反馈），但用它统一处理也无害。
-    private func flashHUD(_ text: String) {
+    /// 非 private：AppDelegate 在历史写盘失败时要借它提示一句
+    func flashHUD(_ text: String) {
         hudLabel?.removeFromSuperview()
 
         let label = NSTextField(labelWithString: text)
@@ -1110,6 +1125,18 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         }
     }
 
+    /// 编码阶段失败（写盘还没开始）。与 `presentWriteFailure` 分开，
+    /// 因为两者的原因与用户能采取的行动不同：编码失败多半是内存，写盘失败多半是磁盘/权限。
+    private func presentEncodeFailure() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "导出失败"
+        alert.informativeText = "图片编码失败（PNG）。这通常意味着内存不足，关掉一些窗口后重试即可。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        alert.runModal()
+    }
+
     private func presentWriteFailure(_ error: Error, url: URL) {
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
@@ -1123,10 +1150,28 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     // MARK: - 导出辅助
 
     /// 把 NSImage 编码为 PNG 数据。
-    private func pngData(from image: NSImage) -> Data? {
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
-        return bitmap.representation(using: .png, properties: [:])
+    ///
+    /// **不走 `tiffRepresentation` 中转**：那条路会先把整幅图编码成 TIFF、再解码回
+    /// `NSBitmapImageRep`，等于为了拿到一个位图白白搬运一遍全图数据（Retina 全屏 60MB 级），
+    /// 而且这一步跑在主线程（⌘S / ⌘C 会卡住）。
+    ///
+    /// 复合图本身就是 `NSBitmapImageRep`（见 `AnnotationView.compositeImage`），
+    /// 直接拿它编码即可；只有"没有位图 rep"的图（例如纯 PDF 矢量 rep）才退回 ImageIO。
+    ///
+    /// 非 private：探针要验证"编码出来的像素与原图逐位一致"——换编码器最容易悄悄改变
+    /// 颜色/透明度，而那种错用户只会觉得"存出来的图有点不对"。
+    func pngData(from image: NSImage) -> Data? {
+        if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first,
+           let data = rep.representation(using: .png, properties: [:]) {
+            return data
+        }
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let buffer = CFDataCreateMutable(nil, 0),
+              let dest = CGImageDestinationCreateWithData(buffer, "public.png" as CFString, 1, nil)
+        else { return nil }
+        CGImageDestinationAddImage(dest, cg, nil)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return buffer as Data
     }
 
     /// 写入剪贴板用的临时 PNG，返回其 URL。

@@ -94,10 +94,23 @@ final class CaptureHistory {
     /// `pixelScale` 是捕获方实测反推的倍率，随条目一起存下来 ——
     /// 否则从历史里「重新编辑」时得重新猜一个倍率，猜错的后果是画布尺寸与实际
     /// 像素不符（导出尺寸跟着错），而这种错要拿尺子量才发现。
-    func record(_ image: CGImage, pixelScale: CGFloat, completion: (() -> Void)? = nil) {
+    /// 记一笔历史。
+    ///
+    /// - Parameters:
+    ///   - completion: 成功落盘后回主队列调用一次（原来就有，保留）
+    ///   - onFailure: **编码失败或写盘失败**时回主队列调用一次
+    ///
+    /// 两个失败以前都是静默 `return`：用户以为"历史都存着呢"，其实一张都没落盘。
+    /// 截图历史恰恰是最容易被"我以为存了"骗到的功能，必须让用户知道。
+    func record(_ image: CGImage, pixelScale: CGFloat,
+                completion: (() -> Void)? = nil,
+                onFailure: (() -> Void)? = nil) {
         queue.async { [weak self] in
             guard let self = self else { return }
-            guard let data = Self.pngData(from: image) else { return }
+            guard let data = Self.pngData(from: image) else {
+                Self.reportFailure(onFailure, why: "PNG 编码失败")
+                return
+            }
 
             let now = Date()
             let entry = Entry(
@@ -115,7 +128,10 @@ final class CaptureHistory {
             let url = self.directory.appendingPathComponent(entry.fileName)
             // 原子写：非原子写在写盘中途崩溃会留下"文件存在但内容不全"的半张图，
             // 而索引仍认为它有效 —— 表现是历史列表里出现一张显示不出来的破图
-            guard (try? data.write(to: url, options: .atomic)) != nil else { return }
+            guard (try? data.write(to: url, options: .atomic)) != nil else {
+                Self.reportFailure(onFailure, why: "写入 \(url.lastPathComponent) 失败")
+                return
+            }
 
             self.lock.lock()
             self.index.insert(entry, at: 0)
@@ -186,6 +202,13 @@ final class CaptureHistory {
         let url = directory.appendingPathComponent("index.json")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
+    }
+
+    /// 失败统一出口：日志 + 回主队列通知调用方
+    private static func reportFailure(_ handler: (() -> Void)?, why: String) {
+        NSLog("[AISnap] 截图历史记录失败：%@", why)
+        guard let handler = handler else { return }
+        DispatchQueue.main.async(execute: handler)
     }
 
     private static func pngData(from image: CGImage) -> Data? {

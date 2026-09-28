@@ -1,15 +1,6 @@
 import Cocoa
 import ScreenCaptureKit
 
-/// 跨队列传一个 Bool 的盒子。
-///
-/// `canQueryShareableContent` 的信号量回调在别的队列上写、调用方在信号量之后读。
-/// 用一个明确的引用类型（而不是 `var` 捕获）是为了让"这里有个共享可变状态"写在脸上；
-/// 同步由信号量负责。
-private final class BoolBox {
-    var value = false
-}
-
 class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     private var statusItem: NSStatusItem!
     /// 状态栏菜单。不再直接挂到 `statusItem.menu`（那样左键/右键都只会弹菜单、无法绑动作），
@@ -244,30 +235,44 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// 这也正是抓图本身用的框架，顺带把已经迁走的 deprecated API 从本文件清掉。
     ///
     /// 非 private：探针要直接验证"已授权时不得被判成无权限"。
-    func checkScreenCapturePermission() -> Bool {
+    func checkScreenCapturePermission() async -> Bool {
         if CGPreflightScreenCaptureAccess() { return true }
-        return canQueryShareableContent()
+        return await canQueryShareableContent()
     }
 
     /// 用 `SCShareableContent` 探测权限（权限专属信号，见上）。
     ///
-    /// 底层是 async API，而两个调用点（区域/窗口截图入口）都是同步 `guard`，
-    /// 所以这里用信号量等结果。两点trade-off都写清楚：
-    ///   · **会阻塞主线程**，所以超时取 1 秒（实测 SCK 毫秒级返回，1 秒只兜异常）；
-    ///   · **任何失败都按无权限处理**（fail-closed）—— 超时、报错、拿不到答案
-    ///     一律返回 false，宁可多弹一次授权引导，也不能让用户在没有权限的情况下
-    ///     截出一张黑图还不知道为什么。反方向不可能出错：只有 SCK **成功**才判 true，
-    ///     而成功本身就等于实时 TCC 说"允许"。
-    func canQueryShareableContent(timeout: TimeInterval = 1) -> Bool {
-        let semaphore = DispatchSemaphore(value: 0)
-        // 用 final class 而不是 var 捕获：闭包在别的队列上写、这里读，需要明确的可变盒子
-        let box = BoolBox()
-        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { _, error in
-            box.value = (error == nil)
-            semaphore.signal()
+    /// **fail-closed**：任何失败都按无权限处理 —— 报错、拿不到答案一律 false，
+    /// 宁可多弹一次授权引导，也不能让用户在没有权限的情况下截出一张黑图还不知道为什么。
+    /// 反方向不可能出错：只有 SCK **成功**才判 true，而成功本身就等于实时 TCC 说"允许"。
+    ///
+    /// 曾经是"信号量 + 1 秒超时"的同步版本，为的是迁就两个同步调用点。代价是
+    /// SCK 偶发慢时**主线程整整卡 1 秒**（截图入口，用户直接能感觉到）。
+    /// 现在两个调用点都改成 `Task { @MainActor in ... }` + `await`，主线程照常跑 runloop。
+    ///
+    /// **超时仍然要留**，只是从"阻塞主线程"换成"不阻塞"：SCK 万一不回来，这个 Task 会
+    /// 永远挂着，用户按快捷键**什么反应都没有** —— 那比卡 1 秒更难查。用 task group
+    /// 让"探测"和"计时"赛跑，谁先回来算谁。
+    func canQueryShareableContent(timeout: TimeInterval = 3) async -> Bool {
+        await withTaskGroup(of: Bool?.self) { group in
+            group.addTask {
+                do {
+                    _ = try await SCShareableContent.excludingDesktopWindows(
+                        false, onScreenWindowsOnly: true)
+                    return true
+                } catch {
+                    return false
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                return nil          // 超时：拿不到答案
+            }
+            // 第一个完成的说了算；超时那条返回 nil，于是 fail-closed 成 false
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? false
         }
-        if semaphore.wait(timeout: .now() + timeout) == .timedOut { return false }
-        return box.value
     }
 
     /// 展示屏幕录制权限引导。
@@ -372,11 +377,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     // MARK: - Actions
 
     @objc private func startRegionCapture() {
-        guard checkScreenCapturePermission() else {
-            showPermissionAlert()
-            return
+        // 权限预检改成 await（不再用信号量卡主线程）。整个流程挪进 Task：
+        // AppKit 的 action 本身跑在主 actor 上，所以这里显式 @MainActor，UI 操作照旧安全。
+        Task { @MainActor in
+            guard await checkScreenCapturePermission() else {
+                showPermissionAlert()
+                return
+            }
+            beginRegionCapture()
         }
+    }
 
+    /// 权限通过之后的实际流程（从 `startRegionCapture` 拆出来，便于 async 化）
+    private func beginRegionCapture() {
         // 开新截图会把当前标注窗收掉 —— 有未保存的标注时先问一句，**与窗口截图那条路一致**。
         //
         // 这里原来是直接 `annotationWindow?.orderOut(nil)`，有两个后果（同一个洞）：
@@ -461,41 +474,47 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
 
     @objc private func startWindowCapture() {
-        guard checkScreenCapturePermission() else {
-            showPermissionAlert()
-            return
-        }
-
-        // 开新截图会把当前标注窗关掉 —— 有未保存的标注时先问一句，
-        // 用户取消就整件事都不做（否则等于用一次菜单点击静默丢掉上一张的成果）
-        if let window = annotationWindow {
-            guard window.confirmDiscardIfNeeded() else { return }
-            window.close()
-            annotationWindow = nil
-        }
-
-        // 防重入：这一段要等 0.5 秒 + 一次异步捕获，期间再按一次会调度出第二次捕获，
-        // 第二次的 openAnnotationWindow 会覆盖 annotationWindow，第一张图直接丢。
+        // 防重入必须在**同步段**占坑：权限预检改成 await 之后，两次快速按键都会在挂起处
+        // 溜过守卫，于是调度出两次捕获、第二次覆盖 annotationWindow。
         guard !windowCaptureInFlight else { return }
         windowCaptureInFlight = true
 
-        // 给用户一点时间切换到目标窗口
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self else { return }
-            Task { @MainActor in
-                defer { self.windowCaptureInFlight = false }
-                do {
-                    let capture = try await ScreenCapture.captureWindowUnderMouse()
-                    self.recordHistory(capture)
-                    self.openAnnotationWindow(with: capture)
-                } catch ScreenCaptureError.permissionDenied {
-                    // 旧实现此处只会静默返回 nil，用户点了没反应；现在给出正确引导
-                    self.showPermissionAlert()
-                } catch {
-                    // 鼠标下方没有可捕获的窗口（例如点到了桌面）。
-                    // 旧实现在这里是彻底静默（返回 nil，用户点了没任何反馈）；
-                    // 现在至少给一声提示音，让用户知道操作被响应了。
-                    NSSound.beep()
+        Task { @MainActor in
+            guard await checkScreenCapturePermission() else {
+                windowCaptureInFlight = false
+                showPermissionAlert()
+                return
+            }
+
+            // 开新截图会把当前标注窗关掉 —— 有未保存的标注时先问一句，
+            // 用户取消就整件事都不做（否则等于用一次菜单点击静默丢掉上一张的成果）
+            if let window = annotationWindow {
+                guard window.confirmDiscardIfNeeded() else {
+                    windowCaptureInFlight = false
+                    return
+                }
+                window.close()
+                annotationWindow = nil
+            }
+
+            // 给用户一点时间切换到目标窗口
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    defer { self.windowCaptureInFlight = false }
+                    do {
+                        let capture = try await ScreenCapture.captureWindowUnderMouse()
+                        self.recordHistory(capture)
+                        self.openAnnotationWindow(with: capture)
+                    } catch ScreenCaptureError.permissionDenied {
+                        // 旧实现此处只会静默返回 nil，用户点了没反应；现在给出正确引导
+                        self.showPermissionAlert()
+                    } catch {
+                        // 鼠标下方没有可捕获的窗口（例如点到了桌面）。
+                        // 旧实现在这里是彻底静默（返回 nil，用户点了没任何反馈）；
+                        // 现在至少给一声提示音，让用户知道操作被响应了。
+                        NSSound.beep()
+                    }
                 }
             }
         }
@@ -527,7 +546,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// 却躺在磁盘上"的接受度因人而异，所以开关必须是真的开关，而不是"少显示几条"。
     private func recordHistory(_ capture: CapturedImage) {
         guard Preferences.shared.recordHistory else { return }
-        CaptureHistory.shared.record(capture.image, pixelScale: capture.pixelScale)
+        CaptureHistory.shared.record(capture.image, pixelScale: capture.pixelScale,
+                                       onFailure: { [weak self] in
+            // 写盘失败以前完全静默 —— 用户以为历史都存着，其实一张都没落盘。
+            // 提示优先落在标注窗的 HUD 上（那时它通常已经开出来了），拿不到就只剩提示音。
+            self?.annotationWindow?.flashHUD("历史记录写入失败")
+            NSSound.beep()
+        })
     }
 
     /// 打开标注窗口。

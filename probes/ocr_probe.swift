@@ -116,9 +116,13 @@ do {
     print("     测试图 \(cg.width)×\(cg.height) 像素")
 
     var items: [RecognizedText] = []
+    var failure: String?
     var done = false
-    TextRecognizer.recognize(in: cg, canvasSize: canvasSize) { found in
-        items = found
+    TextRecognizer.recognize(in: cg, canvasSize: canvasSize) { result in
+        switch result {
+        case .success(let found): items = found
+        case .failure(let error): failure = "\(error)"
+        }
         done = true
     }
     // 等后台识别完成（最多 20 秒）
@@ -128,6 +132,7 @@ do {
     }
 
     check("识别回调回来了（没有死等超时）", done)
+    check("识别没有报错（失败与「没有文字」现在是分开上报的）", failure == nil, failure ?? "")
     check("识别到至少两段文字", items.count >= 2, "\(items.count) 段")
 
     let joined = TextRecognizer.joinedText(items)

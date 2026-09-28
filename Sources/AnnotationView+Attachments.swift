@@ -4,6 +4,10 @@ import Cocoa
 ///
 /// 放在文件级常量而不是类里：`extension` 不能添加实例存储属性，
 /// 而这个值只被本文件的附着逻辑使用。
+/// 检测附着的判定半径（点）：箭头端点落在这个范围内就记住附着关系。
+///
+/// 比 `AnnotationView.snapThreshold`（12，被动吸附的**提示**半径）大一点是有意的：
+/// 提示宁可少亮，决定宁可多记 —— 详见那边的注释。
 private let attachThreshold: CGFloat = 15.0
 
 // MARK: - Object Attachment
@@ -41,49 +45,19 @@ extension AnnotationView {
             let dist = hypot(point.x - nearest.x, point.y - nearest.y)
             if dist < bestDist {
                 bestDist = dist
-                // 计算周长参数
-                let param = computePerimeterParameter(for: obj, at: nearest)
+                // 计算周长参数。
+                //
+                // 这里**必须**用协议方法：原来是一个只认四种类型的 switch，遇到
+                // Redaction / Spotlight / StepBadge 会返回 0，于是"能挂上、但解析不回来" ——
+                // 表现是父对象移动时箭头不跟，父对象删除时箭头却被级联删掉。
+                // 现在每个类型都自己实现（协议里没有默认实现，新类型不表态就编译不过）。
+                let param = obj.perimeterParameter(for: nearest)
                 bestAttachment = Attachment(parentKey: key, anchorType: .perimeter(parameter: param))
             }
         }
         return bestAttachment
     }
 
-    /// 计算点在对象周长上的参数 (0...1)
-    ///
-    /// 矩形类形状（矩形 / 贴纸 / 文字）统一走 `RectPerimeter.parameter` ——
-    /// 它与各形状自己的 `pointOnPerimeter` 共用同一套分段，两者天然互逆。
-    /// 圆是角度参数化，单独一支。
-    ///
-    /// （这一段原先三个形状各写一份几乎相同的分段判定，改动任何一处都得记得
-    /// 同步另外两处，而且不一致时症状只是"箭头偶尔吸到奇怪的位置"，很难查。）
-    private func computePerimeterParameter(for obj: any AnnotationObject,
-                                           at point: CGPoint) -> CGFloat {
-        if let circle = obj as? CircleShape {
-            let local = rotatePoint(point, around: circle.center, by: -circle.rotation)
-            let dx = local.x - circle.center.x
-            let dy = local.y - circle.center.y
-            var angle = atan2(dy / circle.radiusY, dx / circle.radiusX)
-            if angle < 0 { angle += 2 * .pi }
-            return angle / (2 * .pi)
-        }
-        if let rect = obj as? RectangleShape {
-            return RectPerimeter.parameter(for: point, center: rect.center,
-                                           size: CGSize(width: rect.width, height: rect.height),
-                                           rotation: rect.rotation)
-        }
-        if let stamp = obj as? StampObject {
-            return RectPerimeter.parameter(for: point, center: stamp.center,
-                                           size: CGSize(width: stamp.size, height: stamp.size),
-                                           rotation: stamp.rotation)
-        }
-        if let text = obj as? TextShape {
-            return RectPerimeter.parameter(for: point, center: text.center,
-                                           size: text.contentSize,
-                                           rotation: text.rotation)
-        }
-        return 0
-    }
 
     /// 解析附着点的当前世界坐标
     func resolveAttachmentPosition(_ attachment: Attachment) -> CGPoint? {
@@ -96,19 +70,8 @@ extension AnnotationView {
             return snaps[index].point
 
         case .perimeter(let parameter):
-            if let circle = parent as? CircleShape {
-                return circle.pointOnPerimeter(at: parameter)
-            }
-            if let rect = parent as? RectangleShape {
-                return rect.pointOnPerimeter(at: parameter)
-            }
-            if let stamp = parent as? StampObject {
-                return stamp.pointOnPerimeter(at: parameter)
-            }
-            if let text = parent as? TextShape {
-                return text.pointOnPerimeter(at: parameter)
-            }
-            return nil
+            // 同样走协议：任何能当父对象的类型都必须能把自己的参数换回坐标
+            return parent.pointOnPerimeter(at: parameter)
         }
     }
 

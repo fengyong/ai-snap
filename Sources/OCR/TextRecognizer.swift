@@ -81,9 +81,13 @@ enum TextRecognizer {
     /// `VNImageRequestHandler.perform` 是**同步阻塞**的，一张整屏截图在 `.accurate`
     /// 档下通常要几百毫秒 —— 放在主线程会卡住整个界面，所以这里挪到后台队列，
     /// 结果回主线程。`completion` 一定在主线程调用。
+    ///
+    /// 返回 `Result` 而不是 `[RecognizedText]`：以前失败时把错误吞成空数组，
+    /// 于是"识别引擎报错"和"这张图里确实没有文字"在界面上完全一样 ——
+    /// 用户看到的是「未识别到文字」，会以为是自己图的问题，实际是引擎失败了。
     static func recognize(in image: CGImage,
                           canvasSize: CGSize,
-                          completion: @escaping ([RecognizedText]) -> Void) {
+                          completion: @escaping (Result<[RecognizedText], Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
@@ -109,11 +113,12 @@ enum TextRecognizer {
                                         canvasSize: canvasSize)))
                 }
             } catch {
-                // 失败就当没识别到：调用方只需要"有没有结果"
-                found = []
+                // 失败要如实上报，不能吞成"没有文字"（两者在界面上必须能分开）
+                DispatchQueue.main.async { completion(.failure(error)) }
+                return
             }
 
-            DispatchQueue.main.async { completion(found) }
+            DispatchQueue.main.async { completion(.success(found)) }
         }
     }
 }

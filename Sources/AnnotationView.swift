@@ -93,6 +93,15 @@ class AnnotationView: NSView {
     // 点捕捉：当前活跃的吸附点（用于可视化）
     // 非 private：吸附扩展文件要用
     var activeSnapPoint: CGPoint?
+    /// 被动吸附的判定半径（点）：鼠标空闲移动时，离吸附点多近才亮起指示器。
+    ///
+    /// **与 `attachThreshold`（15）不是同一个东西，别顺手统一**：
+    ///   · 这个管的是"提示"—— 鼠标路过时给个视觉指引，宁小勿大（太大会到处亮）；
+    ///   · `attachThreshold` 管的是"决定"—— 箭头端点落下时是否记住附着关系，
+    ///     宁大勿小（记错了用户要手动挪开）。
+    /// 两者作用在不同时机、承担不同后果，取值不同是有意的。评审里被列成"语义重叠"，
+    /// 复核后判定不是缺陷；真正缺的是"挂上了"这件事没有视觉反馈 —— 已在
+    /// `drawSelectionHandles` 里补上附着锚点小环。
     let snapThreshold: CGFloat = 12.0
     // 起始点是否吸附到了 snap point → 以该点为中心绘制
     private var drawingFromCenter: Bool = false
@@ -1451,7 +1460,15 @@ class AnnotationView: NSView {
         if let rep = rep {
             return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
         }
-        return CGSize(width: baseImage.size.width * 2, height: baseImage.size.height * 2)
+        // 最后兜底：从**已解码的 CGImage** 反推像素尺寸，而不是假定 2×。
+        //
+        // 整个项目都在"实测反推倍率、不假定 backingScaleFactor"（见 CapturedImage），
+        // 这里写死 ×2 与那条原则自相矛盾：1x 屏上会凭空放大一倍、3x 屏上又少一截。
+        if let cg = baseCGImage, cg.width > 0, cg.height > 0 {
+            return CGSize(width: cg.width, height: cg.height)
+        }
+        // 连 CGImage 都拿不到（理论上不可达）：退回点尺寸 —— 宁可 1×，也不要凭空的 2×
+        return baseImage.size
     }
 
     /// 生成最终合成图片（底图 + 所有标注对象）

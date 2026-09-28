@@ -54,10 +54,11 @@ let jobLabel = "com.aisnap.permission-probe"
 if CommandLine.arguments.contains(childFlag) {
     let delegate = AppDelegate()
     let preflight = CGPreflightScreenCaptureAccess()
-    let sck = delegate.canQueryShareableContent()
-    let decided = delegate.checkScreenCapturePermission()
+    // 已 async 化：顶层代码可以直接 await（不再需要信号量，主线程也不被卡）
+    let sck = await delegate.canQueryShareableContent()
+    let decided = await delegate.checkScreenCapturePermission()
     // 第三次调用：连续多次是否一致？（曾经出现过同一进程内两次结果不同的现象）
-    let sckAgain = delegate.canQueryShareableContent()
+    let sckAgain = await delegate.canQueryShareableContent()
     let text = """
     preflight=\(preflight)
     sck=\(sck)
@@ -76,8 +77,8 @@ print("=== 权限判定：无权限时不得判成有权限 ===")
 do {
     let delegate = AppDelegate()
     let preflight = CGPreflightScreenCaptureAccess()
-    let sck = delegate.canQueryShareableContent()
-    let decided = delegate.checkScreenCapturePermission()
+    let sck = await delegate.canQueryShareableContent()
+    let decided = await delegate.checkScreenCapturePermission()
     print("     [INFO] 本进程（多半已授权）：preflight=\(preflight) SCK 探测=\(sck) 判定=\(decided)")
 
     check("已授权（preflight 为真）时判定必须为真", !preflight || decided,

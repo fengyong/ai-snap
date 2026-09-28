@@ -385,6 +385,10 @@ do {
         func selectionHandlePoints() -> [CGPoint] { [] }
         func snapPoints() -> [SnapPoint] { [] }
         func nearestPerimeterPoint(to point: CGPoint) -> CGPoint { center }
+        // 协议在 2026-09-28 补了这两个（附着闭环）。stub 也必须表态 —— 这正是
+        // "不给默认实现"的用意：新类型不实现就编译不过，不会静默退化成"参数恒为 0"。
+        func pointOnPerimeter(at parameter: CGFloat) -> CGPoint { center }
+        func perimeterParameter(for point: CGPoint) -> CGFloat { 0 }
         func move(by delta: CGVector) {}
         func rotate(by angle: CGFloat) {}
         func scale(by factor: CGFloat) {}
@@ -415,6 +419,10 @@ do {
         func selectionHandlePoints() -> [CGPoint] { [] }
         func snapPoints() -> [SnapPoint] { [] }
         func nearestPerimeterPoint(to point: CGPoint) -> CGPoint { center }
+        // 协议在 2026-09-28 补了这两个（附着闭环）。stub 也必须表态 —— 这正是
+        // "不给默认实现"的用意：新类型不实现就编译不过，不会静默退化成"参数恒为 0"。
+        func pointOnPerimeter(at parameter: CGFloat) -> CGPoint { center }
+        func perimeterParameter(for point: CGPoint) -> CGFloat { 0 }
         func move(by delta: CGVector) {}
         func rotate(by angle: CGFloat) {}
         func scale(by factor: CGFloat) {}
@@ -538,8 +546,9 @@ do {
     let preflight = CGPreflightScreenCaptureAccess()
     if allowCapture {
         let delegate = AppDelegate()
-        let sck = delegate.canQueryShareableContent()
-        let decided = delegate.checkScreenCapturePermission()
+        // 权限预检已 async 化（不再用信号量卡主线程）。探针是顶层代码，可以直接 await。
+        let sck = await delegate.canQueryShareableContent()
+        let decided = await delegate.checkScreenCapturePermission()
         check("preflight 为真时判定必须为真", !preflight || decided,
               "preflight=\(preflight) 判定=\(decided)")
         check("已授权时实时探测也得说有权限（不然会误报缺权限）", !preflight || sck,
@@ -891,6 +900,250 @@ do {
     plain.frame = NSRect(x: 0, y: 0, width: 200, height: 100)
     check("完全不透明的普通截图不会被穿透",
           plain.isPassThrough(at: NSPoint(x: 100, y: 50)) == false, "正常")
+}
+
+// MARK: - 19. 附着系统闭环：每种形状都能「挂上 → 跟得上」
+
+print("\n=== 19. 附着闭环（挂上必须解析得回来，否则会出现\"不跟却被删\"）===")
+do {
+    // 曾经的问题：`computePerimeterParameter` 只认 Circle/Rectangle/Stamp/Text，
+    // 别的类型返回 0；而 `resolveAttachmentPosition` 也只认那四种 ——
+    // 于是 Redaction/Spotlight/StepBadge 能"挂上"，但父对象移动时箭头不跟，
+    // 父对象删除时箭头却被级联删掉。
+    //
+    // 现在两个方向都走协议，且协议**没有默认实现** —— 新形状不表态就编译不过。
+    func makeAllParents() -> [(String, any AnnotationObject)] {
+        let rect = RectangleShape(center: CGPoint(x: 200, y: 150), width: 120, height: 90,
+                                  color: .black, lineWidth: 4, hitTestColorKey: 1)
+        let circle = CircleShape(center: CGPoint(x: 200, y: 150), radiusX: 60, radiusY: 40,
+                                 color: .black, lineWidth: 4, hitTestColorKey: 2)
+        let stamp = StampObject(center: CGPoint(x: 200, y: 150), size: 80,
+                                stampType: .checkmark, hitTestColorKey: 3)
+        let badge = StepBadge(center: CGPoint(x: 200, y: 150), number: 1, radius: 40,
+                              color: .red, hitTestColorKey: 4)
+        let text = TextShape(center: CGPoint(x: 200, y: 150), text: "hi",
+                             fontSize: 24, hitTestColorKey: 5)
+        let spot = SpotlightShape(center: CGPoint(x: 200, y: 150), width: 120, height: 90,
+                                  hitTestColorKey: 6)
+        let red = RedactionShape(center: CGPoint(x: 200, y: 150), width: 120, height: 90,
+                                 style: .mosaic(blockSize: 12), hitTestColorKey: 7)
+        return [("矩形", rect), ("椭圆", circle), ("印章", stamp), ("序号", badge),
+                ("文字", text), ("聚光灯", spot), ("打码", red)]
+    }
+
+    // ① 参数与坐标必须**互逆**（附着就是靠这一对：记录时点→参数，解析时参数→点）
+    var roundTripBad: [String] = []
+    for (name, obj) in makeAllParents() {
+        for i in 0...10 {
+            let want = CGFloat(i) / 10
+            let back = obj.perimeterParameter(for: obj.pointOnPerimeter(at: want))
+            // 参数 1.0 与 0.0 是同一个点，允许归一化到 0
+            let diff = min(abs(back - want), abs(back - want + 1), abs(back - want - 1))
+            if diff > 0.01 { roundTripBad.append(String(format: "%@ %.1f→%.3f", name, want, back)) }
+        }
+    }
+    check("每种形状的「参数 ↔ 坐标」都互逆（附着记录/解析靠这一对）",
+          roundTripBad.isEmpty, roundTripBad.isEmpty ? "11 个参数点 × 7 种形状全部通过"
+                                                    : roundTripBad.prefix(3).joined(separator: ", "))
+
+    // ② 端到端：挂上去之后，父对象移动 → 箭头端点必须跟着走
+    var notFollowing: [String] = []
+    for (name, parent) in makeAllParents() {
+        let view = AnnotationView(image: blankCanvas(600, 400))
+        let pKey = view.hitTestBuffer.generateUniqueColorKey()
+        view.objects[pKey] = parent
+        let aKey = view.hitTestBuffer.generateUniqueColorKey()
+        let arrow = Arrow(startPoint: CGPoint(x: 400, y: 300), endPoint: CGPoint(x: 500, y: 300),
+                          color: .black, lineWidth: 4, hitTestColorKey: aKey, style: .default)
+        arrow.endAttachment = Attachment(parentKey: pKey, anchorType: .perimeter(parameter: 0.25))
+        view.objects[aKey] = arrow
+        view.zOrder = [pKey, aKey]
+
+        let before = view.resolveAttachmentPosition(arrow.endAttachment!) ?? .zero
+        parent.move(by: CGVector(dx: 40, dy: 25))
+        view.updateAttachedArrows(forParent: pKey)
+        let after = view.resolveAttachmentPosition(arrow.endAttachment!) ?? .zero
+
+        // 端点应落在（移动后的）父对象周长上，且确实变了
+        let expected = parent.pointOnPerimeter(at: 0.25)
+        let onPerimeter = hypot(after.x - expected.x, after.y - expected.y) < 0.5
+        let moved = hypot(after.x - before.x, after.y - before.y) > 30
+        let tipFollowed = hypot(arrow.endPoint.x - after.x, arrow.endPoint.y - after.y) < 0.5
+        if !(onPerimeter && moved && tipFollowed) {
+            notFollowing.append(String(format: "%@(周长上=%@ 跟随=%@ 端点贴合=%@)", name,
+                                       onPerimeter ? "是" : "否", moved ? "是" : "否",
+                                       tipFollowed ? "是" : "否"))
+        }
+    }
+    check("父对象移动后，附着箭头跟着走（5 个类型曾经完全不动）",
+          notFollowing.isEmpty, notFollowing.isEmpty ? "7 种形状全部跟随" : notFollowing.joined(separator: ", "))
+
+    // ③ detectAttachment 对每种形状都要给出**解析得回来**的锚点
+    var unresolvable: [String] = []
+    for (name, parent) in makeAllParents() {
+        let view = AnnotationView(image: blankCanvas(600, 400))
+        let pKey = view.hitTestBuffer.generateUniqueColorKey()
+        view.objects[pKey] = parent
+        view.zOrder = [pKey]
+        // 取周长上的一点作为"落点"
+        let onEdge = parent.pointOnPerimeter(at: 0.3)
+        if let att = view.detectAttachment(at: onEdge, excludeKey: nil),
+           att.parentKey == pKey {
+            if view.resolveAttachmentPosition(att) == nil { unresolvable.append(name) }
+        }
+    }
+    check("detectAttachment 给出的附着必须能解析回坐标（否则就是「不跟却被删」）",
+          unresolvable.isEmpty, unresolvable.isEmpty ? "全部可解析" : "解析不了：\(unresolvable.joined(separator: ", "))")
+}
+
+// MARK: - 20. 文字形状的周长也推边（上轮收敛漏了它）
+
+print("\n=== 20. 文字在框内的点也要推到边上 ===")
+do {
+    let text = TextShape(center: CGPoint(x: 200, y: 150), text: "hello",
+                         fontSize: 20, hitTestColorKey: 1)
+    let box = text.contentSize
+    let hw = box.width / 2, hh = box.height / 2
+
+    // 正中心：修复前会原样返回中心点（不在周长上）
+    let c = text.nearestPerimeterPoint(to: CGPoint(x: 200, y: 150))
+    let onEdge = abs(abs(c.x - 200) - hw) < 0.01 || abs(abs(c.y - 150) - hh) < 0.01
+    check("框内点被推到周长上（原来原样返回框内点）", onEdge,
+          String(format: "(%.1f,%.1f) 半宽半高 (%.1f,%.1f)", c.x, c.y, hw, hh))
+
+    // 框外的点行为不变（回归保护）
+    let out = text.nearestPerimeterPoint(to: CGPoint(x: 400, y: 150))
+    check("框外的点仍按钳制处理（没有被改坏）", out.x > 200, String(format: "(%.1f,%.1f)", out.x, out.y))
+}
+
+// MARK: - 21. PNG 编码：不走 TIFF 中转，且像素逐位不变
+
+print("\n=== 21. PNG 编码的像素必须与原图逐位一致 ===")
+do {
+    // 换编码器最容易悄悄改变颜色/透明度（尤其预乘 alpha 与色彩空间），
+    // 而那种错用户只会觉得"存出来的图有点不对"。这里逐像素比对。
+    let w = 4, h = 3
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: w, pixelsHigh: h,
+                               bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                               isPlanar: false, colorSpaceName: .deviceRGB,
+                               bytesPerRow: 0, bitsPerPixel: 0)!
+    // 填一组带透明度、且各通道都不同的颜色
+    let colors: [(CGFloat, CGFloat, CGFloat, CGFloat)] = [
+        (1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1), (1, 1, 0, 1),
+        (0, 1, 1, 1), (1, 0, 1, 1), (0.25, 0.5, 0.75, 1), (0, 0, 0, 1),
+        (1, 1, 1, 1), (0.5, 0.5, 0.5, 1), (0.1, 0.2, 0.3, 1), (0.9, 0.8, 0.7, 1),
+    ]
+    for y in 0..<h {
+        for x in 0..<w {
+            let c = colors[y * w + x]
+            rep.setColor(NSColor(red: c.0, green: c.1, blue: c.2, alpha: c.3), atX: x, y: y)
+        }
+    }
+    let image = NSImage(size: NSSize(width: w, height: h))
+    image.addRepresentation(rep)
+
+    let window = AnnotationWindow(image: image)
+    guard let data = window.pngData(from: image),
+          let decoded = NSBitmapImageRep(data: data) else {
+        check("能编码出 PNG", false); exit(1)
+    }
+    check("PNG 像素尺寸与原图一致", decoded.pixelsWide == w && decoded.pixelsHigh == h,
+          "\(decoded.pixelsWide)×\(decoded.pixelsHigh)")
+
+    var diff = 0
+    for y in 0..<h {
+        for x in 0..<w {
+            guard let a = rep.colorAt(x: x, y: y), let b = decoded.colorAt(x: x, y: y) else { continue }
+            if abs(a.redComponent - b.redComponent) > 0.01
+                || abs(a.greenComponent - b.greenComponent) > 0.01
+                || abs(a.blueComponent - b.blueComponent) > 0.01
+                || abs(a.alphaComponent - b.alphaComponent) > 0.01 { diff += 1 }
+        }
+    }
+    check("PNG 每个像素都与原图一致（换编码器最容易在这里出错）",
+          diff == 0, diff == 0 ? "\(w * h) 个像素全同" : "有 \(diff) 个像素不同")
+    window.close()
+}
+
+// MARK: - 22. 导出像素尺寸的最后兜底不再假定 2×
+
+print("\n=== 22. 拿不到位图 rep 时也不能凭空假定 2× ===")
+do {
+    // 一个**没有任何 representation** 的 NSImage：走不到"显式传入"与"rep 取像素"两条路，
+    // 只能落到最后的兜底。原来那里写死 ×2（1x 屏上会凭空放大一倍、3x 屏上又少一截）。
+    let bare = NSImage(size: NSSize(width: 120, height: 60))
+    let view = AnnotationView(image: bare)          // 不传 pixelSize
+    let out = view.compositeImage()
+    let rep = out.representations.compactMap { $0 as? NSBitmapImageRep }.first
+    let px = rep.map { "\($0.pixelsWide)×\($0.pixelsHigh)" } ?? "无"
+    check("兜底取像素尺寸而不是点尺寸×2", px == "120×60",
+          "得到 \(px)（写死 ×2 时会是 240×120）")
+}
+
+// MARK: - 23. 附着的端点要在画布上看得见
+
+print("\n=== 23. 选中附着箭头时要画出锚点小环 ===")
+do {
+    // "挂上了"曾经在界面上毫无迹象：用户只能等移动父对象时发现箭头跟着动了才知道，
+    // 而删掉父对象时箭头被一起删掉，那时更莫名其妙。
+    func renderSelected(attached: Bool) -> (rep: NSBitmapImageRep, anchor: CGPoint, view: AnnotationView) {
+        let view = AnnotationView(image: blankCanvas(400, 300))
+        let pKey = view.hitTestBuffer.generateUniqueColorKey()
+        let parent = RectangleShape(center: CGPoint(x: 120, y: 150), width: 100, height: 80,
+                                    color: .black, lineWidth: 4, hitTestColorKey: pKey)
+        view.objects[pKey] = parent
+        let aKey = view.hitTestBuffer.generateUniqueColorKey()
+        let arrow = Arrow(startPoint: CGPoint(x: 300, y: 60), endPoint: CGPoint(x: 300, y: 240),
+                          color: .black, lineWidth: 4, hitTestColorKey: aKey, style: .default)
+        if attached {
+            arrow.startAttachment = Attachment(parentKey: pKey, anchorType: .perimeter(parameter: 0.5))
+        }
+        view.objects[aKey] = arrow
+        view.zOrder = [pKey, aKey]
+        view.selectedKey = aKey
+
+        let anchor = view.resolveAttachmentPosition(arrow.startAttachment ?? Attachment(
+            parentKey: pKey, anchorType: .perimeter(parameter: 0.5))) ?? .zero
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 400, pixelsHigh: 300,
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                   isPlanar: false, colorSpaceName: .deviceRGB,
+                                   bytesPerRow: 0, bitsPerPixel: 0)!
+        if let ctx = NSGraphicsContext(bitmapImageRep: rep) {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = ctx
+            view.draw(view.bounds)
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        return (rep, anchor, view)
+    }
+
+    /// 锚点周围一小圈里有没有"蓝色小环"的痕迹（蓝分量明显高于红/绿）
+    ///
+    /// 注意 y 要翻转：`colorAt` 的行号从**位图顶部**算，而视图坐标从**底部**算。
+    /// （第一次写漏了这个翻转，结果"有环"那条假红 —— 而对照那条因为到处都没有环而
+    /// 照样绿，正好说明**没有对照的失败是不可信的**。）
+    func hasRing(_ rep: NSBitmapImageRep, at c: CGPoint, viewHeight: CGFloat) -> Bool {
+        let cy = viewHeight - c.y
+        for dx in -6...6 {
+            for dy in -6...6 {
+                let x = Int(c.x) + dx, y = Int(cy) + dy
+                guard x >= 0, y >= 0, x < rep.pixelsWide, y < rep.pixelsHigh,
+                      let col = rep.colorAt(x: x, y: y) else { continue }
+                if col.blueComponent > 0.7 && col.redComponent < 0.6 && col.greenComponent < 0.8 {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    let on = renderSelected(attached: true)
+    check("选中附着箭头时，锚点处画出了小环", hasRing(on.rep, at: on.anchor, viewHeight: 300),
+          String(format: "锚点 (%.0f,%.0f)", on.anchor.x, on.anchor.y))
+
+    let off = renderSelected(attached: false)
+    check("对照：没有附着时不画（否则等于到处画环）", !hasRing(off.rep, at: off.anchor, viewHeight: 300),
+          "未附着时锚点处应无环")
 }
 
 print("\n========================================")

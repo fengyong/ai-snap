@@ -219,6 +219,16 @@ final class RedactionShape: AnnotationObject {
                                    rotation: rotation)
     }
 
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        RectPerimeter.point(at: parameter, center: center,
+                            size: CGSize(width: width, height: height), rotation: rotation)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        RectPerimeter.parameter(for: point, center: center,
+                                size: CGSize(width: width, height: height), rotation: rotation)
+    }
+
     // MARK: - 变换
 
     func move(by delta: CGVector) {
