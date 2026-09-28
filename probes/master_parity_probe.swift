@@ -51,6 +51,19 @@ func rightmostInk(_ image: NSImage, yBand: ClosedRange<Int>) -> Int {
     return best
 }
 
+/// 扫描图像里"非白像素"的最左 x（用来量箭杆有没有画到起点左边去）
+func leftmostInk(_ rep: NSBitmapImageRep) -> Int {
+    for x in 0..<rep.pixelsWide {
+        for y in 0..<rep.pixelsHigh {
+            guard let c = rep.colorAt(x: x, y: y) else { continue }
+            if c.redComponent < 0.97 || c.greenComponent < 0.97 || c.blueComponent < 0.97 {
+                return x
+            }
+        }
+    }
+    return -1
+}
+
 // MARK: - 1. 箭头头部必须随线宽缩放
 
 print("=== 1. 箭头头部随线宽缩放（固定 14pt 在默认线宽下没有头）===")
@@ -155,6 +168,42 @@ do {
     // 开放：箭杆必须画到尖端，否则两条头线之间会有断口
     check("开放头：箭杆画到了尖端", open >= tipPx - 4,
           "开放头最右 \(open)，尖端 \(tipPx)")
+
+    // ── 短箭头：箭杆回缩量不得把箭杆推到起点反方向 ──────────────────────
+    //
+    // 头部长度随线宽放大后能到 48pt（线宽 15），比短箭头的整根箭杆还长。
+    // 回缩量若不设上限，`endPoint - 回缩量` 就落到起点**反方向**去，箭杆
+    // 倒着画出来，在箭头后面露出一截圆头 —— 修复前实测比几何容许的最左
+    // 位置多出 7.4px。这里同时放一个长箭头做**对照组**：少了它，一个
+    // "干脆不画箭杆"的假修复也能让短箭头那条断言通过。
+    func arrowLeftmost(startX: CGFloat, tipX: CGFloat) -> (left: Int, pxPerPoint: CGFloat) {
+        let view = AnnotationView(image: blankCanvas(500, 220))
+        let key = view.hitTestBuffer.generateUniqueColorKey()
+        view.objects[key] = Arrow(startPoint: CGPoint(x: startX, y: 110),
+                                  endPoint: CGPoint(x: tipX, y: 110),
+                                  color: .black, lineWidth: 15,
+                                  hitTestColorKey: key, style: .default)
+        view.zOrder = [key]
+        let composite = view.compositeImage()
+        guard let rep = NSBitmapImageRep(data: composite.tiffRepresentation ?? Data()) else {
+            return (-1, 1)
+        }
+        return (leftmostInk(rep), CGFloat(rep.pixelsWide) / max(view.bounds.width, 1))
+    }
+
+    let headLenPx = Arrow.headLength(for: .default, lineWidth: 15)
+    let spread = ArrowStyle.default.headAngle
+    let short = arrowLeftmost(startX: 250, tipX: 270)
+    let shortAllowed = min(250 - 15 / 2, 270 - headLenPx * cos(spread)) * short.pxPerPoint
+    check("短箭头：箭杆不得画到起点反方向（整根藏在头部里就不画）",
+          CGFloat(short.left) >= shortAllowed - 1.5,
+          String(format: "最左 %d，几何容许 %.1f", short.left, shortAllowed))
+
+    let longArrow = arrowLeftmost(startX: 50, tipX: 400)
+    let longAllowed = (50 - 15 / 2) * longArrow.pxPerPoint
+    check("长箭头（对照）：箭杆仍从起点圆帽起画，没有被整根删掉",
+          abs(CGFloat(longArrow.left) - longAllowed) <= 2,
+          String(format: "最左 %d，起点圆帽 %.1f", longArrow.left, longAllowed))
 }
 
 // MARK: - 3. Option/Shift 只在按到对象上时才旋转/缩放
@@ -402,6 +451,16 @@ do {
     view.performUndo()
     let backToRed = rect.color.usingColorSpace(.deviceRGB)?.redComponent ?? 0
     check("撤销换色", backToRed > 0.8, String(format: "红分量 %.2f", backToRed))
+
+    // 重做方向。**这一段此前是缺的**：只验了撤销，于是 restyle 的 redo 记录
+    // 在"已经把颜色改回旧值"之后才去读 `obj.color`，新旧值相等，重做成了空操作
+    // —— 撤销两次再重做两次，颜色与线宽都回不到新值，而探针全绿。
+    view.performRedo()
+    let redoneBlue = rect.color.usingColorSpace(.deviceRGB)?.blueComponent ?? 0
+    check("重做换色：颜色回到新值", redoneBlue > 0.8, String(format: "蓝分量 %.2f", redoneBlue))
+    view.performRedo()
+    check("重做改线宽：线宽回到新值", AnnotationView.lineWidth(of: rect) == 24,
+          "\(AnnotationView.lineWidth(of: rect) ?? -1)")
 
     // 没有选中对象时应当安全地什么都不做
     view.selectedKey = nil
