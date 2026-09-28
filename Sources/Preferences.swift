@@ -297,12 +297,29 @@ final class Preferences {
 
     // MARK: - 更新
 
-    /// 更新清单（appcast）地址。留空表示"还没有发布渠道"，此时只保留手动检查入口。
+    /// 默认更新清单地址：仓库里的 `latest.json`。
     ///
-    /// 做成可配置而不是写死在代码里：这个地址在应用发布之前是不存在的，
-    /// 写死一个占位地址只会制造"检查更新永远失败"的假象。
+    /// 清单里的下载地址指向 GitHub Releases 的固定路径
+    /// `releases/latest/download/AISnap.dmg` —— 每次发版只需更新清单里的版本号。
+    static let defaultUpdateFeedURL =
+        "https://raw.githubusercontent.com/fengyong/ai-snap/master/latest.json"
+
+    /// 更新清单（appcast）地址。
+    ///
+    /// 语义分三种，别把它们混起来：
+    ///   · **从未设置过** → 用默认发布渠道（上面那个）
+    ///   · **显式设过**   → 完全按用户的来（换成自己的渠道不必改代码）
+    ///   · **显式清空**   → 空串 = "不要检查"（设置窗里的占位提示就是这么写的）
+    ///
+    /// 所以这里不能用 `?? default`：那会把"用户主动清空"也变成回落到默认，
+    /// 用户就再也关不掉检查了。必须区分 nil（没设过）与 ""（设成了空）。
     var updateFeedURL: String {
-        get { defaults.string(forKey: Key.updateFeedURL.rawValue) ?? "" }
+        get {
+            guard let stored = defaults.string(forKey: Key.updateFeedURL.rawValue) else {
+                return Self.defaultUpdateFeedURL
+            }
+            return stored
+        }
         set { defaults.set(newValue, forKey: Key.updateFeedURL.rawValue) }
     }
 

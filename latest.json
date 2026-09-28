@@ -1,0 +1,5 @@
+{
+  "version": "0.1.0",
+  "downloadURL": "https://github.com/fengyong/ai-snap/releases/latest/download/AISnap.dmg",
+  "notes": "工具栏自动折行、OCR 结果面板可选文字、放弃按钮与关闭确认、箭头头部随线宽缩放、选中对象可换色/改线宽、窗口截图过滤与多候选重试。"
+}
