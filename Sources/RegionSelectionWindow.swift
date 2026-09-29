@@ -119,6 +119,22 @@ final class RegionSelectionWindow: NSObject {
         let mouseLocation = NSEvent.mouseLocation
         let keyOverlay = overlays.first { $0.screen.frame.contains(mouseLocation) } ?? overlays.first
 
+        // 选区吸附目标：此刻的窗口清单。覆盖层上屏前取（自家窗口未上屏、
+        // 且 ownPID 本来就被排除），画面冻结后布局不再变，清单取一次即可。
+        if Preferences.shared.snapSelectionToWindows,
+           let list = CGWindowListCopyWindowInfo(
+                [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+           ) as? [[String: Any]] {
+            let frames = WindowPickSupport.allWindowFrames(
+                from: list,
+                primaryScreenHeight: ScreenCapture.primaryScreenHeight,
+                ownPID: ProcessInfo.processInfo.processIdentifier)
+            for overlay in overlays {
+                overlay.view.snapTargets = frames
+                overlay.view.screenOrigin = overlay.screen.frame.origin
+            }
+        }
+
         for overlay in overlays {
             overlay.window.orderFront(nil)
             // 上屏之后补一次同步绘制，让「冻结帧 + 变暗」尽早出现。
@@ -242,6 +258,16 @@ class RegionSelectionView: NSView {
     var onSelectionComplete: ((NSRect) -> Void)?
     var onCancel: (() -> Void)?
 
+    // MARK: 选区窗口吸附（见 SelectionSnapping）
+    /// 吸附目标：冻结那一刻的全部可截窗口 frame（AppKit 全局坐标）。
+    /// 画面已冻结，此刻的窗口布局就是用户看到的真相，之后不再重取。
+    var snapTargets: [CGRect] = []
+    /// 本屏原点（视图坐标 ↔ 全局坐标换算；吸附在全局空间做）
+    var screenOrigin: CGPoint = .zero
+    var snappingEnabled = true
+    /// 当前被吸附到的窗口框（视图坐标；nil = 未吸附）。供绘制高亮。
+    private var snappedWindowFrame: NSRect?
+
     /// 本屏的冻结帧。**不是可选装饰** —— 没有它，选区内部会露出真实屏幕，
     /// 而真实屏幕上的画面可能已经变了，看起来就像选区没生效。
     /// （多屏下某块屏冻结失败时它可为 nil：那块屏只压暗，见 freezeScreens 的降级说明。）
@@ -278,13 +304,27 @@ class RegionSelectionView: NSView {
         }
         state = .dragging(start: convert(event.locationInWindow, from: nil))
         activeRect = nil
+        snappedWindowFrame = nil
         needsDisplay = true
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard case .dragging(let start) = state else { return }
-        activeRect = rectFromPoints(start, convert(event.locationInWindow, from: nil))
+        activeRect = snapped(rectFromPoints(start, convert(event.locationInWindow, from: nil)))
         needsDisplay = true
+    }
+
+    /// 选区矩形（视图坐标）→ 全局空间吸附 → 转回视图坐标。
+    /// 顺带记录被吸附的窗口框（高亮用）；mouseDown 时会清掉。
+    private func snapped(_ rect: NSRect) -> NSRect {
+        guard snappingEnabled, !snapTargets.isEmpty else {
+            snappedWindowFrame = nil
+            return rect
+        }
+        let global = rect.offsetBy(dx: screenOrigin.x, dy: screenOrigin.y)
+        let (result, frame) = SelectionSnapping.snapped(global, toWindowFrames: snapTargets)
+        snappedWindowFrame = frame?.offsetBy(dx: -screenOrigin.x, dy: -screenOrigin.y)
+        return result.offsetBy(dx: -screenOrigin.x, dy: -screenOrigin.y)
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -324,7 +364,7 @@ class RegionSelectionView: NSView {
         default:
             return
         }
-        activeRect = rect
+        activeRect = snapped(rect)   // 微调同样吸附：键盘对齐窗口是常用路径
         needsDisplay = true
     }
 
@@ -370,6 +410,16 @@ class RegionSelectionView: NSView {
         }
         ctx.stroke(selectionRect)
         ctx.setLineDash(phase: 0, lengths: [])
+
+        // 4.5 吸附高亮：被贴住的窗口描 accent 框，让"为什么选区自己动了"可见
+        if let frame = snappedWindowFrame {
+            let local = frame.intersection(bounds)
+            if local.width > 0, local.height > 0 {
+                ctx.setStrokeColor(NSColor.controlAccentColor.withAlphaComponent(0.9).cgColor)
+                ctx.setLineWidth(2)
+                ctx.stroke(local)
+            }
+        }
 
         // 5. 尺寸提示：贴在选区上方（太靠上时改放下方）
         drawSizeLabel(ctx: ctx, for: selectionRect)
