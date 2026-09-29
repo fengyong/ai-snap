@@ -488,6 +488,7 @@ enum DrawingTool: Equatable {
     case picker    // 取色器：从截图上取色，本身不产生对象
     case pen       // 自由画笔：拖拽逐点采样，整条笔画是一个对象
     case marker    // 马克笔：半透明宽笔触（与画笔共用 FreehandShape）
+    case magnifier // 放大镜：单击放置，圆形区域把底图放大（内容随位置实时取样）
 
     static func == (lhs: DrawingTool, rhs: DrawingTool) -> Bool {
         switch (lhs, rhs) {
@@ -496,7 +497,8 @@ enum DrawingTool: Equatable {
              (.circle, .circle), (.ellipse, .ellipse),
              (.step, .step), (.text, .text), (.spotlight, .spotlight),
              (.mosaic, .mosaic), (.blur, .blur), (.eraser, .eraser),
-             (.picker, .picker), (.pen, .pen), (.marker, .marker):
+             (.picker, .picker), (.pen, .pen), (.marker, .marker),
+             (.magnifier, .magnifier):
             return true
         case (.stamp, .stamp):
             return true  // 所有 stamp 视为同类工具
@@ -1919,6 +1921,185 @@ class FreehandShape: AnnotationObject {
             CGPoint(x: anchor.x + (p.x - anchor.x) * f,
                     y: anchor.y + (p.y - anchor.y) * f)
         }
+    }
+}
+
+// MARK: - MagnifierShape (放大镜)
+
+/// 放大镜标注：圆形区域把**底图**放大 2.5×，描边环标出范围。
+///
+/// 内容语义：取样的是**底图在当前圆心处的区域**（不是放置时的初始位置）——
+/// 用户把放大镜拖到哪里，看的就是底图上那块的内容；拖动时重取样
+/// （缓存键含圆心，动一次换一次贴图，成本可控：一次裁剪+一次缩放）。
+///
+/// 与打码同一约定：源图与倍率由 handler 在构造时注入（`ToolContext` 统一给），
+/// 形状自己不持有画布引用。旋转无意义（圆对称 + 内容来自底图），保留字段但绘制不使用。
+class MagnifierShape: AnnotationObject {
+    let id: UUID
+    let hitTestColorKey: UInt32
+    var center: CGPoint
+    /// 放大镜半径（画布点）。可见直径 = 2 × radius。
+    var radius: CGFloat
+    /// 放大倍数：取样区域是「半径 × (1/zoom)」的一块，放大后恰好铺满镜面。
+    var zoom: CGFloat
+    var rotation: CGFloat = 0
+    var color: NSColor
+    /// 描边环宽
+    var lineWidth: CGFloat
+
+    /// 底图与倍率（handler 注入；缺省 nil 时绘制退化为毛玻璃白）
+    var sourceImage: CGImage?
+    var pixelScale: CGFloat = 1
+
+    static let defaultRadius: CGFloat = 60
+    static let defaultZoom: CGFloat = 2.5
+
+    init(center: CGPoint, radius: CGFloat = MagnifierShape.defaultRadius,
+         zoom: CGFloat = MagnifierShape.defaultZoom,
+         color: NSColor, lineWidth: CGFloat = 3, hitTestColorKey: UInt32) {
+        self.id = UUID()
+        self.center = center
+        self.radius = radius
+        self.zoom = zoom
+        self.color = color
+        self.lineWidth = lineWidth
+        self.hitTestColorKey = hitTestColorKey
+    }
+
+    var boundingBox: CGRect {
+        let padding = lineWidth
+        return CGRect(x: center.x - radius - padding, y: center.y - radius - padding,
+                      width: (radius + padding) * 2, height: (radius + padding) * 2)
+    }
+
+    // MARK: Drawing
+
+    func draw(in ctx: CGContext) {
+        let circle = CGRect(x: center.x - radius, y: center.y - radius,
+                            width: radius * 2, height: radius * 2)
+        ctx.saveGState()
+        ctx.addPath(CGPath(ellipseIn: circle, transform: nil))
+        ctx.clip()
+        if let content = contentImage() {
+            // 放大插值用 .medium：.high 是带振铃的 Lanczos，会把放大的锯齿/噪声
+            // 再"锐化"出一圈假边（与打码降采样的选择同理，反直觉但实测正确）
+            ctx.interpolationQuality = .medium
+            ctx.draw(content, in: circle)
+        } else {
+            // 没有底图（离屏构造）：毛玻璃白，看得见"这里有个放大镜"即可
+            ctx.setFillColor(NSColor.white.withAlphaComponent(0.85).cgColor)
+            ctx.fill(circle)
+        }
+        ctx.restoreGState()
+
+        // 描边环在 clip 外画（clip 会吃掉半个线宽）
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setLineWidth(lineWidth)
+        ctx.strokeEllipse(in: circle)
+    }
+
+    func drawHitTest(in ctx: CGContext, color: NSColor) {
+        // 实心圆命中：放大镜是"一块区域"，点内部就该选中（与打码同法）
+        ctx.saveGState()
+        ctx.setFillColor(color.cgColor)
+        ctx.fillEllipse(in: CGRect(x: center.x - radius - 3, y: center.y - radius - 3,
+                                   width: (radius + 3) * 2, height: (radius + 3) * 2))
+        ctx.restoreGState()
+    }
+
+    /// 放大内容（带自失效缓存）：裁底图上「圆心周围 radius/zoom」的区域，
+    /// 交给 CG 在 draw 时放大铺满镜面。
+    private func contentImage() -> CGImage? {
+        guard let source = sourceImage else { return nil }
+        let key = ContentKey(x: center.x, y: center.y, radius: radius,
+                             zoom: zoom, pixelScale: pixelScale,
+                             sourceWidth: source.width)
+        if let cached = cache, cached.key == key { return cached.image }
+
+        let imageSize = CGSize(width: source.width, height: source.height)
+        let canvasSize = CGSize(width: imageSize.width / max(pixelScale, 0.01),
+                                height: imageSize.height / max(pixelScale, 0.01))
+        let sampleRadius = radius / max(zoom, 1)
+        let sampleRect = CGRect(x: center.x - sampleRadius, y: center.y - sampleRadius,
+                                width: sampleRadius * 2, height: sampleRadius * 2)
+        // 画布点 → 底图像素：与打码/选区裁剪同一套换算（缩放反推 + Y 翻转），
+        // 不自己再写一遍翻转公式
+        let pixelRect = ScreenGeometry.pixelRect(
+            appKitRect: sampleRect,
+            imageSize: imageSize,
+            appKitScreenFrame: CGRect(origin: .zero, size: canvasSize)
+        )
+        guard !pixelRect.isNull, let cropped = source.cropping(to: pixelRect) else { return nil }
+        cache = (key, cropped)
+        return cropped
+    }
+
+    private struct ContentKey: Equatable {
+        let x: CGFloat, y: CGFloat, radius: CGFloat
+        let zoom: CGFloat, pixelScale: CGFloat, sourceWidth: Int
+    }
+
+    private var cache: (key: ContentKey, image: CGImage)?
+
+    // MARK: Selection & Snap
+
+    func selectionHandlePoints() -> [CGPoint] {
+        quadrantPoints()
+    }
+
+    func snapPoints() -> [SnapPoint] {
+        var points = [SnapPoint(point: center, type: .center)]
+        for qp in quadrantPoints() {
+            points.append(SnapPoint(point: qp, type: .quadrant))
+        }
+        return points
+    }
+
+    private func quadrantPoints() -> [CGPoint] {
+        [
+            CGPoint(x: center.x + radius, y: center.y),
+            CGPoint(x: center.x, y: center.y + radius),
+            CGPoint(x: center.x - radius, y: center.y),
+            CGPoint(x: center.x, y: center.y - radius),
+        ]
+    }
+
+    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
+        let local = rotatePoint(point, around: center, by: -rotation)
+        let dx = local.x - center.x, dy = local.y - center.y
+        let dist = hypot(dx, dy)
+        guard dist > 0 else {
+            return CGPoint(x: center.x + radius, y: center.y)
+        }
+        return CGPoint(x: center.x + radius * dx / dist,
+                       y: center.y + radius * dy / dist)
+    }
+
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        CirclePerimeter.point(at: parameter, center: center,
+                              radiusX: radius, radiusY: radius, rotation: rotation)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        CirclePerimeter.parameter(for: point, center: center,
+                                  radiusX: radius, radiusY: radius, rotation: rotation)
+    }
+
+    // MARK: Transform
+
+    func move(by delta: CGVector) {
+        center.x += delta.dx
+        center.y += delta.dy
+    }
+
+    func rotate(by angle: CGFloat) {
+        rotation += angle   // 保留字段兼容协议/撤销管线；绘制对称，视觉无变化
+    }
+
+    func scale(by factor: CGFloat) {
+        let f = abs(factor)
+        // 与 CircleShape 同口径：按直径看下限
+        radius = Self.scaledExtent(radius * 2, by: f) / 2
     }
 }
 

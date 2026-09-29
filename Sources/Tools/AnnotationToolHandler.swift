@@ -111,6 +111,7 @@ enum ToolRegistry {
         TextToolHandler(),
         RedactionToolHandler(),
         PenToolHandler(),
+        MagnifierToolHandler(),
     ]
 
     static func handler(for tool: DrawingTool) -> AnnotationToolHandler? {
