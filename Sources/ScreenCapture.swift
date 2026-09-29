@@ -122,6 +122,42 @@ enum ScreenCapture {
             ?? 0
     }
 
+    /// 全部可截窗口的 frame，按 Z 序（最前的在前）。
+    ///
+    /// 选区吸附（SelectionSnapping）用：吸附要知道「屏幕上有哪些窗口框」，
+    /// 与光标在哪无关。判据与 `windowCandidates` **共享同一个 guard**（layer/alpha/
+    /// 尺寸/ownPID 只有一份），避免「窗口截图挡掉的 Dock、吸附却吸上去」这种漂移。
+    static func windowFrames(from windowList: [[String: Any]],
+                             ownPID: Int32) -> [(id: CGWindowID, bounds: CGRect)] {
+        windowInfos(from: windowList, ownPID: ownPID)
+            .map { ($0.id, $0.bounds) }
+    }
+
+    /// 共享的窗口有效性 guard + 解析（Quartz 坐标）。
+    private static func windowInfos(from windowList: [[String: Any]],
+                                    ownPID: Int32)
+        -> [(id: CGWindowID, bounds: CGRect, info: [String: Any])] {
+        var result: [(id: CGWindowID, bounds: CGRect, info: [String: Any])] = []
+        for info in windowList {
+            guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
+                  let layer = info[kCGWindowLayer as String] as? Int, layer >= 0, layer < 20,
+                  let alpha = info[kCGWindowAlpha as String] as? Double, alpha > 0,
+                  let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let windowID = info[kCGWindowNumber as String] as? CGWindowID else {
+                continue
+            }
+            let bounds = CGRect(
+                x: boundsDict["X"] ?? 0,
+                y: boundsDict["Y"] ?? 0,
+                width: boundsDict["Width"] ?? 0,
+                height: boundsDict["Height"] ?? 0
+            )
+            guard bounds.width >= 1, bounds.height >= 1 else { continue }
+            result.append((windowID, bounds, info))
+        }
+        return result
+    }
+
     /// 返回鼠标下方**所有**可截图的候选窗口，按 Z 序（最前面的在前）。
     ///
     /// 过滤是必须的：只判 `pid != 自己` + 坐标命中的话，会选到 Window Server 的窗口、
@@ -146,26 +182,9 @@ enum ScreenCapture {
     static func windowCandidates(from windowList: [[String: Any]],
                                  at point: CGPoint,
                                  ownPID: Int32) -> [(id: CGWindowID, bounds: CGRect)] {
-        var result: [(id: CGWindowID, bounds: CGRect)] = []
-        for info in windowList {
-            guard let pid = info[kCGWindowOwnerPID as String] as? Int32, pid != ownPID,
-                  let layer = info[kCGWindowLayer as String] as? Int, layer >= 0, layer < 20,
-                  let alpha = info[kCGWindowAlpha as String] as? Double, alpha > 0,
-                  let boundsDict = info[kCGWindowBounds as String] as? [String: CGFloat],
-                  let windowID = info[kCGWindowNumber as String] as? CGWindowID else {
-                continue
-            }
-            let bounds = CGRect(
-                x: boundsDict["X"] ?? 0,
-                y: boundsDict["Y"] ?? 0,
-                width: boundsDict["Width"] ?? 0,
-                height: boundsDict["Height"] ?? 0
-            )
-            guard bounds.width >= 1, bounds.height >= 1 else { continue }
-            guard bounds.contains(point) else { continue }
-            result.append((windowID, bounds))
-        }
-        return result
+        windowInfos(from: windowList, ownPID: ownPID)
+            .filter { $0.bounds.contains(point) }
+            .map { ($0.id, $0.bounds) }
     }
 
 }

@@ -34,6 +34,8 @@ final class SettingsWindowController: NSWindowController {
     /// 打码强度滑杆与数值标签
     private var redactionStrengthSlider: NSSlider!
     private var redactionStrengthLabel: NSTextField!
+    /// 选区吸附窗口开关
+    private var snapToWindowsBox: NSButton!
     private var keyMonitor: Any?
     /// 正在录制的目标：nil 表示没有在录制
     private var recordingTarget: RecordingTarget?
@@ -193,6 +195,29 @@ final class SettingsWindowController: NSWindowController {
         separatorTray.boxType = .separator
         root.addArrangedSubview(separatorTray)
 
+        // ── 选区 ──
+        let selectionTitle = NSTextField(labelWithString: "选区")
+        selectionTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        root.addArrangedSubview(selectionTitle)
+
+        snapToWindowsBox = NSButton(checkboxWithTitle: "选区边缘自动吸附到窗口（8 点内生效）",
+                                    target: self,
+                                    action: #selector(snapToWindowsToggled(_:)))
+        snapToWindowsBox.state = Preferences.shared.snapSelectionToWindows ? .on : .off
+        root.addArrangedSubview(snapToWindowsBox)
+
+        let selectionHint = NSTextField(wrappingLabelWithString:
+            "拖拽选区或用方向键微调时，选区四边会自动贴到附近窗口的边框上，"
+            + "方便整窗截取；被贴住的窗口会高亮描边。想框歪随时可以 —— 只在 8 点内生效。")
+        selectionHint.font = NSFont.systemFont(ofSize: 11)
+        selectionHint.textColor = .secondaryLabelColor
+        selectionHint.preferredMaxLayoutWidth = 420
+        root.addArrangedSubview(selectionHint)
+
+        let separatorSelection = NSBox()
+        separatorSelection.boxType = .separator
+        root.addArrangedSubview(separatorSelection)
+
         // ── 打码 ──
         let redactionTitle = NSTextField(labelWithString: "打码")
         redactionTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
@@ -346,6 +371,10 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func recordHistoryToggled(_ sender: NSButton) {
         Preferences.shared.recordHistory = (sender.state == .on)
+    }
+
+    @objc private func snapToWindowsToggled(_ sender: NSButton) {
+        Preferences.shared.snapSelectionToWindows = (sender.state == .on)
     }
 
     /// 打码强度滑杆：即时写回偏好，数值标签同步。

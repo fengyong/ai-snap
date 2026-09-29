@@ -66,6 +66,7 @@ final class Preferences {
         case trayRightAction
         case trayMiddleAction
         case redactionStrength
+        case snapSelectionToWindows
     }
 
     /// 缺省值集中在这里。改动这一处即同时改变「新用户初值」与「老用户缺键回退值」。
@@ -86,6 +87,9 @@ final class Preferences {
         /// 打码强度系数。1.0 = 原始块/半径（12 点）。
         /// 允许 0.5…3.0：小图（表情包）可以调细，高清大屏截图可以调粗。
         static let redactionStrength = 1.0
+
+        /// 选区吸附到窗口边。默认开 —— 吸附只在 8pt 内生效，想框歪随时可以。
+        static let snapSelectionToWindows = true
 
         /// 热键忽略列表（bundle identifier）。默认空 —— 不在任何应用里忽略。
         static let ignoredBundleIdentifiers: [String] = []
@@ -350,6 +354,17 @@ final class Preferences {
         set { defaults.set(newValue, forKey: Key.redactionStrength.rawValue) }
     }
 
+    // MARK: - 选区吸附
+
+    /// 拖拽/方向键微调选区时，四边在 8pt 内自动贴到窗口边（见 SelectionSnapping）。
+    var snapSelectionToWindows: Bool {
+        get {
+            defaults.object(forKey: Key.snapSelectionToWindows.rawValue) as? Bool
+                ?? Defaults.snapSelectionToWindows
+        }
+        set { defaults.set(newValue, forKey: Key.snapSelectionToWindows.rawValue) }
+    }
+
     // MARK: - 恢复默认
 
     /// 清空所有已存偏好，回到 `Defaults`。
@@ -359,7 +374,7 @@ final class Preferences {
                     Key.hotkeyRegion, Key.hotkeyWindow, Key.updateFeedURL, Key.autoCheckUpdates,
                     Key.recordHistory, Key.ignoredBundleIdentifiers,
                     Key.trayLeftAction, Key.trayRightAction, Key.trayMiddleAction,
-                    Key.redactionStrength] {
+                    Key.redactionStrength, Key.snapSelectionToWindows] {
             defaults.removeObject(forKey: key.rawValue)
         }
     }

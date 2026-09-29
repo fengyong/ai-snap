@@ -107,6 +107,46 @@ do {
     check("空列表给 0", WindowPickSupport.steppedCandidateIndex(current: nil, count: 0, scrollUp: false) == 0)
 }
 
+print("\n=== 6. 选区吸附（SelectionSnapping）===")
+do {
+    let frames = [
+        CGRect(x: 0, y: 0, width: 800, height: 600),        // 窗口 A
+        CGRect(x: 900, y: 100, width: 400, height: 300),    // 窗口 B
+    ]
+    // 右边距窗口 A 右边 3pt → 吸上
+    let r1 = SelectionSnapping.snapped(CGRect(x: 10, y: 10, width: 793, height: 400),
+                                       toWindowFrames: frames)
+    check("3pt 内贴上窗口右边", r1.rect.maxX == 800, "\(r1.rect)")
+    check("报告被吸附的窗口框", r1.snappedFrame == frames[0])
+    // 距离超阈值不吸
+    let r2 = SelectionSnapping.snapped(CGRect(x: 10, y: 10, width: 780, height: 400),
+                                       toWindowFrames: frames)
+    check("20pt 外不吸附", r2.rect.width == 780 && r2.snappedFrame == nil, "\(r2.rect)")
+    // 多边吸附：左边/右边贴 A 的左右边，**底边跨边贴 A 的顶边**（600）
+    let r3 = SelectionSnapping.snapped(CGRect(x: 3, y: 597, width: 794, height: 300),
+                                       toWindowFrames: frames)
+    check("三边吸附（含底边跨边贴窗口顶边）",
+          r3.rect.minX == 0 && r3.rect.maxX == 800 && r3.rect.minY == 600
+          && r3.rect.maxY == 897, "\(r3.rect)")
+    // 防塌缩：细条压在窗口右边上，左右两条边都想吸到 800 —— 该轴放弃吸附，宽度保持
+    let r5 = SelectionSnapping.snapped(CGRect(x: 799, y: 100, width: 2, height: 50),
+                                       toWindowFrames: [frames[0]])
+    check("同轴防塌缩（宽度保持 2）", r5.rect == CGRect(x: 799, y: 100, width: 2, height: 50),
+          "\(r5.rect)")
+    // 空清单原样返回
+    let r4 = SelectionSnapping.snapped(CGRect(x: 1, y: 2, width: 3, height: 4),
+                                       toWindowFrames: [])
+    check("空清单原样返回", r4.rect == CGRect(x: 1, y: 2, width: 3, height: 4)
+          && r4.snappedFrame == nil)
+    // allWindowFrames：Quartz → AppKit 翻转（复用窗口清单）
+    let list = [win(21, pid: 900, 100, 200, 300, 400)]
+    let appKitFrames = WindowPickSupport.allWindowFrames(
+        from: list, primaryScreenHeight: primaryHeight, ownPID: 999)
+    check("allWindowFrames 翻转为 AppKit (100, 480, 300, 400)",
+          appKitFrames == [CGRect(x: 100, y: 480, width: 300, height: 400)],
+          "\(appKitFrames)")
+}
+
 print()
 if failures == 0 {
     print("通过 \(count) 项，失败 0 项")
