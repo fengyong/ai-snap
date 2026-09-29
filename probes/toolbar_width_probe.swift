@@ -101,8 +101,8 @@ let plainButtons = toolbar.subviews.compactMap { $0 as? NSButton }
     .filter { !($0 is NSPopUpButton) }.count
 let popups = toolbar.subviews.compactMap { $0 as? NSPopUpButton }.count
 check("分组标签数 = 10（11 组里「帮助」无标签）", labels == 10, "\(labels)")
-check("普通按钮 24 个（14 工具 + 撤销/重做/换色/启用/保存/复制/贴图/OCR/帮助/放弃）",
-      plainButtons == 24, "\(plainButtons)")
+check("普通按钮 25 个（15 工具 + 撤销/重做/换色/启用/保存/复制/贴图/OCR/帮助/放弃）",
+      plainButtons == 25, "\(plainButtons)")
 check("下拉 3 个（箭头样式 / 线型 / 贴纸）", popups == 3, "\(popups)")
 check("每个控件的 y 都在工具栏高度内",
       laidOut.allSatisfy { $0.frame.minY >= -0.5 && $0.frame.maxY <= toolbar.frame.height + 0.5 })

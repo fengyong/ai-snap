@@ -902,6 +902,9 @@ class AnnotationView: NSView {
             case "m":
                 (window as? AnnotationWindow)?.selectTool(.marker)
                 return true
+            case "g":
+                (window as? AnnotationWindow)?.selectTool(.magnifier)
+                return true
             default:
                 index = nil
             }

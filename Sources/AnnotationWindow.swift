@@ -883,6 +883,7 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         ("取色", "从截图上取色：移到目标处单击，HEX 自动进剪贴板", .picker),
         ("画笔", "自由绘制（快捷键 P）：拖拽逐点采样，整条笔画可选中/移动/旋转", .pen),
         ("马克", "马克笔（快捷键 M）：半透明宽笔触，来回涂抹颜色均匀不变深", .marker),
+        ("放大", "放大镜（快捷键 G）：单击放置，圆形区域放大 2.5×，拖动可换取样位置", .magnifier),
     ]
 
     @objc private func toolButtonClicked(_ sender: NSButton) {

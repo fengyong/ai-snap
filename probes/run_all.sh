@@ -80,11 +80,13 @@ run_probe() {
 echo "=== 探针（链接真实源码）==="
 # Preferences 现在依赖 HotkeyConfig，所以 prefs_probe 也得链上 HotkeyManager
 run_probe prefs_probe            Sources/Models.swift Sources/Preferences.swift \
-                                 Sources/HotkeyManager.swift
-run_probe hotkey_probe           Sources/Models.swift Sources/Preferences.swift Sources/HotkeyManager.swift
-run_probe hotkey_ignore_probe    Sources/Models.swift Sources/Preferences.swift Sources/HotkeyManager.swift
-run_probe cyclic_index_probe     Sources/Models.swift
-run_probe text_shape_probe       Sources/Models.swift
+                                 Sources/HotkeyManager.swift Sources/Capture/ScreenGeometry.swift
+run_probe hotkey_probe           Sources/Models.swift Sources/Preferences.swift Sources/HotkeyManager.swift \
+                                 Sources/Capture/ScreenGeometry.swift
+run_probe hotkey_ignore_probe    Sources/Models.swift Sources/Preferences.swift Sources/HotkeyManager.swift \
+                                 Sources/Capture/ScreenGeometry.swift
+run_probe cyclic_index_probe     Sources/Models.swift Sources/Capture/ScreenGeometry.swift
+run_probe text_shape_probe       Sources/Models.swift Sources/Capture/ScreenGeometry.swift
 run_probe screen_geometry_probe  Sources/Capture/ScreenGeometry.swift
 run_probe window_pick_probe      Sources/Models.swift Sources/ScreenCapture.swift \
                                  Sources/Capture/CaptureProviderSCK.swift \
@@ -109,7 +111,8 @@ run_probe redaction_probe        Sources/Models.swift Sources/Capture/ScreenGeom
 run_probe downscale_probe        # 自带全部实现，不依赖仓库源码
 run_probe history_probe          Sources/History/CaptureHistory.swift
 run_probe update_probe           Sources/Models.swift Sources/Preferences.swift \
-                                 Sources/HotkeyManager.swift Sources/Update/UpdateChecker.swift
+                                 Sources/HotkeyManager.swift Sources/Update/UpdateChecker.swift \
+                                 Sources/Capture/ScreenGeometry.swift
 # 这三个要整模块编译：它们构造真实的画布并合成鼠标事件
 run_probe eraser_probe           "${ALL_SOURCES[@]}"
 run_probe picker_probe           "${ALL_SOURCES[@]}"
@@ -121,6 +124,8 @@ run_probe postfix_probe          "${ALL_SOURCES[@]}"
 run_probe master_parity_probe    "${ALL_SOURCES[@]}"
 # 画笔/马克笔：合成真实拖拽 + 像素实测半透明
 run_probe freehand_probe         "${ALL_SOURCES[@]}"
+# 放大镜：取样位置（Y 翻转）/ 拖动重取样 / 命中 / 缩放下限
+run_probe magnifier_probe        "${ALL_SOURCES[@]}"
 
 # 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
 # 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次
