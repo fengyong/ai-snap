@@ -129,6 +129,8 @@ run_probe master_parity_probe    "${ALL_SOURCES[@]}"
 run_probe freehand_probe         "${ALL_SOURCES[@]}"
 # 放大镜：取样位置（Y 翻转）/ 拖动重取样 / 命中 / 缩放下限
 run_probe magnifier_probe        "${ALL_SOURCES[@]}"
+# 滚动长截图拼接算法 spike：偏移识别 / 接缝连续 / nil 边界 / 性能预算
+run_probe stitch_scroll_probe    Sources/ScrollCapture/ImageStitch.swift
 
 # 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
 # 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次
