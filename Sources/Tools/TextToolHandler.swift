@@ -7,6 +7,9 @@ import Cocoa
 /// 让用户直接打字。
 struct TextToolHandler: AnnotationToolHandler {
 
+    /// 放置类工具：落笔命中已有对象时保持"移动它"的旧语义（不参与吸附优先）。
+    var isClickPlacement: Bool { true }
+
     /// 默认字号。**刻意不跟线宽走**：文字没有「线宽」这个概念，
     /// 当前线宽默认是 15，跟着走会得到一个巨大的字。
     /// 之后想调大小用选择框的缩放手柄（缩放作用在字号上）。

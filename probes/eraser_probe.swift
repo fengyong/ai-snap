@@ -178,7 +178,9 @@ do {
     view.currentTool = .arrow      // 切走工具，避免继续画
 
     // 点在块的正中间 —— 若命中判定是描边，这里会落空
+    // （吸附优先之后，选中在**松开**时完成：按下进入的是"待分流"的绘制态）
     view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 200, y: 175)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 200, y: 175)))
     check("点中块中心即被选中", view.selectedKey != nil, "selected=\(String(describing: view.selectedKey))")
     view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 200, y: 175)))
 }

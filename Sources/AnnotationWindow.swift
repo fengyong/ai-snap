@@ -1045,7 +1045,14 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
     func selectTool(atIndex index: Int) {
         guard index >= 0 && index < Self.toolbarTools.count else { return }
-        annotationView.currentTool = Self.toolbarTools[index].tool
+        let tool = Self.toolbarTools[index].tool
+        if annotationView.currentTool != tool {
+            // 切工具 = 换一种工作模式，顺手清掉选中：否则"画完序号（自动选中）
+            // → 切箭头 → 按序号圆心"会被当成移动刚选中的序号，而用户的意图
+            // 显然是从它引一根箭头。显式点选的选中不受此影响（没切工具就还在）。
+            annotationView.selectedKey = nil
+        }
+        annotationView.currentTool = tool
         updateToolButtonStates(selectedIndex: index)
         Preferences.shared.lastToolTag = index
     }

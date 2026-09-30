@@ -7,6 +7,9 @@ import Cocoa
 /// 造对象、交回画布登记，差别只在造什么。
 struct ClickPlacementToolHandler: AnnotationToolHandler {
 
+    /// 放置类工具：落笔命中已有对象时保持"移动它"的旧语义（不参与吸附优先）。
+    var isClickPlacement: Bool { true }
+
     /// 贴纸的固定尺寸。抽成常量是因为预览、命中区都隐含依赖它。
     static let stampSize: CGFloat = 48
 

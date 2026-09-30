@@ -7,6 +7,9 @@ import Cocoa
 /// 放大倍数固定 2.5×（一个旋钮一个含义；要可调再进偏好）。
 struct MagnifierToolHandler: AnnotationToolHandler {
 
+    /// 放置类工具：落笔命中已有对象时保持"移动它"的旧语义（不参与吸附优先）。
+    var isClickPlacement: Bool { true }
+
     func handles(_ tool: DrawingTool) -> Bool {
         tool == .magnifier
     }
