@@ -719,14 +719,17 @@ do {
     view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 160, y: 100)))
     check("先能选中", view.selectedKey == key, "\(String(describing: view.selectedKey))")
 
-    // 拖到右边去：拖拽期间命中层只记脏、不重绘（见 flushHitLayerIfNeeded）
-    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 160, y: 100)))
-    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 360, y: 100)))
-    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 360, y: 100)))
+    // 拖到右边去：拖拽期间命中层只记脏、不重绘（见 flushHitLayerIfNeeded）。
+    // 按点选在 (140,100)：底边中点 (160,100) 现在是调整手柄（8pt 命中区），
+    // 拖手柄 = 调大小 —— 移动要按在离手柄远一点的描边上（与选中框手柄的
+    // 标准交互一致，见 resize_handle_probe）
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 140, y: 100)))
+    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 340, y: 100)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 340, y: 100)))
 
     view.selectedKey = nil
-    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 360, y: 100)))
-    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 360, y: 100)))
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 340, y: 100)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 340, y: 100)))
     check("挪动之后，按**新位置**能选中它（命中层欠账被补上了）",
           view.selectedKey == key, "\(String(describing: view.selectedKey))")
 }

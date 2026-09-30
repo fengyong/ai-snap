@@ -60,6 +60,13 @@ extension AnnotationView {
                 redoStack.append(.scale(colorKey: colorKey, factor: factor))
             }
 
+        case .resize(let colorKey, let oldSize, let newSize):
+            if let obj = objects[colorKey] as? RectResizable {
+                obj.setSize(width: oldSize.width, height: oldSize.height)
+                updateAttachedArrows(forParent: colorKey)
+                redoStack.append(.resize(colorKey: colorKey, oldSize: oldSize, newSize: newSize))
+            }
+
         case .editText(let colorKey, let previous):
             if let shape = objects[colorKey] as? TextShape {
                 let current = shape.text
@@ -135,6 +142,13 @@ extension AnnotationView {
                 obj.scale(by: factor)
                 updateAttachedArrows(forParent: colorKey)
                 undoStack.append(.scale(colorKey: colorKey, factor: factor))
+            }
+
+        case .resize(let colorKey, let oldSize, let newSize):
+            if let obj = objects[colorKey] as? RectResizable {
+                obj.setSize(width: newSize.width, height: newSize.height)
+                updateAttachedArrows(forParent: colorKey)
+                undoStack.append(.resize(colorKey: colorKey, oldSize: oldSize, newSize: newSize))
             }
 
         case .editText(let colorKey, let previous):
