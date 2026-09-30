@@ -803,14 +803,20 @@ class AnnotationView: NSView {
                 // 但踩着对象落笔的单击是**选中**，不画点（与拖拽绘制分支同一分流）
                 let points = freehandPoints
                 freehandPoints = []
-                if points.count <= 1, let candidate = snapDrawPressCandidate,
-                   objects[candidate] != nil {
-                    selectedKey = candidate
-                    state = .idle
-                    activeSnapPoint = nil
-                    snapDrawPressCandidate = nil
-                    needsDisplay = true
-                    return
+                if let candidate = snapDrawPressCandidate, objects[candidate] != nil {
+                    // 踩着对象落笔：单击（1 点）或手抖 ≤8pt 的短划都回退为**选中**，
+                    // 不留半根废笔画
+                    let dragDist: CGFloat = points.count > 1
+                        ? hypot(points.last!.x - points[0].x, points.last!.y - points[0].y)
+                        : 0
+                    if dragDist <= 8 {
+                        selectedKey = candidate
+                        state = .idle
+                        activeSnapPoint = nil
+                        snapDrawPressCandidate = nil
+                        needsDisplay = true
+                        return
+                    }
                 }
                 snapDrawPressCandidate = nil
                 let colorKey = hitTestBuffer.generateUniqueColorKey()
@@ -825,9 +831,12 @@ class AnnotationView: NSView {
             }
             // 对终点应用吸附
             let snappedEnd = applySnap(to: point, excludeKey: nil)
-            // 最小长度检查
+            // 最小长度检查。踩着对象落笔的阈值放宽到 8pt：吸附优先后，手抖 6pt
+            // 在旧阈值下会被画成一根超短箭头（旧行为是移动）—— 用更宽的手势死区
+            // 把「点击选中/移动」的容错还回来
+            let createThreshold: CGFloat = snapDrawPressCandidate != nil ? 8 : 5
             let dist = hypot(snappedEnd.x - start.x, snappedEnd.y - start.y)
-            if dist > 5 {
+            if dist > createThreshold {
                 let colorKey = hitTestBuffer.generateUniqueColorKey()
                 // 具体形状的构造交给工具自己的 handler（见 Sources/Tools/）。
                 // 画布只负责：配色 key、登记对象、记撤销、重绘。

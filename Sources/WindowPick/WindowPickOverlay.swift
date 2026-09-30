@@ -27,12 +27,20 @@ final class WindowPickOverlay: NSObject {
     private let completionHandler: (CGWindowID?) -> Void
 
     /// 一块屏一个覆盖层；彼此对等，光标在哪块屏就高亮/确认那块屏视野里的窗口。
+    /// 窗口选择覆盖层窗口。无边框窗默认不能成为 key —— 不能成为 key 就收不到
+    /// 键盘事件（Esc 失效）、也收不到 mouseMoved（高亮不跟随，卡在初始位置）。
+    /// 项目里全部 borderless 窗口都有这个覆写（RegionOverlayWindow / AnnotationWindow
+    /// / PinWindow / HistoryWindow），新窗口类必须对照 —— 本文件初版漏了它，真机翻车。
+    final class OverlayWindow: NSWindow {
+        override var canBecomeKey: Bool { true }
+    }
+
     private final class ScreenLayer {
         let window: NSWindow
         let view: WindowPickView
 
         init(screen: NSScreen) {
-            let window = NSWindow(
+            let window = OverlayWindow(
                 contentRect: screen.frame,
                 styleMask: .borderless,
                 backing: .buffered,
