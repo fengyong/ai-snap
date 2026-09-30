@@ -54,8 +54,13 @@ protocol AnnotationToolHandler {
                      context: ToolContext) -> (any AnnotationObject)?
 
     /// 自由手绘类工具（画笔 / 马克笔）：拖拽**逐点采样**、整个点集才是一个对象，
-    /// 与「起点→终点」的拖拽构造路径不同。画布据此选择累积点集还是记录终点。
+    /// 与「起点→终点」的拖拽构造路径不同。画布据此选择累积点积还是记录终点。
     var isFreehand: Bool { get }
+
+    /// 单击放置类工具（序号/文字/贴纸/放大镜）：落笔语义是"点谁动谁"（命中
+    /// 已有对象 → 移动它），与拖拽绘制类"落笔优先画画"相反。
+    /// 画布在 mouseDown 用它决定吸附优先还是命中优先（见 mouseDown 的吸附分支）。
+    var isClickPlacement: Bool { get }
 
     /// 用整条采样点集构造对象（仅 isFreehand 工具返回非 nil）。
     ///
@@ -86,6 +91,8 @@ extension AnnotationToolHandler {
     }
 
     var isFreehand: Bool { false }
+
+    var isClickPlacement: Bool { false }
 
     func makeFreehandObject(points: [CGPoint], tool: DrawingTool,
                             context: ToolContext) -> (any AnnotationObject)? {

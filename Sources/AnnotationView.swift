@@ -18,6 +18,10 @@ class AnnotationView: NSView {
     private var currentDrawEnd: CGPoint?
     /// 自由手绘（画笔/马克笔）进行中的采样点集。距离抽稀在 appendFreehandPoint。
     private var freehandPoints: [CGPoint] = []
+    /// 吸附优先落笔时踩中的对象（见 mouseDown 的吸附分支）。
+    /// 松手时若没拖出有效绘制（= 一次点击），把选中还给这个对象 ——
+    /// 「点一下 = 选中，拖一下 = 从吸附点起笔」按手势长度自然分流。
+    private var snapDrawPressCandidate: UInt32?
 
     // 当前工具和样式
     //
@@ -540,6 +544,41 @@ class AnnotationView: NSView {
             }
         }
 
+        // 拖拽绘制类工具：吸附点激活时**落笔优先画画**，而不是移动踩在笔下的对象。
+        //
+        // 吸附指示器在悬停时就已经画了"从这里起笔"的十字菱形标记 —— 那是一个承诺；
+        // 按下去却命中对象进了移动模式，指示器就成了谎言（实测：箭头工具悬停序号
+        // 圆心，按下拖走的却是序号本身，而"从序号 1 引一根箭头"恰是最常用的标注流）。
+        // 边界：
+        //   · 点击放置类（序号/文字/贴纸/放大镜）不在此列 —— 它们的落笔语义本来
+        //     就是"点谁动谁"（isClickPlacement）；
+        //   · ⌘ 是逃生舱：在有吸附点的对象上想挪一下时，按住 ⌘ 落笔强制走移动。
+        // 未吸附时照旧走下面的命中分支（按在离吸附点远的对象上 = 移动，行为不变）。
+        snapDrawPressCandidate = nil   // 每次落笔重置，防上一次残留误选中
+        if !flags.contains(.command),
+           let handler = ToolRegistry.handler(for: currentTool),
+           !handler.isClickPlacement {
+            // 先看这一笔踩没踩到对象：踩到了且最终没拖成绘制（点击），松手时要还它选中
+            flushHitLayerIfNeeded()
+            snapDrawPressCandidate = hitTestBuffer.pickColorKey(at: point)
+            // **已显式选中的对象例外**：选中是用户点出来的 = 移动意图，
+            // 按住它拖拽应当移动（切工具会清选中，所以不影响"画完序号接箭头"的主流程）
+            if snapDrawPressCandidate != selectedKey {
+                let snappedStart = applySnap(to: point, excludeKey: nil)
+                if activeSnapPoint != nil {
+                    drawingFromCenter = true   // 起点吸附到对象 → 以吸附点为中心绘制（与 drawing 分支同一语义）
+                    state = .drawing(tool: currentTool, start: snappedStart)
+                    if handler.isFreehand {
+                        freehandPoints = [snappedStart]   // 手绘的首点 = 吸附点（正常分支在 mouseDown 里做，这里补上）
+                    }
+                    selectedKey = nil
+                    needsDisplay = true
+                    return
+                }
+            }
+            snapDrawPressCandidate = nil
+        }
+
         // 在 Layer B 上查找鼠标位置的颜色（拖拽刚结束的话，先把它欠的重绘补上）
         flushHitLayerIfNeeded()
         let colorKey = hitTestBuffer.pickColorKey(at: point)
@@ -678,9 +717,20 @@ class AnnotationView: NSView {
         switch state {
         case .drawing(let tool, let start):
             if ToolRegistry.handler(for: tool)?.isFreehand == true {
-                // 自由手绘：整条点集就是一个对象。单点也接受（画成圆点）。
+                // 自由手绘：整条点集就是一个对象。单点也接受（画成圆点）——
+                // 但踩着对象落笔的单击是**选中**，不画点（与拖拽绘制分支同一分流）
                 let points = freehandPoints
                 freehandPoints = []
+                if points.count <= 1, let candidate = snapDrawPressCandidate,
+                   objects[candidate] != nil {
+                    selectedKey = candidate
+                    state = .idle
+                    activeSnapPoint = nil
+                    snapDrawPressCandidate = nil
+                    needsDisplay = true
+                    return
+                }
+                snapDrawPressCandidate = nil
                 let colorKey = hitTestBuffer.generateUniqueColorKey()
                 if let obj = ToolRegistry.handler(for: tool)?
                     .makeFreehandObject(points: points, tool: tool,
@@ -709,7 +759,18 @@ class AnnotationView: NSView {
                     return
                 }
                 registerNewObject(obj, colorKey: colorKey)
+            } else if let candidate = snapDrawPressCandidate,
+                      objects[candidate] != nil {
+                // 吸附优先落笔后的**纯点击**：没拖出绘制，把选中还给踩中的对象 ——
+                // 「点一下 = 选中」在吸附点上依然成立（拖拽才走绘制）
+                selectedKey = candidate
+                state = .idle
+                activeSnapPoint = nil
+                needsDisplay = true
+                snapDrawPressCandidate = nil
+                return
             }
+            snapDrawPressCandidate = nil
             currentDrawEnd = nil
 
         case .moving(let colorKey, _):
