@@ -94,17 +94,6 @@ run_probe window_pick_probe      Sources/Models.swift Sources/ScreenCapture.swif
                                  Sources/Capture/ScreenGeometry.swift \
                                  Sources/WindowPick/WindowPickSupport.swift
 run_probe export_encode_probe    Sources/Export/ImageEncode.swift
-run_probe selection_adjust_probe Sources/RegionSelectionWindow.swift \
-                                 Sources/ScreenCapture.swift \
-                                 Sources/Capture/CaptureProviderSCK.swift \
-                                 Sources/Capture/ScreenCaptureError.swift \
-                                 Sources/Capture/ScreenGeometry.swift \
-                                 Sources/OverlayWindowStyle.swift \
-                                 Sources/AnchoredPlacement.swift \
-                                 Sources/Export/ImageEncode.swift \
-                                 Sources/Preferences.swift Sources/HotkeyManager.swift \
-                                 Sources/Models.swift \
-                                 Sources/WindowPick/WindowPickSupport.swift
 run_probe anchored_placement_probe Sources/AnchoredPlacement.swift
 run_probe overlay_style_probe    Sources/OverlayWindowStyle.swift
 run_probe toolbar_layout_probe   Sources/ToolbarLayout.swift

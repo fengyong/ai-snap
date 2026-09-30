@@ -117,6 +117,26 @@ do {
           "\(view.objects.values.first?.center ?? .zero)")
 }
 
+print("\n=== 4.5 手抖死区：踩对象拖 ≤8pt = 选中而非误画 ===\n")
+do {
+    let view = placeBadge(at: CGPoint(x: 200, y: 150))
+    view.currentTool = .arrow
+    // 6pt 的手抖拖拽：旧阈值 5pt 会画出一根超短箭头，新阈值应回退为选中
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 200, y: 150)))
+    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 206, y: 150)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 206, y: 150)))
+    check("手抖 6pt 不产生箭头（回退为选中）",
+          view.objects.count == 1 && view.selectedKey != nil,
+          "objects=\(view.objects.count) selected=\(String(describing: view.selectedKey))")
+    // 拖出吸附半径（12pt）之外仍是画箭头 —— 注意终点若留在半径内会被吸回起点、
+    // 距离归零走选中回退（这本身是合理行为：没画到哪儿去就别画）
+    view.selectedKey = nil
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 200, y: 150)))
+    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 216, y: 150)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 216, y: 150)))
+    check("拖出吸附半径（16pt）仍正常画箭头", view.objects.count == 2, "\(view.objects.count)")
+}
+
 print("\n=== 5. 手绘工具同样吸附优先 ===\n")
 do {
     let view = placeBadge(at: CGPoint(x: 200, y: 150))
