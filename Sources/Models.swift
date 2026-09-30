@@ -437,6 +437,10 @@ enum UndoAction {
     case rotate(colorKey: UInt32, angle: CGFloat)
     /// 缩放了对象
     case scale(colorKey: UInt32, factor: CGFloat)
+    /// 用边/角手柄调整了矩形族形状的宽高（撤销 = 还原旧尺寸）。
+    /// 与 `.scale`（等比、按倍率）分开：手柄调整是**单维度**的，倍率表达不了
+    /// 「只改宽不改高」。
+    case resize(colorKey: UInt32, oldSize: CGSize, newSize: CGSize)
     /// 改了文字标注的内容（撤销 = 改回 previous）
     case editText(colorKey: UInt32, previous: String)
     /// 改了选中对象的样式（颜色 / 线宽）。同时带新旧值：撤销取旧、重做取新。
@@ -514,12 +518,88 @@ enum CanvasState {
     case moving(colorKey: UInt32, grabOffset: CGVector)
     case rotating(colorKey: UInt32, lastAngle: CGFloat)
     case scaling(colorKey: UInt32, lastDistance: CGFloat)
+    /// 矩形族的边/角手柄调整中（见 RectResizable）。记录起始几何：
+    /// 锚点是「被拖边/角的对边/对角」，拖拽期间由光标位置反推新宽高与新中心。
+    case resizing(colorKey: UInt32, handle: ResizeHandle,
+                  startCenter: CGPoint, startWidth: CGFloat, startHeight: CGFloat,
+                  startRotation: CGFloat)
     /// 橡皮擦拖拽中。它不是"正在画某个对象"，而是一边拖一边删，所以单独一个状态 ——
     /// 整条拖拽路径上的删除最后合成**一步撤销**（否则按一次 ⌘Z 只撤销掉抹掉的一个对象，
     /// 想退回原状得按十几次）。
     case erasing
     /// 取色器拖拽中。与橡皮擦同理：它也不产生对象，而是持续读取光标处的像素。
     case picking
+}
+
+/// 矩形族的 8 个调整手柄（局部坐标语义：TL = 未旋转空间的左上角）。
+enum ResizeHandle: Equatable {
+    case cornerTL, cornerTR, cornerBR, cornerBL
+    case edgeTop, edgeBottom, edgeLeft, edgeRight
+
+    /// 8 个手柄在「未旋转局部坐标系」（原点 = 中心）里的位置。
+    static func localPositions(width: CGFloat, height: CGFloat) -> [(handle: ResizeHandle, local: CGPoint)] {
+        let hw = width / 2, hh = height / 2
+        return [
+            (.cornerTL, CGPoint(x: -hw, y: hh)),
+            (.cornerTR, CGPoint(x: hw, y: hh)),
+            (.cornerBR, CGPoint(x: hw, y: -hh)),
+            (.cornerBL, CGPoint(x: -hw, y: -hh)),
+            (.edgeTop, CGPoint(x: 0, y: hh)),
+            (.edgeBottom, CGPoint(x: 0, y: -hh)),
+            (.edgeLeft, CGPoint(x: -hw, y: 0)),
+            (.edgeRight, CGPoint(x: hw, y: 0)),
+        ]
+    }
+
+    /// 离局部点最近、且在阈值内的手柄（边缘重合时取距离最小者）。
+    static func nearest(localPoint: CGPoint, width: CGFloat, height: CGFloat,
+                        threshold: CGFloat) -> ResizeHandle? {
+        var best: ResizeHandle?
+        var bestDist = threshold
+        for (handle, local) in localPositions(width: width, height: height) {
+            let d = hypot(localPoint.x - local.x, localPoint.y - local.y)
+            if d <= bestDist {
+                bestDist = d
+                best = handle
+            }
+        }
+        return best
+    }
+}
+
+/// 支持「边/角手柄调整大小」的矩形族形状（矩形/圆角矩形/聚光灯/打码）。
+///
+/// 与 `.scale`（等比、按倍率）互补：手柄调整是**单维度**的 —— 拖边只改宽或高
+/// （对边锚定不动），拖角两维同时调。聚光灯要精确罩住一段内容，
+/// 只靠等比缩放永远差着半行字，这是它存在的理由。
+protocol RectResizable: AnnotationObject {
+    var width: CGFloat { get }
+    var height: CGFloat { get }
+    /// 设定新宽高。实现方应夹住下限（`minimumExtent`）。
+    func setSize(width: CGFloat, height: CGFloat)
+}
+
+extension RectResizable {
+    /// 未旋转局部坐标 → 画布坐标（中心 + 旋转在基类协议里都有，默认实现即可）
+    func pointFromLocal(_ local: CGPoint) -> CGPoint {
+        rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
+                    around: center, by: rotation)
+    }
+
+    /// 画布坐标 → 未旋转局部坐标（原点 = 中心）。
+    /// 先绕中心反转旋转、**再减去中心** —— 只做旋转的话拿到的是全局点
+    /// （旋转 0 时恒等于输入），手柄判定会永远落空（实测踩到）。
+    func localFromPoint(_ point: CGPoint) -> CGPoint {
+        let rotated = rotatePoint(point, around: center, by: -rotation)
+        return CGPoint(x: rotated.x - center.x, y: rotated.y - center.y)
+    }
+
+    /// 8 个手柄的全局位置（选中态绘制与命中判定共用同一份，改一处不会"看得见点不中"）
+    func resizeHandlePoints() -> [(handle: ResizeHandle, point: CGPoint)] {
+        ResizeHandle.localPositions(width: width, height: height).map {
+            ($0.handle, pointFromLocal($0.local))
+        }
+    }
 }
 
 // MARK: - AnnotationObject Protocol
@@ -879,7 +959,7 @@ class Arrow: AnnotationObject {
 
 // MARK: - RectangleShape
 
-class RectangleShape: AnnotationObject, LineStyleSupporting {
+class RectangleShape: AnnotationObject, LineStyleSupporting, RectResizable {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1046,6 +1126,11 @@ class RectangleShape: AnnotationObject, LineStyleSupporting {
         let f = abs(factor)
         width = Self.scaledExtent(width, by: f)
         height = Self.scaledExtent(height, by: f)
+    }
+
+    func setSize(width: CGFloat, height: CGFloat) {
+        self.width = max(width, Self.minimumExtent)
+        self.height = max(height, Self.minimumExtent)
     }
 }
 
@@ -2105,7 +2190,7 @@ class MagnifierShape: AnnotationObject {
 
 // MARK: - SpotlightShape
 
-class SpotlightShape: AnnotationObject {
+class SpotlightShape: AnnotationObject, RectResizable {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2245,5 +2330,10 @@ class SpotlightShape: AnnotationObject {
         let f = abs(factor)
         width = Self.scaledExtent(width, by: f)
         height = Self.scaledExtent(height, by: f)
+    }
+
+    func setSize(width: CGFloat, height: CGFloat) {
+        self.width = max(width, Self.minimumExtent)
+        self.height = max(height, Self.minimumExtent)
     }
 }

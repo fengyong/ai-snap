@@ -554,6 +554,28 @@ class AnnotationView: NSView {
         //     就是"点谁动谁"（isClickPlacement）；
         //   · ⌘ 是逃生舱：在有吸附点的对象上想挪一下时，按住 ⌘ 落笔强制走移动。
         // 未吸附时照旧走下面的命中分支（按在离吸附点远的对象上 = 移动，行为不变）。
+        // 矩形族的边/角手柄：拖边 = 单维调整、拖角 = 双维（对边/对角锚定不动）。
+        // 聚光灯这类"要精确罩住内容"的区域，Shift 等比缩放调不到单边 —— 手柄是标配。
+        // 排在吸附优先之前：手柄位置与吸附点重合（角点/边中点本来就是 snap point），
+        // 选中的对象上按到手柄必须是调整，不是起笔。⌘ 保持"强制移动"语义一致。
+        if !flags.contains(.command), !flags.contains(.option), !flags.contains(.shift),
+           let key = selectedKey,
+           let resizable = objects[key] as? RectResizable {
+            let local = resizable.localFromPoint(point)
+            if let handle = ResizeHandle.nearest(localPoint: local,
+                                                 width: resizable.width,
+                                                 height: resizable.height,
+                                                 threshold: 8) {
+                state = .resizing(colorKey: key, handle: handle,
+                                  startCenter: resizable.center,
+                                  startWidth: resizable.width,
+                                  startHeight: resizable.height,
+                                  startRotation: resizable.rotation)
+                needsDisplay = true
+                return
+            }
+        }
+
         snapDrawPressCandidate = nil   // 每次落笔重置，防上一次残留误选中
         if !flags.contains(.command),
            let handler = ToolRegistry.handler(for: currentTool),
@@ -687,6 +709,66 @@ class AnnotationView: NSView {
 
             hitLayerDirty = true   // 拖拽期间不重绘，读命中层前统一补（见 flushHitLayerIfNeeded）
             refreshDebugView()
+            needsDisplay = true
+
+        case .resizing(let colorKey, let handle, let startCenter,
+                       let startWidth, let startHeight, let startRotation):
+            guard let obj = objects[colorKey] as? RectResizable else { break }
+            // 光标转进「起始中心」的未旋转局部坐标：锚点 = 被拖边/角的对边/对角，
+            // 新边界盒由锚点与光标围出，新中心 = 该盒的中心（对边固定不动 ——
+            // 中心固定模型下拖边会让对边也跑，那不是用户要的"调这一边"）。
+            // 与 localFromPoint 同一个坑：旋转后还要**减去 startCenter** 才是局部坐标
+            let rotated = rotatePoint(point, around: startCenter, by: -startRotation)
+            let local = CGPoint(x: rotated.x - startCenter.x, y: rotated.y - startCenter.y)
+            let minX0 = -startWidth / 2, maxX0 = startWidth / 2
+            let minY0 = -startHeight / 2, maxY0 = startHeight / 2
+            // 锚点 = 被拖边/角**对面**的那条边/那个角（局部坐标，y 向上）。
+            // 不能用「光标替换对应边界、其余保持原值」的固定赋值：光标拖过锚点
+            // 时会算出负宽高（实测 cornerBR 往下拖 → 高被夹到下限、中心跳到锚点外）。
+            // 边手柄的非调整轴**冻结为原始尺寸**：拖右边只改宽，光标的垂直抖动
+            // 不应牵连高度（实测 anchor 到光标上会把高拉到下限）。
+            func anchoredSpan(_ anchorValue: CGFloat, _ cursor: CGFloat)
+                -> (min: CGFloat, max: CGFloat) {
+                let lo = min(anchorValue, cursor), hi = max(anchorValue, cursor)
+                let minExtent = type(of: obj).minimumExtent
+                guard hi - lo >= minExtent else {
+                    return cursor >= anchorValue ? (anchorValue, anchorValue + minExtent)
+                                                 : (anchorValue - minExtent, anchorValue)
+                }
+                return (lo, hi)
+            }
+            let spanX: (min: CGFloat, max: CGFloat)
+            let spanY: (min: CGFloat, max: CGFloat)
+            switch handle {
+            case .cornerTL:
+                spanX = anchoredSpan(maxX0, local.x); spanY = anchoredSpan(minY0, local.y)
+            case .cornerTR:
+                spanX = anchoredSpan(minX0, local.x); spanY = anchoredSpan(minY0, local.y)
+            case .cornerBR:
+                spanX = anchoredSpan(minX0, local.x); spanY = anchoredSpan(maxY0, local.y)
+            case .cornerBL:
+                spanX = anchoredSpan(maxX0, local.x); spanY = anchoredSpan(maxY0, local.y)
+            case .edgeLeft:
+                spanX = anchoredSpan(maxX0, local.x); spanY = (minY0, maxY0)
+            case .edgeRight:
+                spanX = anchoredSpan(minX0, local.x); spanY = (minY0, maxY0)
+            case .edgeTop:
+                spanX = (minX0, maxX0); spanY = anchoredSpan(minY0, local.y)
+            case .edgeBottom:
+                spanX = (minX0, maxX0); spanY = anchoredSpan(maxY0, local.y)
+            }
+            obj.setSize(width: spanX.max - spanX.min, height: spanY.max - spanY.min)
+            let localCenter = CGPoint(x: (spanX.min + spanX.max) / 2,
+                                      y: (spanY.min + spanY.max) / 2)
+            // 局部向量 → 世界向量：绕**原点**旋转后加回 startCenter
+            // （rotatePoint 的语义是"绕给定点转"，局部点必须先以原点为锚 ——
+            //  这是本功能第三处坐标坑，前三处全是"全局/局部没有分清"）
+            let rotatedLocal = rotatePoint(localCenter, around: .zero, by: startRotation)
+            let worldCenter = CGPoint(x: startCenter.x + rotatedLocal.x,
+                                      y: startCenter.y + rotatedLocal.y)
+            obj.move(by: CGVector(dx: worldCenter.x - startCenter.x,
+                                  dy: worldCenter.y - startCenter.y))
+            hitLayerDirty = true
             needsDisplay = true
 
         case .drawing(let tool, _):
@@ -823,6 +905,17 @@ class AnnotationView: NSView {
                 refreshDebugView()
             }
             scaleStartFactor = 1
+
+        case .resizing(let colorKey, _, _, let startWidth, let startHeight, _):
+            if let obj = objects[colorKey] as? RectResizable,
+               abs(obj.width - startWidth) > 0.01 || abs(obj.height - startHeight) > 0.01 {
+                undoStack.append(.resize(colorKey: colorKey,
+                                         oldSize: CGSize(width: startWidth, height: startHeight),
+                                         newSize: CGSize(width: obj.width, height: obj.height)))
+                redoStack.removeAll()
+                updateAttachedArrows(forParent: colorKey)
+                hitLayerDirty = true
+            }
 
         case .erasing:
             // 整笔拖拽合并成一步撤销：否则按一次 ⌘Z 只退回一个对象，
@@ -1028,6 +1121,16 @@ class AnnotationView: NSView {
             // 置成 .idle，于是 mouseUp 落进 .idle 分支 —— 这一笔既不入撤销栈，
             // 也无法 ⌘Z 找回，等于凭空丢标注。Esc 的语义是"取消"，那就真的取消。
             restoreEraseStroke()
+
+        case .resizing(let colorKey, _, let startCenter, let startWidth, let startHeight, _):
+            // 尺寸与中心一并还原（拖拽期间中心随锚点逻辑移动过）
+            if let obj = objects[colorKey] as? RectResizable {
+                obj.setSize(width: startWidth, height: startHeight)
+                let delta = CGVector(dx: startCenter.x - obj.center.x,
+                                     dy: startCenter.y - obj.center.y)
+                obj.move(by: delta)
+                updateAttachedArrows(forParent: colorKey)
+            }
 
         default:
             return      // idle / drawing / picking：没有需要回退的改动

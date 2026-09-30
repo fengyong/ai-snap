@@ -133,6 +133,8 @@ run_probe magnifier_probe        "${ALL_SOURCES[@]}"
 run_probe stitch_scroll_probe    Sources/ScrollCapture/ImageStitch.swift
 # 吸附优先：落笔 vs 移动的优先级（吸附指示的承诺必须兑现）
 run_probe snap_priority_probe    "${ALL_SOURCES[@]}"
+# 聚光灯/矩形族边角手柄：单维调整 / 对边锚定 / Esc 还原 / 下限 / 等比回归
+run_probe resize_handle_probe    "${ALL_SOURCES[@]}"
 
 # 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
 # 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次

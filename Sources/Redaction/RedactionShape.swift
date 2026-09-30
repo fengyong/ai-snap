@@ -32,7 +32,7 @@ enum RedactionStyle: Equatable {
 /// 打码结果按「取样矩形 + 样式 + 像素倍率」缓存，且在 `draw` 时比对缓存键自动失效 ——
 /// **不需要在 move/scale/rotate 里逐个挂钩子**。挂钩子的写法漏一处就是「拖完还是旧的
 /// 打码」，而且没有任何报错。
-final class RedactionShape: AnnotationObject {
+final class RedactionShape: AnnotationObject, RectResizable {
     let id = UUID()
     let hitTestColorKey: UInt32
 
@@ -244,5 +244,11 @@ final class RedactionShape: AnnotationObject {
         let f = abs(factor)
         width = Self.scaledExtent(width, by: f)
         height = Self.scaledExtent(height, by: f)
+    }
+
+    func setSize(width: CGFloat, height: CGFloat) {
+        self.width = max(width, Self.minimumExtent)
+        self.height = max(height, Self.minimumExtent)
+        // 尺寸变了，内容贴图的缓存键（含矩形）随之失配，自动重建
     }
 }

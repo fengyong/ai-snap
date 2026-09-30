@@ -53,7 +53,16 @@ extension AnnotationView {
         ctx.setLineWidth(1.5)
         ctx.setLineDash(phase: 0, lengths: [])
 
-        for point in obj.selectionHandlePoints() {
+        // 矩形族（RectResizable）画 8 个手柄：4 角 + 4 边中点 —— 与命中判定共用
+        // resizeHandlePoints() 这一份清单，改任何一处都不会「看得见点不中」。
+        // 其余形状维持原有的 selectionHandlePoints()。
+        let handlePoints: [CGPoint]
+        if let resizable = obj as? RectResizable {
+            handlePoints = resizable.resizeHandlePoints().map(\.point)
+        } else {
+            handlePoints = obj.selectionHandlePoints()
+        }
+        for point in handlePoints {
             let handleRect = CGRect(
                 x: point.x - handleSize / 2,
                 y: point.y - handleSize / 2,
