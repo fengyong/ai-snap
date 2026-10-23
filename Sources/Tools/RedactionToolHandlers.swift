@@ -16,19 +16,10 @@ struct RedactionToolHandler: AnnotationToolHandler {
 
     func makeObject(from start: CGPoint, to end: CGPoint,
                     tool: DrawingTool, context: ToolContext) -> (any AnnotationObject)? {
-        guard let style = style(for: tool) else { return nil }
-        let shape: RedactionShape
-        if context.drawingFromCenter {
-            shape = RedactionShape(center: start,
-                                   width: max(abs(end.x - start.x) * 2, 6),
-                                   height: max(abs(end.y - start.y) * 2, 6),
-                                   style: style,
-                                   hitTestColorKey: context.colorKey)
-        } else {
-            shape = RedactionShape(from: start, to: end,
-                                   style: style,
-                                   hitTestColorKey: context.colorKey)
-        }
+        guard let shape = makeShape(from: start, to: end,
+                                    style: style(for: tool),
+                                    drawingFromCenter: context.drawingFromCenter,
+                                    colorKey: context.colorKey) else { return nil }
         shape.sourceImage = context.sourceImage
         shape.pixelScale = context.pixelScale
         return shape
@@ -36,15 +27,47 @@ struct RedactionToolHandler: AnnotationToolHandler {
 
     func drawPreview(from start: CGPoint, to end: CGPoint,
                      tool: DrawingTool, in ctx: CGContext, context: ToolContext) {
-        guard let style = style(for: tool) else { return }
+        // 预览**必须**由与最终对象同一个构造出来，否则两者会漂移。
+        //
+        // 原来预览无条件用 `RedactionShape(from:to:)`，完全忽略了 `drawingFromCenter`
+        // （起点吸附到某个角点时，最终对象是「以起点为中心、尺寸翻倍」的）。
+        // 于是用户看到的是一小块预览，松手却打码了另一块**大一倍**的区域 ——
+        // 对打码这种隐私保护手段来说，这是实打实的错误结果。
+        //
+        // 兄弟 handler（矩形、椭圆）都让两条路径共用一个构造（见
+        // `EllipseToolHandler.makeShape`），打码当时漏了。
+        guard let preview = makeShape(from: start, to: end,
+                                      style: style(for: tool),
+                                      drawingFromCenter: context.drawingFromCenter,
+                                      colorKey: 0) else { return }
+        preview.sourceImage = context.sourceImage
+        preview.pixelScale = context.pixelScale
         // 预览就按最终效果画（同一套渲染路径），所见即所得。
         // 代价是每帧重算一次打码 —— 但这正是缓存键里带矩形尺寸的原因：
         // 尺寸不变时（拖拽停止后）直接命中缓存，不会反复算。
-        let preview = RedactionShape(from: start, to: end,
-                                     style: style, hitTestColorKey: 0)
-        preview.sourceImage = context.sourceImage
-        preview.pixelScale = context.pixelScale
         preview.draw(in: ctx)
+    }
+
+    /// 预览与最终对象**共用这一个构造**。
+    ///
+    /// `drawingFromCenter` 只有一个处理点 —— 两条路径都从这里过，
+    /// 于是「预览」与「落框」在结构上就不可能不一致。
+    private func makeShape(from start: CGPoint, to end: CGPoint,
+                           style: RedactionStyle?,
+                           drawingFromCenter: Bool,
+                           colorKey: UInt32) -> RedactionShape? {
+        guard let style = style else { return nil }
+        if drawingFromCenter {
+            // 以 start 为中心，拖拽确定半尺寸（与矩形/椭圆的语义一致）
+            return RedactionShape(center: start,
+                                  width: max(abs(end.x - start.x) * 2, 6),
+                                  height: max(abs(end.y - start.y) * 2, 6),
+                                  style: style,
+                                  hitTestColorKey: colorKey)
+        }
+        return RedactionShape(from: start, to: end,
+                              style: style,
+                              hitTestColorKey: colorKey)
     }
 
     /// 打码强度**基准值**。12 点的块/半径已经足以让屏幕上的正文和数字无法辨认。

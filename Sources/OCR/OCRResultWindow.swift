@@ -18,6 +18,11 @@ final class OCRResultWindow: NSPanel, NSTextViewDelegate, NSWindowDelegate {
 
     private let items: [RecognizedText]
 
+    /// 面板显示的全文。
+    ///
+    /// 与 `blockRanges` **必须同源** —— 见 `init` 里的说明。
+    private let displayText: String
+
     /// 每段在文本里的 UTF-16 区间。
     ///
     /// **必须按 UTF-16 算**：Swift 的 `String.count` 是字素簇，
@@ -30,14 +35,31 @@ final class OCRResultWindow: NSPanel, NSTextViewDelegate, NSWindowDelegate {
     private var copySelectionButton: NSButton!
 
     init(items: [RecognizedText]) {
-        self.items = items
+        // **排序只做一次**，且必须早于下面两处。
+        //
+        // 面板里有三样东西依赖顺序：`blockRanges`（每段在文本中的区间）、
+        // `displayText`（显示与复制的全文）、`items`（区间 → 识别框的映射）。
+        // 三者必须来自**同一个数组**，否则「选中第 N 段 → 高亮第 N 个框」会错位。
+        //
+        // 原来这里直接用 Vision 的原始数组序建区间，而显示的文本走
+        // `TextRecognizer.joinedText`（内部按阅读顺序重排）—— 两者不同源。
+        // 而 Vision 返回顺序 ≠ 阅读顺序是**常态**不是边角
+        // （见 `TextRecognizer.readingOrder` 的说明），于是错位也是常态：
+        // 用户在面板里选中左边那段，画布却高亮出右边那段的框。
+        //
+        // 文本**不再**走 `TextRecognizer.joinedText` —— 它内部会再排一次，
+        // 而 Swift 的 sort 不稳定，等高行内的先后可能与本次排序不同，
+        // 文本与区间又可能对不上。自己拼这一行，顺序就锁死了。
+        let ordered = TextRecognizer.readingOrder(items)
+        self.items = ordered
+        self.displayText = ordered.map(\.text).joined(separator: "\n")
 
         var ranges: [NSRange] = []
         var location = 0
-        for item in items {
+        for item in ordered {
             let length = (item.text as NSString).length
             ranges.append(NSRange(location: location, length: length))
-            location += length + 1          // +1 是 joinedText 里的 "\n"
+            location += length + 1          // +1 是段间的 "\n"
         }
         self.blockRanges = ranges
 
@@ -109,7 +131,7 @@ final class OCRResultWindow: NSPanel, NSTextViewDelegate, NSWindowDelegate {
         textView.isVerticallyResizable = true
         textView.autoresizingMask = [.width]
         textView.textContainer?.widthTracksTextView = true
-        textView.string = TextRecognizer.joinedText(items)
+        textView.string = displayText
         textView.delegate = self
         scroll.documentView = textView
 
