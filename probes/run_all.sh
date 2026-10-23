@@ -178,6 +178,13 @@ run_probe resize_undo_probe      "${ALL_SOURCES[@]}"
 run_probe text_undo_probe        "${ALL_SOURCES[@]}"
 # 贴图窗口生命周期：close 之后窗口是否真被释放（只需这两个文件，不必整模块）
 run_probe pin_lifetime_probe     Sources/Pin/PinWindow.swift Sources/Pin/PinManager.swift
+# 2026-10-23 批次 2 新增：
+#   ocr_order_probe —— OCR 结果面板：显示顺序 ↔ 区间 ↔ 识别框必须同源
+#                     （Vision 返回顺序 ≠ 阅读顺序时，原来会高亮到别的段的框）
+#   redaction_preview_probe —— 打码预览与最终对象必须画在同一块地方
+#                     （drawingFromCenter 原来只在落框一侧被处理）
+run_probe ocr_order_probe         "${ALL_SOURCES[@]}"
+run_probe redaction_preview_probe "${ALL_SOURCES[@]}"
 
 # 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
 # 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次
