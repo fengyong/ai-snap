@@ -12,7 +12,37 @@ cd "$(dirname "$0")/.." || exit 1
 FILTER="${1:-}"
 PASS=0
 FAIL=0
+KNOWN_RED=0
 FAILED_NAMES=()
+
+# ── 已知红灯 ─────────────────────────────────────────────────────
+#
+# 这些探针断言的是「**应该怎样**」，而对应的修复还没进代码。
+# 它们**照样注册**为常驻回归 —— 红灯本身就在盯住那个行为，
+# 等修复落地那一刻它会自己转绿，比事后补测试可靠。
+#
+# 规矩只有一条：**对应批次落地后，必须把这里的条目删掉**。
+# 留着不删 = 那个位置的回归从此被静默吞掉（已知红灯变成遮羞布）。
+# 所以脚本会在探针**意外转绿**时报错并要求清理 —— 清单自己会喊。
+#
+# 格式：探针名=待修批次/问题
+EXPECTED_FAIL=(
+  "resize_undo_probe=批次 3 / P1-1：.scale 撤销在下限处过冲"
+  "text_undo_probe=批次 3 / P1-2：首次文字编辑 ⌘Z 留下隐形空对象"
+  "pin_lifetime_probe=批次 4 / P1-6：贴图窗口关闭后不释放"
+)
+TURNED_GREEN=()
+
+# 取某个探针的「已知红灯」说明；不在清单里则返回 1
+expected_reason() {
+  local name="$1" entry
+  for entry in "${EXPECTED_FAIL[@]}"; do
+    case "$entry" in
+      "$name="*) echo "${entry#*=}"; return 0 ;;
+    esac
+  done
+  return 1
+}
 
 # 整模块源码。有三个探针要构造真实的 AnnotationView 并合成鼠标事件，
 # 得把整个模块链进来（除了 Sources/main.swift —— 顶层代码那份由探针自己提供）。
@@ -66,13 +96,27 @@ run_probe() {
     *通过*|*失败*|*✅*|*❌*) ;;
     *) summary="（对比探针，无断言：以退出码为准）" ;;
   esac
+
+  local reason
   if [ $code -eq 0 ]; then
-    echo "✅ $name  $summary"
+    if reason=$(expected_reason "$name"); then
+      # 本该是红的却绿了 → 修复已落地，清单该删这条了
+      echo "🟢 $name  $summary  ← 已转绿（待修：$reason）"
+      TURNED_GREEN+=("$name")
+    else
+      echo "✅ $name  $summary"
+    fi
     PASS=$((PASS + 1))
   else
-    echo "❌ $name  $summary"
-    echo "$out" | grep -E "^  ❌" | head -8
-    FAIL=$((FAIL + 1)); FAILED_NAMES+=("$name")
+    if reason=$(expected_reason "$name"); then
+      echo "🟡 $name  $summary  ← 已知红灯，待修：$reason"
+      echo "$out" | grep -E "^  ❌" | head -8 | sed 's/^/     /'
+      KNOWN_RED=$((KNOWN_RED + 1))
+    else
+      echo "❌ $name  $summary"
+      echo "$out" | grep -E "^  ❌" | head -8
+      FAIL=$((FAIL + 1)); FAILED_NAMES+=("$name")
+    fi
   fi
   rm -rf "$tmp"
 }
@@ -124,6 +168,16 @@ run_probe stitch_scroll_probe    Sources/ScrollCapture/ImageStitch.swift
 run_probe snap_priority_probe    "${ALL_SOURCES[@]}"
 # 聚光灯/矩形族边角手柄：单维调整 / 对边锚定 / Esc 还原 / 下限 / 等比回归
 run_probe resize_handle_probe    "${ALL_SOURCES[@]}"
+# 2026-10-23 批次 1 新增：
+#   resize_drag_probe —— 手柄**多事件**拖拽（已有探针每节只发一个 mouseDragged，
+#                        测不出中心二次累加；拖 30 个事件后中心会跑到 2625）
+#   resize_undo_probe —— .resize / .scale / .move 三类变换的撤销是否完整还原
+run_probe resize_drag_probe      "${ALL_SOURCES[@]}"
+run_probe resize_undo_probe      "${ALL_SOURCES[@]}"
+# 文字标注撤销：创建态首编 ⌘Z 会不会留下隐形空对象
+run_probe text_undo_probe        "${ALL_SOURCES[@]}"
+# 贴图窗口生命周期：close 之后窗口是否真被释放（只需这两个文件，不必整模块）
+run_probe pin_lifetime_probe     Sources/Pin/PinWindow.swift Sources/Pin/PinManager.swift
 
 # 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
 # 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次
@@ -185,6 +239,20 @@ done
 echo
 echo "========================================"
 echo "通过 $PASS 个探针，失败 $FAIL 个"
+if [ $KNOWN_RED -gt 0 ]; then
+  echo "已知红灯 $KNOWN_RED 个（对应修复尚未落地，见 EXPECTED_FAIL）"
+fi
+
+# 已知红灯**意外转绿** = 对应批次已落地 → 清单该删那条了。
+# 不清理的话，那个位置的回归从此被静默吞掉（已知红灯变成遮羞布）。
+# 所以这里**故意报错**：清单必须随修复一起更新。
+if [ ${#TURNED_GREEN[@]} -gt 0 ]; then
+  echo
+  echo "❌ 以下探针已转绿，请从 run_all.sh 的 EXPECTED_FAIL 里删除对应条目："
+  printf '   %s\n' "${TURNED_GREEN[@]}"
+  exit 1
+fi
+
 if [ $FAIL -gt 0 ]; then
   printf '失败的：%s\n' "${FAILED_NAMES[*]}"
   exit 1

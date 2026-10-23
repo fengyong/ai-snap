@@ -77,8 +77,28 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `picker_probe` | 取色器：Y 翻转方向、倍率反推、放大镜切片 | 28 |
 | `ocr_probe` | OCR：归一化框 → 画布的**无翻转**换算、阅读顺序（真跑 Vision） | 19 |
 | `postfix_probe` | 第一轮复核 13 项修复的回归（整模块 + 真实窗口） | 78 |
+| `resize_handle_probe` | 矩形族边/角手柄：单维调整、对边锚定、Esc 还原、下限 | 20 |
+| `resize_drag_probe` | 手柄**多事件**拖拽：中心不得二次累加（单事件探针测不出） | 12 |
+| `resize_undo_probe` | `.resize` / `.scale` / `.move` 撤销是否完整还原（尺寸**与位置**） | 21 |
+| `text_undo_probe` | 文字标注撤销：创建态首编 ⌘Z 是否留下隐形空对象 | 10 |
+| `pin_lifetime_probe` | 贴图窗口生命周期：close 后窗口是否真被释放 | 6 |
 | `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离 | 36（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
 | `permission_probe` | 权限判定：**无权限时不得判成有权限**。用 launchctl 另起一个无 TCC 授权的自己来验 | 2 ~ 5（视环境）**默认不跑** |
+
+### 已知红灯（`run_all.sh` 的 `EXPECTED_FAIL`）
+
+`resize_undo_probe`、`text_undo_probe`、`pin_lifetime_probe` 三份**已注册**为常驻回归，
+但各自还有一条断言是红的 —— 对应《AISnap-修复计划-2026-10-23.md》里尚未落地的批次：
+
+| 探针 | 红的断言 | 待修批次 |
+|---|---|---|
+| `resize_undo_probe` | §6 `.scale` 撤销在下限处过冲 | 批次 3 / P1-1 |
+| `text_undo_probe` | §1 创建态首编 ⌘Z 留下隐形空对象 | 批次 3 / P1-2 |
+| `pin_lifetime_probe` | §1 关闭后窗口仍被 `NSApp.windows` 留住 | 批次 4 / P1-6 |
+
+红灯本身就在盯那个行为，等修复落地那一刻它会**自己转绿**。但清单必须同步清理 ——
+`run_all.sh` 在探针意外转绿时会报错并要求从 `EXPECTED_FAIL` 删掉对应条目，
+免得「已知红灯」变成吞掉回归的遮羞布。
 
 `legacy/` 是更早期的一次性验证脚本（自带实现、不依赖仓库源码），保留作历史记录，
 不参与 `run_all.sh`。

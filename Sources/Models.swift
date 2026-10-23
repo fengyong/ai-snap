@@ -437,10 +437,15 @@ enum UndoAction {
     case rotate(colorKey: UInt32, angle: CGFloat)
     /// 缩放了对象
     case scale(colorKey: UInt32, factor: CGFloat)
-    /// 用边/角手柄调整了矩形族形状的宽高（撤销 = 还原旧尺寸）。
+    /// 用边/角手柄调整了矩形族形状的宽高（撤销 = 还原旧尺寸**与旧位置**）。
     /// 与 `.scale`（等比、按倍率）分开：手柄调整是**单维度**的，倍率表达不了
     /// 「只改宽不改高」。
-    case resize(colorKey: UInt32, oldSize: CGSize, newSize: CGSize)
+    ///
+    /// **必须同时记中心**：手柄调整在改尺寸的同时**也会移动中心**（锚点模型：
+    /// 新中心 = 新包围盒中心，对边/对角固定不动）。只记尺寸的话，撤销后尺寸回来了、
+    /// 位置还留在拖拽后的地方，对象"跳"了一格 —— 撤销看起来只做了一半。
+    case resize(colorKey: UInt32, oldSize: CGSize, newSize: CGSize,
+                oldCenter: CGPoint, newCenter: CGPoint)
     /// 改了文字标注的内容（撤销 = 改回 previous）
     case editText(colorKey: UInt32, previous: String)
     /// 改了选中对象的样式（颜色 / 线宽）。同时带新旧值：撤销取旧、重做取新。
