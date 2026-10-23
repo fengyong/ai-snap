@@ -60,11 +60,17 @@ extension AnnotationView {
                 redoStack.append(.scale(colorKey: colorKey, factor: factor))
             }
 
-        case .resize(let colorKey, let oldSize, let newSize):
+        case .resize(let colorKey, let oldSize, let newSize,
+                     let oldCenter, let newCenter):
             if let obj = objects[colorKey] as? RectResizable {
                 obj.setSize(width: oldSize.width, height: oldSize.height)
+                // 中心也要回去：手柄调整同时改了尺寸与位置（锚点模型）。
+                // 相对**当前**中心写，与 mouseDragged 的写法保持一致。
+                obj.move(by: CGVector(dx: oldCenter.x - obj.center.x,
+                                      dy: oldCenter.y - obj.center.y))
                 updateAttachedArrows(forParent: colorKey)
-                redoStack.append(.resize(colorKey: colorKey, oldSize: oldSize, newSize: newSize))
+                redoStack.append(.resize(colorKey: colorKey, oldSize: oldSize, newSize: newSize,
+                                         oldCenter: oldCenter, newCenter: newCenter))
             }
 
         case .editText(let colorKey, let previous):
@@ -144,11 +150,16 @@ extension AnnotationView {
                 undoStack.append(.scale(colorKey: colorKey, factor: factor))
             }
 
-        case .resize(let colorKey, let oldSize, let newSize):
+        case .resize(let colorKey, let oldSize, let newSize,
+                     let oldCenter, let newCenter):
             if let obj = objects[colorKey] as? RectResizable {
                 obj.setSize(width: newSize.width, height: newSize.height)
+                // 中心同样要重做回去（与 undo 对称）
+                obj.move(by: CGVector(dx: newCenter.x - obj.center.x,
+                                      dy: newCenter.y - obj.center.y))
                 updateAttachedArrows(forParent: colorKey)
-                undoStack.append(.resize(colorKey: colorKey, oldSize: oldSize, newSize: newSize))
+                undoStack.append(.resize(colorKey: colorKey, oldSize: oldSize, newSize: newSize,
+                                         oldCenter: oldCenter, newCenter: newCenter))
             }
 
         case .editText(let colorKey, let previous):

@@ -8,14 +8,14 @@
 // 这里把三条变换路径的撤销都钉一遍：resize（会移动中心）、scale（乘性可逆）、
 // move（带附着还原）。
 //
-// ⚠️ **本探针当前是失败的**（断言的是「应该怎样」，代码还没改）。
-//    它**故意没有**注册进 probes/run_all.sh —— 注册进去会让整套回归变红。
-//    修好之后（UndoAction.resize 带上中心、scale 记录实际生效的倍率、
-//    .editText 撤销时清掉空文字对象）再把下面这行加回 run_all.sh：
+// 状态（2026-10-23 批次 1 后）：**已注册**为常驻回归，但仍是「已知红灯」——
+// 21 项里只有 §6 还在红（`.scale` 撤销下限过冲 = 批次 3 / P1-1）。
+// 批次 1 已修好的部分（.resize 撤销还原中心）现在是绿的，由本探针守住。
 //
 //      run_probe resize_undo_probe    "${ALL_SOURCES[@]}"
-//      run_probe text_undo_probe      "${ALL_SOURCES[@]}"
-//      run_probe resize_drag_probe    "${ALL_SOURCES[@]}"
+//
+// §6 转绿后，run_all.sh 会提示「已转绿，请从 EXPECTED_FAIL 移除」——
+// 那时把 run_all.sh 里对应条目删掉即可。
 import Cocoa
 
 setbuf(stdout, nil)

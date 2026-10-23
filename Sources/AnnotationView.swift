@@ -771,8 +771,17 @@ class AnnotationView: NSView {
             let rotatedLocal = rotatePoint(localCenter, around: .zero, by: startRotation)
             let worldCenter = CGPoint(x: startCenter.x + rotatedLocal.x,
                                       y: startCenter.y + rotatedLocal.y)
-            obj.move(by: CGVector(dx: worldCenter.x - startCenter.x,
-                                  dy: worldCenter.y - startCenter.y))
+            // 写入中心必须相对**当前**中心，不能相对 startCenter。
+            //
+            // `move(by:)` 是相对增量（center += delta），而 `worldCenter` 是**绝对**目标。
+            // 若拿「worldCenter − startCenter」当增量，第 1 个事件碰巧正确
+            // （当前中心 == startCenter），第 2 个事件起每次都把「相对起始中心的全量位移」
+            // 再加一遍 → 中心按 5·k(k+1)/2 二次膨胀：拖 30 个事件后中心跑到 2625，
+            // 对象直接飞出画布，「对边锚定不动」的契约彻底失效。
+            //
+            // 相对**当前**中心写，每个事件都收敛到同一个绝对目标，与事件数无关。
+            obj.move(by: CGVector(dx: worldCenter.x - obj.center.x,
+                                  dy: worldCenter.y - obj.center.y))
             hitLayerDirty = true
             needsDisplay = true
 
@@ -920,12 +929,16 @@ class AnnotationView: NSView {
             }
             scaleStartFactor = 1
 
-        case .resizing(let colorKey, _, _, let startWidth, let startHeight, _):
+        case .resizing(let colorKey, _, let startCenter, let startWidth, let startHeight, _):
             if let obj = objects[colorKey] as? RectResizable,
                abs(obj.width - startWidth) > 0.01 || abs(obj.height - startHeight) > 0.01 {
+                // 尺寸**与中心**一起记：手柄调整在改尺寸的同时也移动了中心
+                // （锚点模型：新中心 = 新包围盒中心），只记尺寸会让撤销"只做一半"。
                 undoStack.append(.resize(colorKey: colorKey,
                                          oldSize: CGSize(width: startWidth, height: startHeight),
-                                         newSize: CGSize(width: obj.width, height: obj.height)))
+                                         newSize: CGSize(width: obj.width, height: obj.height),
+                                         oldCenter: startCenter,
+                                         newCenter: obj.center))
                 redoStack.removeAll()
                 updateAttachedArrows(forParent: colorKey)
                 hitLayerDirty = true
