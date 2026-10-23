@@ -356,7 +356,7 @@ final class Preferences {
 
     // MARK: - 选区吸附
 
-    /// 拖拽/方向键微调选区时，四边在 8pt 内自动贴到窗口边（见 SelectionSnapping）。
+    /// 拖拽选区时，四边在 8pt 内自动贴到窗口边（见 SelectionSnapping）。
     var snapSelectionToWindows: Bool {
         get {
             defaults.object(forKey: Key.snapSelectionToWindows.rawValue) as? Bool

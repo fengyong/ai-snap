@@ -314,7 +314,10 @@ do {
     check("画布上有东西 → 有未送出的改动", v.hasUnsavedAnnotations)
 
     _ = v.compositeImage()
-    check("导出（保存/复制/贴图都会走这里）之后不再提醒", !v.hasUnsavedAnnotations)
+    check("只合成、还没写成功 → 仍算未送出（不提前清标记）", v.hasUnsavedAnnotations)
+
+    v.markContentExported()   // 各出口在真正写成功之后调它
+    check("真正写成功之后不再提醒", !v.hasUnsavedAnnotations)
 
     v.objects[key]?.move(by: CGVector(dx: 40, dy: 0))
     check("导出后又改动了 → 重新提醒", v.hasUnsavedAnnotations)
