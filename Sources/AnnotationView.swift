@@ -168,7 +168,12 @@ class AnnotationView: NSView {
         return contentFingerprint != exportedFingerprint
     }
 
-    /// 标记"当前内容已经被送出去了"（保存 / 复制 / 贴图都会走到 compositeImage）
+    /// 标记"当前内容已经被送出去了"。
+    ///
+    /// **必须由真正写成功的那个出口调用**（保存写完、剪贴板写入返回 true、贴图创建成功），
+    /// 不能在 `compositeImage()` 里调：合成只是"准备输出"，编码失败、写盘失败或
+    /// 剪贴板写入失败时内容并没有送出去，提前清掉标记会让关窗不再确认 ——
+    /// 用户以为存住了，实际丢的是整次标注。
     func markContentExported() {
         exportedFingerprint = contentFingerprint
     }
@@ -1720,10 +1725,10 @@ class AnnotationView: NSView {
     }
 
     /// 生成最终合成图片（底图 + 所有标注对象）
+    ///
+    /// 这里**不**标记"已送出"：合成只是准备输出，编码 / 写盘 / 剪贴板都可能失败。
+    /// 标记由各出口在真正写成功之后自己做（见 `markContentExported()`）。
     func compositeImage() -> NSImage {
-        // 保存 / 复制 / 贴图都会走这里 —— 内容既然已经送出去，之后关窗就不必再提醒
-        markContentExported()
-
         let pointSize = baseImage.size
         let pixels = exportPixelSize
         // 两个方向各算一次、分别施加。

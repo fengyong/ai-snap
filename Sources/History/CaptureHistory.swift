@@ -154,27 +154,79 @@ final class CaptureHistory {
         }
     }
 
-    func remove(_ entry: Entry, completion: (() -> Void)? = nil) {
+    /// 删除一条历史。`completion` 带回文件是否**真的**删掉了。
+    ///
+    /// 以前用 `try?` 吞掉删除错误、然后照样清内存索引 —— 列表上看着没了，
+    /// 磁盘上的敏感截图还在。"清空历史"成了假承诺，这一项不能静默。
+    func remove(_ entry: Entry, completion: ((Bool) -> Void)? = nil) {
         queue.async { [weak self] in
             guard let self = self else { return }
-            try? FileManager.default.removeItem(
-                at: self.directory.appendingPathComponent(entry.fileName))
+            let url = self.directory.appendingPathComponent(entry.fileName)
+            var removed = true
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                // 文件本来就不在了 = 目标已达成；确实还在才算失败
+                if FileManager.default.fileExists(atPath: url.path) {
+                    removed = false
+                    NSLog("[AISnap] 删除历史文件失败：%@", error.localizedDescription)
+                }
+            }
+            guard removed else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
             self.lock.lock()
             self.index.removeAll { $0.id == entry.id }
             self.lock.unlock()
             self.saveIndex()
-            if let completion = completion { DispatchQueue.main.async(execute: completion) }
+            if let completion = completion { DispatchQueue.main.async { completion(true) } }
         }
     }
 
-    func removeAll(completion: (() -> Void)? = nil) {
+    /// 清空历史。`completion` 带回**没能删掉**的文件数（0 表示真的清空了）。
+    func removeAll(completion: ((Int) -> Void)? = nil) {
         queue.async { [weak self] in
             guard let self = self else { return }
-            try? FileManager.default.removeItem(at: self.directory)
+            let manager = FileManager.default
             self.lock.lock()
-            self.index = []
+            let snapshot = self.index
             self.lock.unlock()
-            if let completion = completion { DispatchQueue.main.async(execute: completion) }
+
+            var failed = 0
+            // 删除目标 = 索引里的文件 + 目录里残留的 png。
+            // 索引写盘失败会留下孤儿文件，而以前是整目录删除 —— 只按索引删会让它们活下来。
+            var targets = Set(snapshot.map {
+                self.directory.appendingPathComponent($0.fileName)
+            })
+            if let files = try? manager.contentsOfDirectory(
+                at: self.directory, includingPropertiesForKeys: nil) {
+                for file in files where file.pathExtension.lowercased() == "png" {
+                    targets.insert(file)
+                }
+            }
+
+            for url in targets {
+                do {
+                    try manager.removeItem(at: url)
+                } catch {
+                    if manager.fileExists(atPath: url.path) {
+                        failed += 1
+                        NSLog("[AISnap] 清空历史时删除失败：%@", error.localizedDescription)
+                    }
+                }
+            }
+
+            // 索引只保留"确实还在磁盘上"的条目：列表空了就必须真的空；
+            // 删不掉的留在列表里让用户看见，可以再试一次。
+            self.lock.lock()
+            self.index = self.index.filter {
+                manager.fileExists(
+                    atPath: self.directory.appendingPathComponent($0.fileName).path)
+            }
+            self.lock.unlock()
+            self.saveIndex()
+            DispatchQueue.main.async { completion?(failed) }
         }
     }
 

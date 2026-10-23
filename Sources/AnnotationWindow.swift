@@ -33,6 +33,14 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     /// OCR 结果面板（识别完弹出来让用户挑要哪几段）
     private var ocrResultWindow: OCRResultWindow?
 
+    /// OCR 任务代号：每发起一次识别就自增，回调带回的代号对不上就整条丢弃。
+    /// 没有它，先发起的慢任务后返回会把新图的结果盖掉。
+    private var ocrGeneration = 0
+    /// 是否有识别正在跑：按钮置灰，重复点击也不再并发第二个任务。
+    private var ocrInFlight = false
+    /// 工具栏上的 OCR 按钮：用来表达"已经收到、正在处理"。
+    private var ocrButton: NSButton?
+
     /// 工具栏挂在画布上方还是下方。
     ///
     /// 默认在下方（`origin.y = 选区底边 − 工具栏高度`）。但选区贴屏幕最底部时
@@ -63,6 +71,9 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     var onClose: (() -> Void)?
 
     override func close() {
+        // 关窗时还在跑的识别不许把结果弹回来
+        invalidateOCRTasks()
+
         // OCR 结果面板是独立窗口，不跟着关就会孤零零留在屏幕上
         ocrResultWindow?.close()
         ocrResultWindow = nil
@@ -95,9 +106,10 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         alert.messageText = "放弃这张截图？"
         alert.informativeText = "图上的标注还没有保存或复制，关闭会一起丢掉。"
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "放弃")
-        alert.addButton(withTitle: "取消")
-        return alert.runModal() == .alertFirstButtonReturn
+        // 顺序即默认键：安全项在前，回车是"继续编辑"；丢弃必须明确点一下。
+        alert.addButton(withTitle: "继续编辑")
+        alert.addButton(withTitle: "放弃修改")
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     /// 标题栏的关闭按钮（⌘W 同理）走这里。
@@ -679,9 +691,10 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         // 不是"把图送出去"，放在一起会让人以为点了就等于导出图片。
         baseY = openGroup("识别", labelWidth: 76)
         let ocrBtn = makeToolbarButton(
-            title: "OCR", tooltip: "识别截图里的文字（本地离线），结果复制到剪贴板",
+            title: "OCR", tooltip: "识别截图里的文字（本地离线），结果先显示在面板里，选好再复制",
             at: cursor.place(width: ToolbarMetrics.buttonWidth("OCR"), gapAfter: 6),
             y: baseY + 12, tag: 500, action: #selector(runOCR))
+        ocrButton = ocrBtn
         toolbar.addSubview(ocrBtn)
         cursor.endGroup()
 
@@ -949,8 +962,10 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     // MARK: - 由 AnnotationView 的键盘处理调用
 
     /// Enter：复制到剪贴板并关闭标注窗口（Snipaste 的一步到位行为）。
+    ///
+    /// **复制成功才关窗**：写剪贴板失败时关掉窗口等于把图丢了，用户只能重新截。
     func copyAndClose() {
-        copyImage()
+        guard copyImage() else { return }
         close()
     }
 
@@ -960,6 +975,8 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     /// 标注窗口再开着就重复占地方了。
     @objc func pinImage() {
         PinManager.shared.pin(annotationView.compositeImage())
+        // 贴图已经显示在屏幕上：内容是送出去了，关窗不必再确认
+        annotationView.markContentExported()
         close()
     }
 
@@ -970,15 +987,25 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
     ///
     /// 识别用的是**原始截图**，与已经画上去的标注无关（涂掉的文字照样能认出来）。
     @objc private func runOCR() {
+        guard !ocrInFlight else { return }   // 识别中再点：不并发第二个任务
         guard let image = annotationView.baseCGImage else {
             flashHUD("没有可识别的图像")
             return
         }
+        ocrInFlight = true
+        ocrButton?.isEnabled = false
+        ocrGeneration += 1
+        let generation = ocrGeneration
         flashHUD("正在识别文字…")
 
         let canvasSize = annotationView.baseImage.size
         TextRecognizer.recognize(in: image, canvasSize: canvasSize) { [weak self] result in
             guard let self = self else { return }
+            // 过期任务（换了图、关了窗、或又发起了一次识别）：整条丢弃 —— 既不出面板，
+            // 也不动上一次的识别框。没有这一步，慢任务后返回会把新结果盖掉。
+            guard generation == self.ocrGeneration else { return }
+            self.ocrInFlight = false
+            self.ocrButton?.isEnabled = true
             // 「引擎失败」与「图里没有文字」必须给出不同的提示：
             // 前者用户该重试或查环境，后者用户该换一张图 —— 混在一起就成了误导。
             if case .failure(let error) = result {
@@ -1021,6 +1048,16 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         panel.makeKeyAndOrderFront(nil)
         annotationView.showOCRHighlights(items.map(\.box))
         flashHUD("已识别 \(items.count) 段文字　可在结果面板里选择")
+    }
+
+    /// 作废正在跑和已展示的 OCR 任务：关窗、换图之后旧结果不许再冒出来。
+    ///
+    /// 只增代号 + 复位忙态：后台的 `VNRecognizeTextRequest` 不中断（Vision 没给取消入口），
+    /// 但它的回调会因为代号对不上而整条丢弃。
+    private func invalidateOCRTasks() {
+        ocrGeneration += 1
+        ocrInFlight = false
+        ocrButton?.isEnabled = true
     }
 
     /// Tab / ⇧Tab：按工具栏顺序循环切换绘图工具。
@@ -1093,6 +1130,8 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
             }
             do {
                 try data.write(to: url)
+                // 写成功了才算送出：失败时保留未保存状态，关窗仍会确认
+                self.annotationView.markContentExported()
                 self.flashHUD("已保存")
             } catch {
                 // 以前是 try? 静默吞掉 —— 磁盘满 / 无权限时用户完全不知道没存上
@@ -1101,31 +1140,46 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         }
     }
 
-    @objc func copyImage() {
+    /// 把图片写进剪贴板。返回是否**真的**写成功 —— Enter 的"复制并关闭"靠它决定能不能关窗。
+    @discardableResult
+    @objc func copyImage() -> Bool {
         // ⌘C 挂在本窗口的主菜单上（应用级 key equivalent），所以焦点在 OCR 结果面板里
         // 按 ⌘C 也会走到这里。那时用户的意图显然是"复制选中的文字"而不是"复制整张图"，
         // 这里按 key window 分流 —— 否则在面板里选了一段字按 ⌘C，剪贴板里进的是图片。
         if let ocr = ocrResultWindow, ocr.isKeyWindow {
-            guard let text = ocr.copySelectionOrAllToPasteboard() else { NSSound.beep(); return }
+            guard let text = ocr.copySelectionOrAllToPasteboard() else {
+                NSSound.beep()
+                return false
+            }
             let selected = ocr.selectedText != nil
             flashHUD(selected ? "已复制选中文字（\(text.count) 字）"
                               : "已复制全部识别结果（\(text.count) 字）")
-            return
+            return true
         }
 
         let image = annotationView.compositeImage()
-        let pb = NSPasteboard.general
-        pb.clearContents()
 
         // 同时写入「图片内容」与「图片文件」：
         //   - 图片内容 → 可直接粘贴到聊天窗口 / 文档
         //   - 图片文件 → 可在访达里直接 ⌘V 存成 .png
+        // 先备好 items 再清剪贴板：清空是不可逆的，能少一次"清完才发现写不进去"。
         var items: [NSPasteboardWriting] = [image]
         if let url = writeTemporaryPNG(image) {
             items.append(url as NSURL)
         }
-        pb.writeObjects(items)
+
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        // 返回值以前被丢掉 —— 写失败时照样闪「已复制」，用户去粘贴才发现是空的，
+        // 而那时原来的剪贴板内容已经被我们清掉了。
+        guard pb.writeObjects(items) else {
+            NSSound.beep()
+            flashHUD("未能写入剪贴板，截图和标注仍在")
+            return false
+        }
+        annotationView.markContentExported()
         flashHUD("已复制")
+        return true
     }
 
     // MARK: - 视觉反馈
@@ -1378,7 +1432,8 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         - 贴图：把当前画面钉在屏幕上（F3），可拖动、滚轮缩放、双击关闭
 
         【文字识别（OCR）】
-        - 点「OCR」识别截图里的文字，结果按阅读顺序拼好复制到剪贴板
+        - 点「OCR」识别截图里的文字：结果先按阅读顺序列在面板里，选好片段再复制
+          （识别期间按钮会变灰，重复点击不会开第二个任务）
         - 识别到的地方会在画布上框出来，按 Esc 清除
         - 完全本地离线（系统自带 Vision），不需要联网、不需要账号
         - 识别的是原始截图，与已经画上去的标注无关

@@ -207,8 +207,8 @@ final class SettingsWindowController: NSWindowController {
         root.addArrangedSubview(snapToWindowsBox)
 
         let selectionHint = NSTextField(wrappingLabelWithString:
-            "拖拽选区或用方向键微调时，选区四边会自动贴到附近窗口的边框上，"
-            + "方便整窗截取；被贴住的窗口会高亮描边。想框歪随时可以 —— 只在 8 点内生效。")
+            "拖拽选区时，选区四边会自动贴到附近窗口的边框上，方便整窗截取；"
+            + "被贴住的窗口会高亮描边。想框歪随时可以 —— 只在 8 点内生效。")
         selectionHint.font = NSFont.systemFont(ofSize: 11)
         selectionHint.textColor = .secondaryLabelColor
         selectionHint.preferredMaxLayoutWidth = 420

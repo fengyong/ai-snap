@@ -241,8 +241,15 @@ final class HistoryWindow: NSWindow {
 
     @objc private func deleteRow(_ sender: NSButton) {
         guard let entry = entry(for: sender) else { return }
-        history.remove(entry) { [weak self] in
-            self?.reload()
+        history.remove(entry) { [weak self] removed in
+            guard let self = self else { return }
+            if !removed {
+                NSSound.beep()
+                self.presentCleanupFailure(
+                    "这张截图没能从磁盘上删掉，列表里仍然保留它。"
+                    + "可能是文件被其他程序占用，稍后再试一次。")
+            }
+            self.reload()
         }
     }
 
@@ -253,11 +260,29 @@ final class HistoryWindow: NSWindow {
         alert.informativeText = "这会删除历史里保存的全部截图（一共 \(history.entries().count) 张）。\n"
             + "已经保存到别处的文件不受影响。"
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "清空")
+        // 安全项在前：回车不执行清空，必须明确点"清空"。
         alert.addButton(withTitle: "取消")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        history.removeAll { [weak self] in
-            self?.reload()
+        alert.addButton(withTitle: "清空")
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        history.removeAll { [weak self] failed in
+            guard let self = self else { return }
+            if failed > 0 {
+                self.presentCleanupFailure(
+                    "还有 \(failed) 张没能删除，列表里会保留它们。"
+                    + "请稍后重试，或到访达里检查这些文件。")
+            }
+            self.reload()
         }
+    }
+
+    /// 清理失败必须说出来：列表看着空了而文件还在，是这类工具最不该有的假承诺。
+    private func presentCleanupFailure(_ text: String) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "有截图未删除"
+        alert.informativeText = text
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "好")
+        alert.runModal()
     }
 }
