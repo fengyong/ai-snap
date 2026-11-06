@@ -166,6 +166,8 @@ run_probe magnifier_probe        "${ALL_SOURCES[@]}"
 run_probe stitch_scroll_probe    Sources/ScrollCapture/ImageStitch.swift
 # 吸附优先：落笔 vs 移动的优先级（吸附指示的承诺必须兑现）
 run_probe snap_priority_probe    "${ALL_SOURCES[@]}"
+# 选区可调整态：松手后移动/缩放/重选/微调，双击/Enter 确认（Snipaste 两步语义）
+run_probe selection_adjust_probe "${ALL_SOURCES[@]}"
 # 聚光灯/矩形族边角手柄：单维调整 / 对边锚定 / Esc 还原 / 下限 / 等比回归
 run_probe resize_handle_probe    "${ALL_SOURCES[@]}"
 # 2026-10-23 批次 1 新增：
