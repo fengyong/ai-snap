@@ -484,11 +484,13 @@ class RegionSelectionView: NSView {
         case .dragging(let start):
             activeRect = snapped(rectFromPoints(start, p))
         case .moving(let start, let original):
-            // 移动暂不吸附（吸附接入见后续批次；dragging 的吸附是既有行为）
-            activeRect = clampedToScreen(moved(original, from: start, to: p))
+            // 移动也吸附窗口边（Snipaste 同款「磁性」手感）：先钳屏再吸附——
+            // 吸附目标都是屏内窗口，钳完的矩形才与它们处在同一几何关系里。
+            activeRect = snapped(clampedToScreen(moved(original, from: start, to: p)))
         case .resizing(let handle, let original):
-            activeRect = Self.resized(original, handle: handle, to: p,
-                                      minSide: Self.minimumSelectionSide, in: bounds)
+            // 缩放同样吸附：被拖边距窗口边 ≤8pt 时贴上去（SelectionSnapping 逐边决策）
+            activeRect = snapped(Self.resized(original, handle: handle, to: p,
+                                              minSide: Self.minimumSelectionSide, in: bounds))
         case .idle, .adjustable:
             break
         }
