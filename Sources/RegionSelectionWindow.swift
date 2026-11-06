@@ -718,7 +718,7 @@ class RegionSelectionView: NSView {
     /// 现在抽出来，好让尺寸标签也能拿它给出"太小了"的可见提示。
     static let minimumSelectionSide: CGFloat = 5
 
-    /// 确认选区（松手即确认的唯一路径；Esc 走 onCancel）
+    /// 确认选区（双击选区内部 / Enter 的唯一路径；Esc 走 onCancel）
     private func confirm(rect: NSRect) {
         state = .idle
         activeRect = nil
