@@ -1737,6 +1737,11 @@ final class TextShape: AnnotationObject {
     }
 
     func drawHitTest(in ctx: CGContext, color: NSColor) {
+        // 空文字**不画命中区**：它视觉上不存在，却占着一块命中区（实测 8×32，
+        // 外扩后 20×44pt），点上去会选中一片"什么都没有"。
+        // 空对象只在「放置 → 首次提交」的瞬态存在，正常路径都会被收掉；
+        // 这道防线杀掉的是整类问题（任何漏网路径留下的空壳都物理不可选中）。
+        guard !text.isEmpty else { return }
         ctx.saveGState()
         ctx.translateBy(x: center.x, y: center.y)
         ctx.rotate(by: rotation)

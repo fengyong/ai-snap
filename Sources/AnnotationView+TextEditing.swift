@@ -63,7 +63,13 @@ extension AnnotationView {
 
         if commit, !newText.isEmpty {
             shape.text = newText
-            if newText != originalText {
+            // 创建态首编（originalText 为空）**不单独记 .editText**：
+            // .add 的 undo/redo 以整个对象为粒度，而对象是引用类型 —— 撤销 .add
+            // 摘除的就是这个已带上文字的实例，重做装回时文字自动跟着回来。
+            // 若在这里单独记账，一次 ⌘Z 只回退文字、对象还占着命中区（隐形空壳），
+            // 且对象删除后 redo .editText 会静默空转、输入的文字永久丢失。
+            // 此时不记撤销也就没有 redoStack 可清（放置时已清空，编辑期间无人改它）。
+            if newText != originalText, !originalText.isEmpty {
                 undoStack.append(.editText(colorKey: key, previous: originalText))
                 redoStack.removeAll()
             }

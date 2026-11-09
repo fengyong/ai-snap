@@ -8,12 +8,11 @@
 // 要再按一次 ⌘Z 才彻底消失。而且空对象在 Layer B 上仍占一块命中区，
 // 点上去会选中一片"什么都没有"。
 //
-// 状态（2026-10-23）：**已注册**为常驻回归，但仍是「已知红灯」——
-// 10 项里 §1 还在红（批次 3 / P1-2：创建态首编的 ⌘Z 仍留下隐形空对象）。
+// 状态（2026-11-09）：全部转绿。P1-2 以「创建态首编不单独记 .editText」修复 ——
+// .add 凭实例引用带回已输入文字，undo/redo 对称；另加固 TextShape.drawHitTest
+// 对空文字不画命中区（空壳物理不可选中，杀掉整类问题）。
 //
 //      run_probe text_undo_probe      "${ALL_SOURCES[@]}"
-//
-// §1 转绿后，run_all.sh 会提示「已转绿，请从 EXPECTED_FAIL 移除」。
 import Cocoa
 
 setbuf(stdout, nil)
@@ -72,7 +71,10 @@ do {
     view.textEditingField?.stringValue = "Hello"
     view.endTextEditing(commit: true)
     check("提交后文字为 Hello", shape.text == "Hello", "\(shape.text)")
-    check("撤销栈：add + editText", describe(view.undoStack) == "add=1 editText=1 other=0",
+    // 创建态首编**不单独记 .editText**（2026-11-09 修复）：.add 凭实例引用带回
+    // 已输入的文字，undo/redo 天然对称；单独记账会留下「撤不掉的空壳」中间态。
+    check("撤销栈：仅 add（首编不单独记账）",
+          describe(view.undoStack) == "add=1 editText=0 other=0",
           describe(view.undoStack))
 
     view.performUndo()
@@ -84,6 +86,19 @@ do {
     view.performUndo()
     check("两次 ⌘Z 后撤销栈清空", view.undoStack.isEmpty,
           "stack=\(describe(view.undoStack))")
+}
+
+print("\n=== 1.5 重做往返：⌘Z 摘掉整个对象后 ⇧⌘Z 应带着文字回来 ===\n")
+do {
+    let (view, shape) = placeText()
+    view.textEditingField?.stringValue = "Hello"
+    view.endTextEditing(commit: true)
+    view.performUndo()
+    check("撤销后对象已摘除", view.objects.isEmpty, "objects=\(view.objects.count)")
+    view.performRedo()
+    check("重做后对象回来且文字仍在",
+          view.objects.count == 1 && shape.text == "Hello",
+          "objects=\(view.objects.count) text=\(shape.text)")
 }
 
 print("\n=== 2. 对照：空提交（什么都没输入）应当不留对象、也不留撤销记录 ===\n")
