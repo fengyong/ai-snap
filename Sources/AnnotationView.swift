@@ -706,9 +706,16 @@ class AnnotationView: NSView {
                 let box = obj.boundingBox
                 let minDim = min(box.width, box.height)
                 if minDim * factor > 0.5 || factor >= 1 {
-                    obj.scale(by: factor)
-                    scaleStartFactor *= factor
-                    state = .scaling(colorKey: colorKey, lastDistance: currentDist)
+                    // 钳制类缩放必须在这里**拒绝**而不是交给 scale 内部止损：
+                    // 撤销与 Esc 回退都按「累计倍率的倒数」还原，被钳制的那次
+                    // 请求若也累计进去，撤销就会过冲（200 → 夹到 4 → ⌘Z 得 400）。
+                    // 拒绝时既不缩放也不累计，也不推进 lastDistance ——
+                    // 下一个事件的倍率仍相对旧锚点计算，往回拖立刻恢复响应。
+                    if obj.canScale(by: factor) {
+                        obj.scale(by: factor)
+                        scaleStartFactor *= factor
+                        state = .scaling(colorKey: colorKey, lastDistance: currentDist)
+                    }
                 }
             }
 

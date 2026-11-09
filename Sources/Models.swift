@@ -605,6 +605,15 @@ extension RectResizable {
             ($0.handle, pointFromLocal($0.local))
         }
     }
+
+    /// 矩形族共用的缩放门控：宽、高任一维会被 `scaledExtent` 钳制（含已经小于
+    /// 下限的形状，此时 scale 本来就不动）就拒绝。放大永远放行。
+    func canScale(by factor: CGFloat) -> Bool {
+        let f = abs(factor)
+        guard f < 1 else { return true }
+        return Self.scaledExtent(width, by: f) == width * f
+            && Self.scaledExtent(height, by: f) == height * f
+    }
 }
 
 // MARK: - AnnotationObject Protocol
@@ -662,9 +671,27 @@ protocol AnnotationObject: AnyObject {
     func move(by delta: CGVector)
     func rotate(by angle: CGFloat)
     func scale(by factor: CGFloat)
+
+    /// 这次缩放是否会被 `scale(by:)` **原样**应用（不触发下限/上限钳制）。
+    ///
+    /// 必须列进协议本体：撤销与 Esc 回退都按「请求倍率的倒数」还原，只有
+    /// 「请求 == 生效」恒成立，`1/factor` 才精确。钳制发生在各形状 `scale`
+    /// 内部、不反映到累计倍率上 —— 200 → ×0.01 被夹到 4，撤销乘回 100
+    /// 得 400（过冲，resize_undo_probe §6 钉住的 bug）。
+    ///
+    /// 手势端在应用**之前**用本方法门控：拒绝时既不缩放、也不累计倍率，
+    /// 于是撤销记录里的每个 factor 都是真实生效过的。到达下限后继续拖
+    /// 不再生效 —— 与主流编辑器「缩到最小就缩不动」一致。
+    ///
+    /// 有钳制的形状各自覆写（判据 = 自己 scale 里那个钳制条件的镜像）；
+    /// 其余形状吃默认放行。
+    func canScale(by factor: CGFloat) -> Bool
 }
 
 extension AnnotationObject {
+    /// 默认：放行（无钳制的形状）。
+    func canScale(by factor: CGFloat) -> Bool { true }
+
     /// 默认：导出与屏幕所见一致
     func drawForExport(in ctx: CGContext) { draw(in: ctx) }
 
@@ -959,6 +986,16 @@ class Arrow: AnnotationObject {
         guard length >= Self.minimumExtent || abs(factor) >= 1 else { return }
         startPoint = newStart
         endPoint = newEnd
+    }
+
+    /// scale 的守卫是「拒绝」而不是钳制，语义本来就是「请求 == 生效」；
+    /// 这里只是把同一个判据暴露给手势端，让它在应用**之前**就能拒绝
+    ///（拒绝时不累计倍率，撤销的 1/factor 才精确）。
+    func canScale(by factor: CGFloat) -> Bool {
+        let f = abs(factor)
+        guard f < 1 else { return true }
+        let length = hypot(endPoint.x - startPoint.x, endPoint.y - startPoint.y)
+        return length * f >= Self.minimumExtent
     }
 }
 
@@ -1270,6 +1307,14 @@ class CircleShape: AnnotationObject, LineStyleSupporting {
         radiusX = Self.scaledExtent(radiusX * 2, by: f) / 2
         radiusY = Self.scaledExtent(radiusY * 2, by: f) / 2
     }
+
+    /// 与 scale 同口径：任一直径会被钳到下限（半径 2）就拒绝。
+    func canScale(by factor: CGFloat) -> Bool {
+        let f = abs(factor)
+        guard f < 1 else { return true }
+        return Self.scaledExtent(radiusX * 2, by: f) == radiusX * 2 * f
+            && Self.scaledExtent(radiusY * 2, by: f) == radiusY * 2 * f
+    }
 }
 
 // MARK: - StampObject
@@ -1438,6 +1483,14 @@ class StampObject: AnnotationObject {
     func scale(by factor: CGFloat) {
         size = Self.scaledExtent(size, by: abs(factor))
     }
+
+    /// 与 scale 同口径：边长会被钳到下限（含已经小于下限的贴纸，scale 不动它）
+    /// 就拒绝 —— 钳住时 undo 的 1/factor 会把它撑过头。
+    func canScale(by factor: CGFloat) -> Bool {
+        let f = abs(factor)
+        guard f < 1 else { return true }
+        return Self.scaledExtent(size, by: f) == size * f
+    }
 }
 
 // MARK: - StepBadge
@@ -1576,6 +1629,14 @@ class StepBadge: AnnotationObject {
 
     func scale(by factor: CGFloat) {
         radius = max(radius * abs(factor), 6)
+    }
+
+    /// StepBadge 的下限是 6（不是 scaledExtent 的 4），钳制条件与之镜像：
+    /// 缩小会跌破 6 就拒绝。放大（|factor| ≥ 1）永远放行。
+    func canScale(by factor: CGFloat) -> Bool {
+        let f = abs(factor)
+        guard f < 1 else { return true }
+        return radius * f >= 6
     }
 }
 
@@ -1748,6 +1809,13 @@ final class TextShape: AnnotationObject {
     /// 缩放作用在**字号**上 —— 文字的「大小」就是字号，改宽高没有意义
     func scale(by factor: CGFloat) {
         fontSize = min(max(fontSize * abs(factor), 8), 300)
+    }
+
+    /// 字号是双向钳制（8…300）：缩到出界（含放大越过 300）都拒绝，
+    /// 否则撤销的 1/factor 会把字号顶回钳制前的错误值。
+    func canScale(by factor: CGFloat) -> Bool {
+        let v = fontSize * abs(factor)
+        return v >= 8 && v <= 300
     }
 }
 
@@ -2012,6 +2080,17 @@ class FreehandShape: AnnotationObject {
                     y: anchor.y + (p.y - anchor.y) * f)
         }
     }
+
+    /// scale 的止损路径（extent×f < 4 时改用 target/extent 的部分缩放）
+    /// 也是钳制 —— 触发它就拒绝，撤销的 1/factor 才与实际一致。
+    func canScale(by factor: CGFloat) -> Bool {
+        guard !points.isEmpty else { return false }
+        let f = abs(factor)
+        guard f < 1 else { return true }
+        let extent = max(rawBounds.width, rawBounds.height)
+        guard extent > 0.01 else { return false }
+        return Self.scaledExtent(extent, by: f) == extent * f
+    }
 }
 
 // MARK: - MagnifierShape (放大镜)
@@ -2190,6 +2269,13 @@ class MagnifierShape: AnnotationObject {
         let f = abs(factor)
         // 与 CircleShape 同口径：按直径看下限
         radius = Self.scaledExtent(radius * 2, by: f) / 2
+    }
+
+    /// 与 scale 同口径：直径会被钳到下限（半径 2）就拒绝。
+    func canScale(by factor: CGFloat) -> Bool {
+        let f = abs(factor)
+        guard f < 1 else { return true }
+        return Self.scaledExtent(radius * 2, by: f) == radius * 2 * f
     }
 }
 

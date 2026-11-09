@@ -8,14 +8,11 @@
 // 这里把三条变换路径的撤销都钉一遍：resize（会移动中心）、scale（乘性可逆）、
 // move（带附着还原）。
 //
-// 状态（2026-10-23 批次 1 后）：**已注册**为常驻回归，但仍是「已知红灯」——
-// 21 项里只有 §6 还在红（`.scale` 撤销下限过冲 = 批次 3 / P1-1）。
-// 批次 1 已修好的部分（.resize 撤销还原中心）现在是绿的，由本探针守住。
+// 状态（2026-11-09）：全部转绿。批次 1 修好 .resize 撤销还原中心（§1-§3）；
+// P1-1（§6/§7）以「手势端 canScale 门控」修复 —— 触下限的请求在应用前被拒绝，
+// 「请求倍率 == 生效倍率」恒成立，撤销与 Esc 的 1/factor 精确。
 //
 //      run_probe resize_undo_probe    "${ALL_SOURCES[@]}"
-//
-// §6 转绿后，run_all.sh 会提示「已转绿，请从 EXPECTED_FAIL 移除」——
-// 那时把 run_all.sh 里对应条目删掉即可。
 import Cocoa
 
 setbuf(stdout, nil)
@@ -167,7 +164,7 @@ do {
           "center=\(spot.center) 期望 \(c0)")
 }
 
-print("\n=== 6. .scale 撤销在「缩到下限被夹住」时会过冲 ===\n")
+print("\n=== 6. .scale 触下限的请求在手势端被拒绝，撤销精确（P1-1 已修）===\n")
 do {
     // 单独造一个更大的聚光灯：Shift 缩放要求落点在 bbox 内，
     // 而要拿到足够小的倍率就得让「落点到中心的距离」相对初始距离足够小。
@@ -180,20 +177,55 @@ do {
         check("能取到聚光灯", false); exit(1)
     }
     view.keyDown(with: key(53))
-    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 402, y: 300)))
-    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 402, y: 300)))
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 400, y: 300)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 400, y: 300)))
     let w0 = spot.width
     check("前置：宽 200", abs(w0 - 200) < 0.01, "\(w0)")
+    // 撤销栈里此刻只有聚光灯创建时的 .add 记录 —— 本节的断言要拿它当基准，
+    // 不能中途 performUndo（那会把对象从画布摘掉，后续拖拽全变成画新形状）。
+    let stackBefore = view.undoStack.count
 
-    // Shift 缩放：落点距中心 102 → 1.02，倍率 0.01 → 宽被夹到下限 4
-    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 402, y: 300), flags: [.shift]))
+    // 6a. 一步到位的下探（倍率 0.0102，会被钳到下限）：手势端拒绝，尺寸不变，
+    //     也不产生撤销记录 —— 旧实现这里会夹到 4，撤销再过冲到 400。
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 400, y: 300), flags: [.shift]))
     view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 301.02, y: 300), flags: [.shift]))
     view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 301.02, y: 300), flags: [.shift]))
-    check("缩到下限 4", abs(spot.width - 4) < 0.01, "\(spot.width)")
+    check("触下限的请求被拒绝（保持原尺寸）", abs(spot.width - 200) < 0.01, "\(spot.width)")
+    check("被拒请求不进撤销栈",
+          view.undoStack.count == stackBefore,
+          "栈 \(view.undoStack.count) 条，期望 \(stackBefore)")
 
-    view.performUndo()
-    check("撤销后应还原到 200（实际会过冲到 400）",
-          abs(spot.width - w0) < 0.01, "w=\(spot.width) 期望 \(w0)")
+    // 6b. 渐进缩放到下限附近再撤销：0.5 生效（200→100），0.03 触限被拒（停在 100），
+    //     ⌘Z 按真实生效倍率精确还原 200（旧实现会按「含被拒请求的累计值」还原错）。
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 400, y: 300), flags: [.shift]))
+    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 350, y: 300), flags: [.shift]))
+    check("0.5 倍生效（200→100）", abs(spot.width - 100) < 0.01, "\(spot.width)")
+    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 301.5, y: 300), flags: [.shift]))
+    check("触下限的 0.03 被拒（停在 100）", abs(spot.width - 100) < 0.01, "\(spot.width)")
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 301.5, y: 300), flags: [.shift]))
+    view.performUndo()   // 只弹出 .scale 记录（.add 在栈底不受影响）
+    check("撤销精确还原 200", abs(spot.width - 200) < 0.01, "w=\(spot.width) 期望 200")
+}
+
+print("\n=== 7. Esc 中断缩放手势：同样按生效倍率精确回退（与 ⌘Z 同根）===\n")
+do {
+    let view = AnnotationView(image: blankCanvas(900, 600))
+    view.currentTool = .spotlight
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 200, y: 200)))
+    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 400, y: 400)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 400, y: 400)))
+    guard let spot = view.objects.values.first as? SpotlightShape else {
+        check("能取到聚光灯", false); exit(1)
+    }
+    view.keyDown(with: key(53))
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 400, y: 300)))
+    view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 400, y: 300)))
+
+    view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 400, y: 300), flags: [.shift]))
+    view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 350, y: 300), flags: [.shift]))
+    check("缩放进行中（200→100）", abs(spot.width - 100) < 0.01, "\(spot.width)")
+    view.keyDown(with: key(53))   // Esc：手势中断必须完整回退
+    check("Esc 后还原 200", abs(spot.width - 200) < 0.01, "w=\(spot.width) 期望 200")
 }
 
 print()

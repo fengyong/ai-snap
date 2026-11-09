@@ -27,7 +27,6 @@ FAILED_NAMES=()
 #
 # 格式：探针名=待修批次/问题
 EXPECTED_FAIL=(
-  "resize_undo_probe=批次 3 / P1-1：.scale 撤销在下限处过冲"
   "text_undo_probe=批次 3 / P1-2：首次文字编辑 ⌘Z 留下隐形空对象"
   "pin_lifetime_probe=批次 4 / P1-6：贴图窗口关闭后不释放"
 )
