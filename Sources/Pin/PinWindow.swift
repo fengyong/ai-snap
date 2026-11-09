@@ -30,7 +30,14 @@ final class PinWindow: NSPanel {
         // 拖动由 PinContentView → beginDrag/continueDrag 自己算（见下方「拖动」一节）。
         // **不要**再打开 isMovableByWindowBackground：两套拖动机制同时启用会互相干扰 ——
         // 系统那套会在拖动时把双击吞掉，滚轮缩放的锚点也会偏。
-        isReleasedWhenClosed = false
+        // **关闭即释放**（P1-6）：`isReleasedWhenClosed = false` 时，close() 之后
+        // NSApp.windows 仍**强引用**着窗口 —— 管理器 unregister 摘不掉这条链，
+        // 每关一张贴图就永久留下一个窗口对象，连着整幅 NSImage 与 alpha 掩码
+        // （Retina 全屏约 20MB，见 pin_lifetime_probe）。置 true 后 AppKit 在
+        // close() 里把它从窗口列表摘除并释放；顺序上必须先 unregister 再
+        // super.close()（本类 close() override 已经是这个顺序）。
+        // 探针 §2/§4 的 10 次开关循环实测：true 下无崩溃、无累积。
+        isReleasedWhenClosed = true
         hasShadow = true
         isOpaque = false
         backgroundColor = .clear

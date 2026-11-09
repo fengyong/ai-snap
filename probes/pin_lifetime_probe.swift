@@ -17,13 +17,14 @@
 //
 // 编译：swiftc Sources/Pin/PinWindow.swift Sources/Pin/PinManager.swift probes/pin_lifetime_probe.swift
 //
-// 状态（2026-10-23）：**已注册**为常驻回归，但仍是「已知红灯」——
-// 6 项里 §1 还在红（批次 4 / P1-6：关闭后的贴图窗口仍被 NSApp.windows 留住）。
+// 状态（2026-11-09）：全部转绿。P1-6 以「PinWindow.isReleasedWhenClosed = true」修复 ——
+// NSApp.windows 对关闭后的窗口仍是强引用，unregister 摘不掉这条链；置 true 让
+// AppKit 在 close() 里摘除并释放（close() override 已保证先 unregister 再 super.close）。
+// 原 §3/§5 是「泄漏存在性」的旧行为记录，随修复翻转为不累积断言。
 //
 //      run_probe pin_lifetime_probe    Sources/Pin/PinWindow.swift Sources/Pin/PinManager.swift
 //
 // 注意：它只依赖 PinWindow + PinManager 两个文件，**不需要**整模块编译。
-// §1 转绿后，run_all.sh 会提示「已转绿，请从 EXPECTED_FAIL 移除」。
 import Cocoa
 
 setbuf(stdout, nil)
@@ -48,7 +49,7 @@ func makeImage(_ w: Int, _ h: Int) -> NSImage {
     return img
 }
 
-print("=== 1. 现状（isReleasedWhenClosed = false）：窗口是否留在 NSApp.windows ===\n")
+print("=== 1. 关闭后 NSApp.windows 不再持有窗口（P1-6 已修）===\n")
 do {
     _ = NSApplication.shared
     let baseline = NSApp.windows.count
@@ -56,12 +57,12 @@ do {
                         frame: NSRect(x: 100, y: 100, width: 400, height: 300))
     pin.orderFrontRegardless()
     pin.close()
-    check("close 后 NSApp.windows 不再含该窗口（当前实现做不到）",
+    check("close 后 NSApp.windows 回到 baseline（isReleasedWhenClosed = true）",
           NSApp.windows.count == baseline,
-          "baseline=\(baseline) → \(NSApp.windows.count)（仍被 AppKit 留着）")
+          "baseline=\(baseline) → \(NSApp.windows.count)")
 }
 
-print("\n=== 2. 修法（isReleasedWhenClosed = true）===\n")
+print("\n=== 2. 单张开关的等价形态（显式置 true，兜底语义不变）===\n")
 do {
     _ = NSApplication.shared
     let baseline = NSApp.windows.count
@@ -70,11 +71,11 @@ do {
     pin.isReleasedWhenClosed = true
     pin.orderFrontRegardless()
     pin.close()
-    check("改 true 后 NSApp.windows 回到 baseline", NSApp.windows.count == baseline,
+    check("显式置 true 后 NSApp.windows 回到 baseline", NSApp.windows.count == baseline,
           "baseline=\(baseline) → \(NSApp.windows.count)")
 }
 
-print("\n=== 3. 累积速率（现状）：10 次「贴图 → 关闭」===\n")
+print("\n=== 3. 累积速率：10 次「贴图 → 关闭」不累积 ===\n")
 do {
     _ = NSApplication.shared
     let baseline = NSApp.windows.count
@@ -85,28 +86,11 @@ do {
         pin.close()
     }
     let after = NSApp.windows.count
-    check("关闭后的窗口仍被留着（净增 10 = 泄漏）", after == baseline + 10,
-          "baseline=\(baseline) → \(after)（净增 \(after - baseline)）")
-    info("每个泄漏窗口持有", "整幅 NSImage + PinContentView.alphaMask（Retina 全屏约 20MB）")
-}
-
-print("\n=== 4. 累积速率（修法后）===\n")
-do {
-    _ = NSApplication.shared
-    let baseline = NSApp.windows.count
-    for _ in 0..<10 {
-        let pin = PinWindow(image: makeImage(400, 300),
-                            frame: NSRect(x: 100, y: 100, width: 400, height: 300))
-        pin.isReleasedWhenClosed = true
-        pin.orderFrontRegardless()
-        pin.close()
-    }
-    let after = NSApp.windows.count
-    check("修法后不累积（净增 0）", after == baseline,
+    check("10 次开关净增 0（旧实现净增 10 = 泄漏，每张约 20MB）", after == baseline,
           "baseline=\(baseline) → \(after)（净增 \(after - baseline)）")
 }
 
-print("\n=== 5. 走真实生产路径（PinManager.shared.pin）===\n")
+print("\n=== 4. 走真实生产路径（PinManager.shared.pin）同样不累积 ===\n")
 do {
     _ = NSApplication.shared
     let baseline = NSApp.windows.count
@@ -115,12 +99,11 @@ do {
         pin.close()
     }
     let after = NSApp.windows.count
-    check("PinManager 路径同样泄漏（unregister 只摘数组引用）",
-          after == baseline + 5,
+    check("PinManager 路径净增 0（unregister + close 即释放）",
+          after == baseline,
           "baseline=\(baseline) → \(after)（净增 \(after - baseline)）")
     check("PinManager.count 已归零（说明 unregister 确实执行了）",
           PinManager.shared.count == 0, "count=\(PinManager.shared.count)")
-    info("结论", "PinManager 侧干净，泄漏发生在 AppKit 的窗口列表这一侧")
 }
 
 print()

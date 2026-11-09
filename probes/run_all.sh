@@ -26,9 +26,7 @@ FAILED_NAMES=()
 # 所以脚本会在探针**意外转绿**时报错并要求清理 —— 清单自己会喊。
 #
 # 格式：探针名=待修批次/问题
-EXPECTED_FAIL=(
-  "pin_lifetime_probe=批次 4 / P1-6：贴图窗口关闭后不释放"
-)
+EXPECTED_FAIL=()
 TURNED_GREEN=()
 
 # 取某个探针的「已知红灯」说明；不在清单里则返回 1
