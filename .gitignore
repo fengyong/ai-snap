@@ -6,3 +6,6 @@ AISnap.app
 
 # macOS
 .DS_Store
+
+# IDE（Qoder 等）的本地目录：自动提交脚本与日志，不入库
+.qoder/
