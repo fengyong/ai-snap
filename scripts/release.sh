@@ -24,7 +24,8 @@
 #   ./scripts/release.sh 0.1.1 --no-install     不装到本机
 #   ./scripts/release.sh 0.1.1 --no-push        只到本地提交为止
 #
-# 发版前需要：gh 已登录且有 repo 权限（`gh auth status` 里活动账号是仓库所有者的）。
+# 发版身份：只以仓库所有者 fengyong 的 gh 凭据执行（脚本自动从 keyring 取其
+# token，不依赖 gh 的全局激活账号；keyring 里没有 fengyong 凭据时会明确报错）。
 #
 set -euo pipefail
 
@@ -119,9 +120,18 @@ info "分支：$BRANCH"
 [ "$BRANCH" = "master" ] || die "只在 master 上发版（当前：${BRANCH}）"
 command -v gh >/dev/null || die "找不到 gh（GitHub CLI）"
 if [ "$DO_PUSH" = "1" ]; then
-  gh auth status >/dev/null 2>&1 || die "gh 未登录，先跑 gh auth login"
+  # gh 的活动账号是**全局**的（可能停在别的账号上）。本仓库只以仓库所有者
+  # fengyong 的身份发版：从 keyring 直接取 fengyong 的 token 喂给 GH_TOKEN
+  # （gh 会优先用它），不碰全局激活状态 —— 这样发版产生的 release / push
+  # 事件就不会把其他账号与本仓库重新关联起来。
+  FENG_TOKEN="$(gh auth token -u fengyong 2>/dev/null || true)"
+  [ -n "$FENG_TOKEN" ] \
+    || die "keyring 里没有 fengyong 的 gh 凭据：跑一次 gh auth login 并登录 fengyong"
+  export GH_TOKEN="$FENG_TOKEN"
   GH_USER="$(gh api user --jq .login 2>/dev/null || echo '?')"
-  info "gh 活动账号：$GH_USER"
+  [ "$GH_USER" = "fengyong" ] \
+    || die "gh 实际身份是 $GH_USER，不是仓库所有者 fengyong（token 配置异常，中止发版）"
+  info "gh 发版身份：$GH_USER"
 fi
 git rev-parse "v$NEW_VERSION" >/dev/null 2>&1 && die "tag v$NEW_VERSION 已存在"
 info "tag v$NEW_VERSION 可用"
