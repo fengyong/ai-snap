@@ -5,7 +5,8 @@
 //   2. 选区内拖 = 整框移动（不漂移、不出屏、不误确认）；
 //   3. 手柄缩放：角调两维 / 边调一维、对边锚定、最小边长钳制不翻面；
 //   4. 选区外按下 = 旧框作废重选；单击（无拖拽）安静回 idle；
-//   5. 方向键微调（±1 / Shift ±10）、Enter 确认、双击确认、Esc 取消；
+//   5. 方向键微调（±1 / Shift ±10）、Enter 确认（主键盘 36 / 小键盘 76）、
+//      双击确认、Esc 取消；
 //   6. 移动/缩放同样吸附窗口边（8b69580），与 dragging 创建阶段同一通路。
 // 断言锚在 pendingAdjustmentRect（状态本身）与最终回调的矩形上 ——
 // 离屏环境里 needsDisplay 不可观测（实测设 true 读回 false），不拿它当断言。
@@ -73,11 +74,23 @@ check("Shift+右 +10px", view.pendingAdjustmentRect?.minX == 110)
 check("微调只动原点、尺寸不变",
       view.pendingAdjustmentRect?.width == 120 && view.pendingAdjustmentRect?.height == 180)
 
-print("\n=== 3. Enter 确认 ===\n")
+print("\n=== 3. Enter 确认（主键盘 36 / 小键盘 76）===\n")
 view.keyDown(with: key(36))
 check("adjustable 态清空", view.pendingAdjustmentRect == nil)
 check("回调拿到微调后的矩形", completed == NSRect(x: 110, y: 100, width: 120, height: 180),
       "\(String(describing: completed))")
+// 小键盘 Enter = keyCode 76（kVK_ANSI_KeypadEnter = 0x4C）。源码曾写成 52 —— 那个键码
+// 在 Carbon 键码表里未分配，真实按键产生不了它，于是小键盘 Enter 落到 default 静默返回、
+// 根本确认不了选区。这条断言就是盯住它不再退回去。
+completed = nil
+view.mouseDown(with: mouse(.leftMouseDown, CGPoint(x: 100, y: 100)))
+view.mouseDragged(with: mouse(.leftMouseDragged, CGPoint(x: 220, y: 280)))
+view.mouseUp(with: mouse(.leftMouseUp, CGPoint(x: 220, y: 280)))
+check("小键盘 Enter 前处于 adjustable 态", view.pendingAdjustmentRect != nil)
+view.keyDown(with: key(76))
+check("小键盘 Enter 也能确认", completed == NSRect(x: 100, y: 100, width: 120, height: 180),
+      "\(String(describing: completed))")
+check("小键盘 Enter 后 adjustable 清空", view.pendingAdjustmentRect == nil)
 
 print("\n=== 4. 双击确认（第一击进 adjustable、第二击即确认）===\n")
 completed = nil

@@ -573,7 +573,10 @@ class RegionSelectionView: NSView {
         case 124: rect.origin.x += step          // →
         case 125: rect.origin.y -= step          // ↓（AppKit y 轴向上，向下是减）
         case 126: rect.origin.y += step          // ↑
-        case 36, 52:                             // Return / 小键盘 Enter → 确认
+        // 小键盘 Enter 是 keyCode 76（kVK_ANSI_KeypadEnter = 0x4C）。这里曾写成 52 ——
+        // 那个键码在 Carbon 键码表里未分配，真实按键永远不会产生它，于是小键盘 Enter
+        // 确认不了选区（落到 default 分支静默返回）。同一语义在 AnnotationView 写的是 76。
+        case 36, 76:                             // Return / 小键盘 Enter → 确认
             confirm(rect: rect)
             return
         default:
