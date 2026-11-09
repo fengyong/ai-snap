@@ -176,6 +176,8 @@ run_probe resize_undo_probe      "${ALL_SOURCES[@]}"
 run_probe text_undo_probe        "${ALL_SOURCES[@]}"
 # 贴图窗口生命周期：close 之后窗口是否真被释放（只需这两个文件，不必整模块）
 run_probe pin_lifetime_probe     Sources/Pin/PinWindow.swift Sources/Pin/PinManager.swift
+# 标注窗 / OCR 面板生命周期：与贴图同根的 NSApp.windows 泄漏（2026-11-09 修复）
+run_probe window_lifetime_probe  "${ALL_SOURCES[@]}"
 # 2026-10-23 批次 2 新增：
 #   ocr_order_probe —— OCR 结果面板：显示顺序 ↔ 区间 ↔ 识别框必须同源
 #                     （Vision 返回顺序 ≠ 阅读顺序时，原来会高亮到别的段的框）

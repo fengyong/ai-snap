@@ -78,6 +78,14 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         ocrResultWindow?.close()
         ocrResultWindow = nil
 
+        // 应用主菜单的菜单项 target 是本窗口（撤销/重做/复制/保存/帮助）。
+        // 本窗口 isReleasedWhenClosed = true，close 之后随时可能释放 ——
+        // 菜单若还挂着，target 就是悬挂指针。清掉之后：
+        //  · 应用回到 .accessory（下面那行），菜单栏本来就不显示；
+        //  · 下一个标注窗打开时 setupMainMenu 会重建整套菜单。
+        //  ⌘W 不受影响：它走 NSWindow 内建的 performClose 等价键，不依赖主菜单。
+        NSApp.mainMenu = nil
+
         super.close()
         onClose?()
         onClose = nil
@@ -256,7 +264,12 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         )
 
         self.title = "AISnap - 标注"
-        self.isReleasedWhenClosed = false
+        // **关闭即释放**（与 PinWindow 同根，见那里）：false 时 NSApp.windows
+        // 在 close() 后仍强引用窗口 —— 每截一张图就永久留下一个标注窗对象，
+        // 连着整张画布、底图与全部标注对象（实测见 window_lifetime_probe）。
+        // 前提：close() 里必须把应用主菜单一并清掉 —— setupMainMenu 的菜单项
+        // target 是本窗口，窗口若被释放而菜单还在，点「撤销」就是悬挂 target。
+        self.isReleasedWhenClosed = true
         self.anchoredRect = anchored
         // 【必须】windowShouldClose 只有在 delegate 被设上之后才会被调用。
         // 少了这一行，`windowShouldClose` 只是类上一个没人调用的普通方法 ——

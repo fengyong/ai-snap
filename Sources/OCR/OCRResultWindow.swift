@@ -69,7 +69,11 @@ final class OCRResultWindow: NSPanel, NSTextViewDelegate, NSWindowDelegate {
                    defer: false)
 
         title = "识别结果"
-        isReleasedWhenClosed = false
+        // **关闭即释放**（与 PinWindow / AnnotationWindow 同根）：false 时
+        // NSApp.windows 在 close 后仍强引用面板，每识别一次留一个。
+        // 所有者（AnnotationWindow.ocrResultWindow）在 windowWillClose 回调里
+        // 置 nil，无其他强引用，安全。
+        isReleasedWhenClosed = true
         isFloatingPanel = true
         level = .floating
         // 面板必须能成为 key，否则文本框选不了字、⌘C 也送不到这儿
