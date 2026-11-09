@@ -15,6 +15,8 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
   于是选区确定只需裁一刀：不必等覆盖层消失，也不可能把覆盖层自己拍进去
 - **就地进入标注** - 标注画布精确压在刚框住的选区上，四周保持变暗，没有窗口跳变
 - **多屏选区** - 每块屏各一张冻结帧、各一个对等交互覆盖层；鼠标在哪块屏拖拽就在哪块屏选区，标注窗口就地锚定**那块屏**（倍率按该屏实测反推，副屏可与主屏倍率不同）
+- **选区窗口吸附** - 拖拽创建 / 松手后移动、缩放选区时，四边距窗口边 ≤8pt 自动贴上
+  （被贴的窗口描高亮框，"为什么选区自己动了"看得见）；可在偏好设置关闭
 
 ### 标注工具
 - **箭头** - 拖拽绘制，支持 8 种预设样式（实心、开放、虚线、菱形、圆端、点菱、**双向**、**双开放**）
@@ -140,6 +142,7 @@ macOS 原生截图标注工具，基于 Swift + AppKit 构建，支持丰富的�
 | `HotkeyManager.swift` / `LaunchAtLogin.swift` | 全局快捷键、开机启动 |
 | `Update/` | 更新检查（版本号比较、清单地址校验） |
 | `Export/ImageEncode.swift` | 导出编码（PNG / JPEG / HEIC，格式按扩展名分发） |
+| `ScrollCapture/ImageStitch.swift` | 滚动长截图拼接算法（**spike**：行投影 + 相关性，功能层未接入） |
 | `CountdownHUD.swift` | 延迟截图倒计时徽章 |
 
 **截图捕获的分工**
@@ -184,7 +187,8 @@ swift run AISnap
 Spotlight 默认不索引隐藏目录。（脚本还会顺手清掉旧版本遗留在仓库根目录的那份。）
 
 脚本会：校验版本号一致 → `swift build -c release` → 组装 .app（含 Info.plist 与图标）
-→ **ad-hoc 签名并校验** → 打 DMG → **挂载 DMG 复验包内应用与签名**。
+→ **签名（身份优先级链：Developer ID Application → 自签名代码签名证书 → ad-hoc 兜底，
+命中即停）并校验** → 打 DMG → **挂载 DMG 复验包内应用与签名**。
 
 `--install` 用 `rm -rf` **删除**旧版本，而不是移到废纸篓：废纸篓里堆积的旧包会被
 LaunchServices 一直保留注册，「打开方式」与 Spotlight 里就会冒出一串重复的 AISnap，
@@ -274,19 +278,21 @@ LaunchServices 一直保留注册，「打开方式」与 Spotlight 里就会冒
 
 - **开机自动启动**：偏好设置里打开这个开关，就不用每次重启后手动启动
   （它需要从「应用程序」里的 AISnap 使用，直接跑构建产物时该开关不可用）
-- **不要频繁重装**：当前是 ad-hoc 签名，授权对象包含二进制哈希 ——
-  重新编译安装后，屏幕录制权限可能需要再勾一次。装好后正常使用不受影响
+- **重装后权限一般不掉**：本机构建用的是 `make_signing_cert.sh` 生成的自签名证书
+  （build.sh 签名身份链自动命中），TCC 按「证书 + bundle ID」关联，重新编译/重装不再失效；
+  若某次构建显示 "ad-hoc" 签名，权限会随二进制变化失效，重跑一次证书脚本即可
 - **从旧版本升级后，快捷键可能还是旧值**：偏好一旦存过就不会被新的默认值覆盖。
   旧默认 `⇧⌘W` 会抢掉浏览器的「关闭窗口」，建议到「偏好设置 → 全局快捷键」重录，
   或用状态栏菜单的「恢复默认设置」一次性重置
-- **未做签名与公证**：本地打包的 DMG 没有 quarantine 标记，Gatekeeper 不会拦。
-  但**不要通过网络/网盘传给别人的 Mac** —— 那样会被拦下。
-  这一项（M5-1）需要 Apple Developer 账号，见 `AISnap-下一步开发计划.md`
+- **发给别人仍需 Developer ID + 公证**：自签名证书只保证**本机**权限稳定；
+  通过网络/网盘传给别人的 Mac 会被 Gatekeeper 拦。公证管线已接入
+  （`scripts/release.sh` 检测到 Developer ID 时自动 notarization + staple），
+  缺的只是 Apple Developer 账号（$99/年）本身
 
 ## 回归测试（离屏探针）
 
 ```bash
-./probes/run_all.sh              # 16 个探针，约 350 条断言
+./probes/run_all.sh              # 34 个探针（默认 33 个常驻 + 权限探针按需），600+ 条断言
 ./probes/run_all.sh redaction    # 只跑名字里含 redaction 的
 ```
 
@@ -296,7 +302,7 @@ LaunchServices 一直保留注册，「打开方式」与 Spotlight 里就会冒
 
 ## 代码统计
 
-约 9,100 行 Swift / 39 个源文件，**无第三方依赖**（截图用系统 ScreenCaptureKit、
+约 13,800 行 Swift / 47 个源文件，**无第三方依赖**（截图用系统 ScreenCaptureKit、
 快捷键用 Carbon、OCR 用 Vision、模糊用 CoreImage）。
-另有 16 个离屏探针（约 2,500 行）与 `scripts/make_icon.swift`（图标由代码生成，
+另有 34 个离屏探针（约 7,000 行）与 `scripts/make_icon.swift`（图标由代码生成，
 不存来路不明的二进制资源）。
