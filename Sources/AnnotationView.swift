@@ -178,6 +178,17 @@ class AnnotationView: NSView {
         exportedFingerprint = contentFingerprint
     }
 
+    /// 标记「**某一版**内容已被送出去」（后台导出用）。
+    ///
+    /// 导出挪后台之后（P2-8）：合成发生在主线程、编码写盘在后台 —— 后台完成时
+    /// 用户可能已经又改了画布。若那时直接调 `markContentExported()`，记下的是
+    /// **新内容的指纹**，等于用户最新一笔标注冒充了已送出、丢掉未保存保护。
+    /// 这里记**合成那一刻**的指纹：后台完成时画布没再变 → contentFingerprint
+    /// 与它相等 → 未保存状态正确清零；画布又变过 → 指纹对不上 → 仍然提示未保存。
+    func markContentExported(matching fingerprint: Int) {
+        exportedFingerprint = fingerprint
+    }
+
     // MARK: - 改选中对象的样式
 
     /// 对象当前的线宽；不支持线宽的对象（贴纸 / 文字 / 聚光灯）返回 nil

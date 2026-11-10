@@ -32,7 +32,8 @@ TURNED_GREEN=()
 # 取某个探针的「已知红灯」说明；不在清单里则返回 1
 expected_reason() {
   local name="$1" entry
-  for entry in "${EXPECTED_FAIL[@]}"; do
+  # bash 3.2 + set -u：空数组直接展开会报 unbound variable，用这个惯用法兜住
+  for entry in ${EXPECTED_FAIL[@]+"${EXPECTED_FAIL[@]}"}; do
     case "$entry" in
       "$name="*) echo "${entry#*=}"; return 0 ;;
     esac
@@ -174,6 +175,8 @@ run_probe resize_drag_probe      "${ALL_SOURCES[@]}"
 run_probe resize_undo_probe      "${ALL_SOURCES[@]}"
 # 文字标注撤销：创建态首编 ⌘Z 会不会留下隐形空对象
 run_probe text_undo_probe        "${ALL_SOURCES[@]}"
+# 导出路径成本拆解（P2-8 量化基准；对比探针，以退出码为准）
+run_probe export_perf_probe      "${ALL_SOURCES[@]}"
 # 贴图窗口生命周期：close 之后窗口是否真被释放（只需这两个文件，不必整模块）
 run_probe pin_lifetime_probe     Sources/Pin/PinWindow.swift Sources/Pin/PinManager.swift
 # 标注窗 / OCR 面板生命周期：与贴图同根的 NSApp.windows 泄漏（2026-11-09 修复）

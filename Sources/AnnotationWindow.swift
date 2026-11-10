@@ -1134,26 +1134,47 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
             guard response == .OK, let url = panel.url,
                   let self = self else { return }
 
+            // 合成必须在主线程（AppKit 绘制）；**编码与写盘挪后台**（P2-8）：
+            // PNG deflate 是导出路径的大头（export_perf_probe 实测 3200×2000：
+            // 编码 49ms vs 合成 2.5ms；Intel 老机上是数百毫秒），放主线程就是 ⌘S 冻 UI。
             let image = self.annotationView.compositeImage()
-            // 编码失败与写盘失败是两件事，提示也要分开。
-            // 这条以前是静默 return：用户点了「保存」什么都没发生，也不知道没存上。
-            guard let data = ImageEncode.data(from: image, url: url) else {
-                self.presentEncodeFailure(url: url)
-                return
-            }
-            do {
-                try data.write(to: url)
-                // 写成功了才算送出：失败时保留未保存状态，关窗仍会确认
-                self.annotationView.markContentExported()
-                self.flashHUD("已保存")
-            } catch {
-                // 以前是 try? 静默吞掉 —— 磁盘满 / 无权限时用户完全不知道没存上
-                self.presentWriteFailure(error, url: url)
+            // 快照「这一版」的指纹：后台完成时按它标记，而不是按当时的画布 ——
+            // 用户在编码期间又画了一笔的话，那一笔不冒充已保存（见 markContentExported(matching:)）。
+            let fingerprint = self.annotationView.contentFingerprint
+
+            DispatchQueue.global(qos: .userInitiated).async {
+                // 编码失败与写盘失败是两件事，提示也要分开。
+                // 这条以前是静默 return：用户点了「保存」什么都没发生，也不知道没存上。
+                guard let data = ImageEncode.data(from: image, url: url) else {
+                    DispatchQueue.main.async { self.presentEncodeFailure(url: url) }
+                    return
+                }
+                do {
+                    try data.write(to: url)
+                    // 写成功了才算送出：失败时保留未保存状态，关窗仍会确认。
+                    // 标记的是合成那一刻的版本（见上）。
+                    DispatchQueue.main.async {
+                        self.annotationView.markContentExported(matching: fingerprint)
+                        self.flashHUD("已保存")
+                    }
+                } catch {
+                    // 以前是 try? 静默吞掉 —— 磁盘满 / 无权限时用户完全不知道没存上
+                    DispatchQueue.main.async { self.presentWriteFailure(error, url: url) }
+                }
             }
         }
     }
 
     /// 把图片写进剪贴板。返回是否**真的**写成功 —— Enter 的"复制并关闭"靠它决定能不能关窗。
+    ///
+    /// **两段式**（P2-8）：旧版在主线程同步走「合成 → PNG 编码 → 写临时文件 →
+    /// writeObjects」，PNG deflate 是大头（export_perf_probe 实测 49ms/3200×2000，
+    /// Intel 老机数百毫秒），⌘C 冻 UI。现在：
+    ///   · 第一段（主线程，即刻）：写**图片内容**——主目标，粘贴到聊天/文档立即可用，
+    ///     写失败如实报错，返回值语义不变；
+    ///   · 第二段（后台 → 主线程）：PNG 编码 + 写临时文件就绪后，若剪贴板**仍是
+    ///     本次复制的内容**（changeCount 守卫），重写并补上文件 URL。
+    /// 降级路径与旧版一致：临时文件失败 → 只有图片内容（旧版同样如此）。
     @discardableResult
     @objc func copyImage() -> Bool {
         // ⌘C 挂在本窗口的主菜单上（应用级 key equivalent），所以焦点在 OCR 结果面板里
@@ -1172,27 +1193,40 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
         let image = annotationView.compositeImage()
 
-        // 同时写入「图片内容」与「图片文件」：
-        //   - 图片内容 → 可直接粘贴到聊天窗口 / 文档
-        //   - 图片文件 → 可在访达里直接 ⌘V 存成 .png
-        // 先备好 items 再清剪贴板：清空是不可逆的，能少一次"清完才发现写不进去"。
-        var items: [NSPasteboardWriting] = [image]
-        if let url = writeTemporaryPNG(image) {
-            items.append(url as NSURL)
-        }
-
+        // 第一段：只写图片内容。先清剪贴板再写（清空不可逆，但 writeObjects 失败时
+        // 我们会如实报错而不是闪「已复制」—— 返回值以前被丢掉过，就是这类假成功）。
         let pb = NSPasteboard.general
+        let changeCountBefore = pb.changeCount
         pb.clearContents()
-        // 返回值以前被丢掉 —— 写失败时照样闪「已复制」，用户去粘贴才发现是空的，
-        // 而那时原来的剪贴板内容已经被我们清掉了。
-        guard pb.writeObjects(items) else {
+        guard pb.writeObjects([image]) else {
             NSSound.beep()
             flashHUD("未能写入剪贴板，截图和标注仍在")
             return false
         }
         annotationView.markContentExported()
         flashHUD("已复制")
+
+        // 第二段：临时 PNG 就绪后补上「图片文件」目标（访达 ⌘V 存 .png 用）。
+        enqueueTemporaryPNG(image, changeCountAtCopy: changeCountBefore)
         return true
+    }
+
+    /// 第二段的后台管道。changeCount 守卫的含义：本窗口本次复制会把计数推到
+    /// `changeCountAtCopy + 1`，后台完成时若计数**正好**是这个值，说明期间没有
+    /// 任何人（包括我们自己）再写过剪贴板，可以安全重写补上文件 URL；若不是，
+    /// 用户已经复制了别的内容 —— 绝不覆盖，本轮就没有文件目标（与旧版
+    /// 「临时 PNG 写失败则只有图片内容」的降级等价）。
+    private func enqueueTemporaryPNG(_ image: NSImage, changeCountAtCopy: Int) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let url = self?.writeTemporaryPNG(image) else { return }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let pb = NSPasteboard.general
+                guard pb.changeCount == changeCountAtCopy + 1 else { return }
+                pb.clearContents()
+                pb.writeObjects([image, url as NSURL])
+            }
+        }
     }
 
     // MARK: - 视觉反馈
