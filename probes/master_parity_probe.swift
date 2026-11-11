@@ -1415,6 +1415,52 @@ do {
           abs(rp.perimeterParameter(for: onEdge) - 0.125) < 0.01,
           "0.125 → \(rp.perimeterParameter(for: onEdge))")
 
+    // 只 conform `CornerHandleShape` 的新形状：手柄与吸附点也不用自己写 ——
+    // 少一次「绕中心旋转」就会让手柄与本体错开（选中框歪在对象上），不崩不报错。
+    //
+    // ⚠️ 它还必须对**周长**表态（`RectPerimeterShape`）—— 周长三件套在
+    // `AnnotationObject` 本体里**没有默认实现**，不表态就编译不过。
+    // 这正是 O11/O14 一直在守的那条纪律：新形状的能力由编译器逼着说清楚。
+    final class CornerHandleOnlyShape: CornerHandleShape, RectPerimeterShape {
+        let id = UUID()
+        let hitTestColorKey: UInt32 = 995
+        var center = CGPoint(x: 100, y: 100)
+        var rotation: CGFloat = 0
+        var color: NSColor = .black
+        var boundingBox: CGRect = CGRect(x: 80, y: 90, width: 40, height: 20)
+        var handleBoxSize: CGSize { CGSize(width: 40, height: 20) }
+        var perimeterSize: CGSize { CGSize(width: 40, height: 20) }
+        func draw(in ctx: CGContext) {}
+        func drawHitTest(in ctx: CGContext, color: NSColor) {}
+        func move(by delta: CGVector) {}
+        func rotate(by angle: CGFloat) {}
+        func scale(by factor: CGFloat) {}
+        var stateFingerprint: Int { commonStateFingerprint() }
+    }
+    let ch = CornerHandleOnlyShape()
+    check("只 conform CornerHandleShape 的新形状：四个角作为手柄",
+          ch.selectionHandlePoints().count == 4, "\(ch.selectionHandlePoints().count)")
+    let corners = ch.selectionHandlePoints()
+    check("...：角在框上（未旋转时就是四个角点）",
+          corners.contains(CGPoint(x: 80, y: 90)) && corners.contains(CGPoint(x: 120, y: 110)),
+          "\(corners)")
+    check("...：吸附点是中心 + 四个角",
+          ch.snapPoints().count == 5 && ch.snapPoints().first?.type == .center,
+          "\(ch.snapPoints().count)")
+    // 手柄必须**跟着本体的旋转走** —— 少一次「绕中心旋转」就会让选中框歪在对象上，
+    // 而那不崩不报错，只是看着不对（这类样板抄漏的典型后果）。
+    ch.rotation = .pi / 4
+    let rotated = ch.selectionHandlePoints()
+    let expectedRotated = corners.map {
+        rotatePoint($0, around: ch.center, by: ch.rotation)
+    }
+    check("...：手柄跟着本体旋转走（45°）",
+          zip(rotated, expectedRotated).allSatisfy {
+              hypot($0.0.x - $0.1.x, $0.0.y - $0.1.y) < 0.01
+          },
+          "\(rotated)")
+    ch.rotation = 0
+
     // 只 conform `RotatableShape`（没有中心点）的形状：能旋转，但**不能**套用
     // 「中心点累加」那套平移 —— Arrow / FreehandShape 正是这一类
     //（移动的是两端点 / 整条笔迹）。

@@ -901,6 +901,43 @@ protocol RectPerimeterShape: AnnotationObject {
     var perimeterSize: CGSize { get }
 }
 
+/// 框角族：选中手柄是框的四个角，角同时是吸附点。
+///
+/// 抽出来的原因：序号与文字两个形状的「手柄 + 吸附点」是**逐字相同**的
+/// 实现，只有「框多大」这一项不同。抄漏一个不报错 —— 少一次
+/// 「绕中心旋转」就会让手柄与本体错开（选中框歪在对象上），不崩不报错。
+///
+/// 贴纸不在此列：它的手柄是**椭圆四象限点**（`quadrantPoints()`），
+/// 吸附点类型也是 `.quadrant`，语义不同 —— 那套保留原样。
+protocol CornerHandleShape: CenteredShape {
+    /// 手柄框在**未旋转**本地坐标系下的尺寸。
+    var handleBoxSize: CGSize { get }
+}
+
+extension CornerHandleShape {
+    /// 四个角（已绕中心旋转到画布坐标）。
+    func selectionHandlePoints() -> [CGPoint] {
+        let hw = handleBoxSize.width / 2, hh = handleBoxSize.height / 2
+        let locals = [
+            CGPoint(x: -hw, y: -hh), CGPoint(x: hw, y: -hh),
+            CGPoint(x: hw, y: hh), CGPoint(x: -hw, y: hh),
+        ]
+        return locals.map { local in
+            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
+                        around: center, by: rotation)
+        }
+    }
+
+    /// 中心 + 四个角。角是 `.corner` 吸附点（与矩形族同一口径）。
+    func snapPoints() -> [SnapPoint] {
+        var points = [SnapPoint(point: center, type: .center)]
+        for handle in selectionHandlePoints() {
+            points.append(SnapPoint(point: handle, type: .corner))
+        }
+        return points
+    }
+}
+
 extension RectPerimeterShape {
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
         RectPerimeter.nearestPoint(to: point, center: center,
@@ -1546,7 +1583,7 @@ class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, C
 
 // MARK: - StampObject
 
-class StampObject: AnnotationObject, CenteredShape, RectPerimeterShape {
+class StampObject: AnnotationObject, CenteredShape, RectPerimeterShape, CornerHandleShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1670,29 +1707,12 @@ class StampObject: AnnotationObject, CenteredShape, RectPerimeterShape {
 
     // MARK: Selection & Snap
 
-    func selectionHandlePoints() -> [CGPoint] {
-        let half = size / 2
-        let locals = [
-            CGPoint(x: -half, y: -half), CGPoint(x: half, y: -half),
-            CGPoint(x: half, y: half), CGPoint(x: -half, y: half),
-        ]
-        return locals.map { local in
-            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
-                        around: center, by: rotation)
-        }
-    }
-
-    func snapPoints() -> [SnapPoint] {
-        var points = [SnapPoint(point: center, type: .center)]
-        for handle in selectionHandlePoints() {
-            points.append(SnapPoint(point: handle, type: .corner))
-        }
-        return points
-    }
-
     /// 周长参数 (0...1) → 正方形包围盒周长上的世界坐标点
     /// 周长框（未旋转本地坐标）—— 周长三件套据此转发给 `RectPerimeter`。
     var perimeterSize: CGSize { CGSize(width: size, height: size) }
+
+    /// 手柄框（未旋转本地坐标）—— 四个角既是选中手柄也是吸附点。
+    var handleBoxSize: CGSize { CGSize(width: size, height: size) }
 
     // MARK: Transform
 
@@ -1717,7 +1737,7 @@ class StampObject: AnnotationObject, CenteredShape, RectPerimeterShape {
 ///
 /// 因为命中检测走 Layer B 的像素读取，本类只需正确实现 `drawHitTest`，
 /// 选中 / 移动 / 旋转 / 缩放 / 撤销重做会全部自动继承，无额外代码。
-class StepBadge: AnnotationObject, CenteredShape {
+class StepBadge: AnnotationObject, CenteredShape, CornerHandleShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1798,26 +1818,6 @@ class StepBadge: AnnotationObject, CenteredShape {
 
     // MARK: Selection & Snap
 
-    func selectionHandlePoints() -> [CGPoint] {
-        let half = radius
-        let locals = [
-            CGPoint(x: -half, y: -half), CGPoint(x: half, y: -half),
-            CGPoint(x: half, y: half), CGPoint(x: -half, y: half),
-        ]
-        return locals.map { local in
-            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
-                        around: center, by: rotation)
-        }
-    }
-
-    func snapPoints() -> [SnapPoint] {
-        var points = [SnapPoint(point: center, type: .center)]
-        for handle in selectionHandlePoints() {
-            points.append(SnapPoint(point: handle, type: .corner))
-        }
-        return points
-    }
-
     func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
         let localPt = rotatePoint(point, around: center, by: -rotation)
         let lx = localPt.x - center.x
@@ -1848,6 +1848,9 @@ class StepBadge: AnnotationObject, CenteredShape {
                                   phase: -.pi / 2)
     }
 
+    /// 手柄框（未旋转本地坐标）—— 四个角既是选中手柄也是吸附点。
+    var handleBoxSize: CGSize { CGSize(width: radius * 2, height: radius * 2) }
+
     // MARK: Transform
 
 
@@ -1872,7 +1875,7 @@ class StepBadge: AnnotationObject, CenteredShape {
 /// **尺寸由文字内容与字号推导，不单独存宽高**：改字号、改文字之后，
 /// 包围盒 / 命中区 / 选择手柄会自动跟着变。若额外存一份宽高，就得在
 /// 「改文字」「改字号」「缩放」三处都记得同步，漏一处就出 bug。
-final class TextShape: AnnotationObject, CenteredShape, RectPerimeterShape {
+final class TextShape: AnnotationObject, CenteredShape, RectPerimeterShape, CornerHandleShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1998,33 +2001,15 @@ final class TextShape: AnnotationObject, CenteredShape, RectPerimeterShape {
 
     // MARK: Selection & Snap
 
-    func selectionHandlePoints() -> [CGPoint] {
-        let size = contentSize
-        let hw = size.width / 2, hh = size.height / 2
-        let locals = [
-            CGPoint(x: -hw, y: -hh), CGPoint(x: hw, y: -hh),
-            CGPoint(x: hw, y: hh), CGPoint(x: -hw, y: hh),
-        ]
-        return locals.map { local in
-            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
-                        around: center, by: rotation)
-        }
-    }
-
-    func snapPoints() -> [SnapPoint] {
-        var points = [SnapPoint(point: center, type: .center)]
-        for handle in selectionHandlePoints() {
-            points.append(SnapPoint(point: handle, type: .corner))
-        }
-        return points
-    }
-
     /// 周长参数 (0...1) → 矩形边界上的世界坐标点。
     ///
     /// 与「点 → 参数」共用 `RectPerimeter` 的同一套分段 —— 两者是互逆的一对，
     /// 各写一份会让箭头吸附到错的位置。
     /// 周长框（未旋转本地坐标）—— 周长三件套据此转发给 `RectPerimeter`。
     var perimeterSize: CGSize { contentSize }
+
+    /// 手柄框（未旋转本地坐标）—— 四个角既是选中手柄也是吸附点。
+    var handleBoxSize: CGSize { contentSize }
 
     // MARK: Transform
 
