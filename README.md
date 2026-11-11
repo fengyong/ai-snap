@@ -292,7 +292,7 @@ LaunchServices 一直保留注册，「打开方式」与 Spotlight 里就会冒
 ## 回归测试（离屏探针）
 
 ```bash
-./probes/run_all.sh              # 38 个探针（默认 37 个常驻 + 权限探针按需），700+ 条断言
+./probes/run_all.sh              # 38 个探针（默认 37 个常驻 + 权限探针按需），800+ 条断言
 ./probes/run_all.sh redaction    # 只跑名字里含 redaction 的
 ```
 

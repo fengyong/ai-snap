@@ -274,6 +274,24 @@ protocol LineStyleSupporting: AnyObject {
     var lineStyle: LineStyle { get set }
 }
 
+/// 支持「描边线宽」的形状（箭头 / 矩形 / 圆 / 自由笔画）。
+///
+/// 与 `LineStyleSupporting` 同款：能力子协议，不进主协议 ——
+/// 序号 / 贴纸 / 聚光灯 / 放大镜根本没有「用户可调的描边线宽」这回事，
+/// 进主协议只会逼每个类型写一个空实现。
+///
+/// 为什么要它：画布的「改线宽」原来是一条 4 分支的 `as?` 链
+/// （`AnnotationView.lineWidth(of:)` / `setLineWidth(_:on:)`）。
+/// 新增一个有线宽的形状，必须**回来改那两条链** —— 漏改不报错，
+/// 只是那个形状的线宽调不动（用户看到「选了却改不动」）。
+/// 走能力协议之后，新增形状只要 conform，这里**一个字都不用改**。
+///
+/// ⚠️ 不包括 `MagnifierShape`：它的 `lineWidth` 是**描边环的宽**（构造时钳到 ≥3），
+/// 不是用户可调的描边线宽 —— 混进来会让「改线宽」意外改到放大镜的环上。
+protocol LineWidthSupporting: AnyObject {
+    var lineWidth: CGFloat { get set }
+}
+
 /// `Equatable` 是为了让 `Preferences` 能按值反查预设下标（存下标比存整个结构稳）。
 struct ArrowStyle: Hashable {
     var headType: ArrowHeadType
@@ -822,7 +840,7 @@ extension AnnotationObject {
 
 // MARK: - Arrow
 
-class Arrow: AnnotationObject {
+class Arrow: AnnotationObject, LineWidthSupporting {
     let id: UUID
     let hitTestColorKey: UInt32
     var startPoint: CGPoint
@@ -1123,7 +1141,7 @@ class Arrow: AnnotationObject {
 
 // MARK: - RectangleShape
 
-class RectangleShape: AnnotationObject, LineStyleSupporting, RectResizable {
+class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RectResizable {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1318,7 +1336,7 @@ class RectangleShape: AnnotationObject, LineStyleSupporting, RectResizable {
 
 // MARK: - CircleShape (Ellipse)
 
-class CircleShape: AnnotationObject, LineStyleSupporting {
+class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2036,7 +2054,7 @@ final class TextShape: AnnotationObject {
 ///
 /// 「马克笔」与「画笔」共用本类（isMarker 开关），取舍与「圆角矩形复用
 /// RectangleShape」一致：旋转/缩放/撤销/命中全部免费。
-class FreehandShape: AnnotationObject {
+class FreehandShape: AnnotationObject, LineWidthSupporting {
     let id: UUID
     let hitTestColorKey: UInt32
     /// 笔画点集（**画布坐标**，未含 rotation）。mouseDragged 采点、经距离抽稀。

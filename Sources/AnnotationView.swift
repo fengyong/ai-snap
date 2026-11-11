@@ -187,20 +187,17 @@ class AnnotationView: NSView {
 
     // MARK: - 改选中对象的样式
 
-    /// 对象当前的线宽；不支持线宽的对象（贴纸 / 文字 / 聚光灯）返回 nil
+    /// 对象当前的线宽；不支持线宽的对象（贴纸 / 文字 / 聚光灯 / 放大镜）返回 nil
+    ///
+    /// 走**能力协议**而不是一条 `as?` 链：新增一个有线宽的形状只要
+    /// conform `LineWidthSupporting`，这里**一个字都不用改** ——
+    /// 原来漏改的后果不是报错，只是那个形状的线宽调不动。
     static func lineWidth(of obj: any AnnotationObject) -> CGFloat? {
-        if let arrow = obj as? Arrow { return arrow.lineWidth }
-        if let rect = obj as? RectangleShape { return rect.lineWidth }
-        if let circle = obj as? CircleShape { return circle.lineWidth }
-        if let freehand = obj as? FreehandShape { return freehand.lineWidth }
-        return nil
+        (obj as? LineWidthSupporting)?.lineWidth
     }
 
     static func setLineWidth(_ value: CGFloat, on obj: any AnnotationObject) {
-        if let arrow = obj as? Arrow { arrow.lineWidth = value }
-        else if let rect = obj as? RectangleShape { rect.lineWidth = value }
-        else if let circle = obj as? CircleShape { circle.lineWidth = value }
-        else if let freehand = obj as? FreehandShape { freehand.lineWidth = value }
+        (obj as? LineWidthSupporting)?.lineWidth = value
     }
 
     /// 颜色是否视为同一个（动态系统色直接 `==` 会误判，统一折到 deviceRGB 比）

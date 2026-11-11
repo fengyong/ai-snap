@@ -85,7 +85,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `ocr_probe` | OCR：归一化框 → 画布的**无翻转**换算、阅读顺序（真跑 Vision） | 20 |
 | `settings_scroll_probe` | 设置窗口滚动容器（E06）：钳高可滚、翻转停在顶部、窗口复用语义 | 11 |
 | `postfix_probe` | 第一轮复核 13 项修复的回归（整模块 + 真实窗口） | 80 |
-| `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离 | 75（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
+| `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离、线宽能力协议 | 97（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
 | `freehand_probe` | 自由画笔/马克笔：过采样点、双图层命中、质心锚定的缩放移动 | 16 |
 | `magnifier_probe` | 放大镜：取样位置（Y 翻转）/ 拖动重取样 / 命中 / 缩放下限 | 11 |
 | `stitch_scroll_probe` | 滚动长截图拼接算法 spike：偏移识别 / 接缝连续 / nil 边界 / 性能预算 | 11 |

@@ -1241,6 +1241,87 @@ do {
     window.close()
 }
 
+// MARK: - 线宽走能力协议（O7）
+
+print("\n=== 线宽能力协议：每个 conform 的形状都能读写，不 conform 的返回 nil ===\n")
+do {
+    // **新增形状时不需要改 AnnotationView** —— 这一条是 O7 的全部意义：
+    // 原来「改线宽」是一条 4 分支的 `as?` 链，新增形状漏改不报错，
+    // 只是那个形状的线宽调不动（用户看到「选了却改不动」）。
+    // 现在只要 conform `LineWidthSupporting` 就自动生效。
+    final class NewShapeWithStroke: AnnotationObject, LineWidthSupporting {
+        let id = UUID()
+        let hitTestColorKey: UInt32 = 999
+        var center = CGPoint(x: 10, y: 10)
+        var rotation: CGFloat = 0
+        var color: NSColor = .black
+        var boundingBox: CGRect = CGRect(x: 0, y: 0, width: 20, height: 20)
+        var lineWidth: CGFloat = 5
+        func draw(in ctx: CGContext) {}
+        func drawHitTest(in ctx: CGContext, color: NSColor) {}
+        func selectionHandlePoints() -> [CGPoint] { [] }
+        func snapPoints() -> [SnapPoint] { [] }
+        func nearestPerimeterPoint(to point: CGPoint) -> CGPoint { center }
+        func pointOnPerimeter(at parameter: CGFloat) -> CGPoint { center }
+        func perimeterParameter(for point: CGPoint) -> CGFloat { 0 }
+        func move(by delta: CGVector) {}
+        func rotate(by angle: CGFloat) {}
+        func scale(by factor: CGFloat) {}
+        var stateFingerprint: Int { commonStateFingerprint() }
+    }
+
+    let fresh = NewShapeWithStroke()
+    check("新形状（只 conform 能力协议）能被读到线宽",
+          AnnotationView.lineWidth(of: fresh) == 5,
+          "\(String(describing: AnnotationView.lineWidth(of: fresh)))")
+    AnnotationView.setLineWidth(11, on: fresh)
+    check("新形状能被改线宽（不用改 AnnotationView）",
+          fresh.lineWidth == 11 && AnnotationView.lineWidth(of: fresh) == 11,
+          "\(fresh.lineWidth)")
+
+    // 四个原有形状：读写都要通
+    let conformers: [(String, any AnnotationObject)] = [
+        ("箭头", Arrow(startPoint: .zero, endPoint: CGPoint(x: 10, y: 10),
+                       color: .black, lineWidth: 3, hitTestColorKey: 1)),
+        ("矩形", RectangleShape(center: .zero, width: 20, height: 10,
+                                color: .black, lineWidth: 4, hitTestColorKey: 2)),
+        ("圆", CircleShape(center: .zero, radiusX: 10, radiusY: 5,
+                           color: .black, lineWidth: 5, hitTestColorKey: 3)),
+        ("自由笔画", FreehandShape(points: [.zero, CGPoint(x: 5, y: 5)],
+                                   color: .black, lineWidth: 6, isMarker: false,
+                                   hitTestColorKey: 4)),
+    ]
+    for (name, obj) in conformers {
+        let before = AnnotationView.lineWidth(of: obj)
+        check("\(name)：能读到线宽", before != nil, "\(String(describing: before))")
+        AnnotationView.setLineWidth(13, on: obj)
+        check("\(name)：改线宽生效", AnnotationView.lineWidth(of: obj) == 13,
+              "\(String(describing: AnnotationView.lineWidth(of: obj)))")
+    }
+
+    // 不 conform 的形状：语义不变（贴纸 / 文字 / 序号 / 聚光灯 / 放大镜 / 打码）
+    let nonConformers: [(String, any AnnotationObject)] = [
+        ("贴纸", StampObject(center: .zero, size: 20, stampType: .checkmark,
+                             color: .red, hitTestColorKey: 11)),
+        ("文字", TextShape(center: .zero, text: "x", hitTestColorKey: 12)),
+        ("序号", StepBadge(center: .zero, number: 1, hitTestColorKey: 13)),
+        ("聚光灯", SpotlightShape(center: .zero, width: 20, height: 10,
+                                  color: .black, hitTestColorKey: 14)),
+        ("放大镜", MagnifierShape(center: .zero, color: .black,
+                                  lineWidth: 3, hitTestColorKey: 15)),
+        ("打码", RedactionShape(center: .zero, width: 20, height: 10,
+                                style: .mosaic(blockSize: 8), hitTestColorKey: 16)),
+    ]
+    for (name, obj) in nonConformers {
+        check("\(name)：没有线宽概念 → 返回 nil",
+              AnnotationView.lineWidth(of: obj) == nil,
+              "\(String(describing: AnnotationView.lineWidth(of: obj)))")
+        AnnotationView.setLineWidth(99, on: obj)
+        check("\(name)：改线宽是空操作（不是崩、也不是静默改到别的字段）",
+              AnnotationView.lineWidth(of: obj) == nil)
+    }
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)
