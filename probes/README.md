@@ -75,7 +75,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `anchored_placement_probe` | 标注窗口按选区锚定摆放 | 23 |
 | `overlay_style_probe` | 冻结覆盖层的外观 | 10 |
 | `toolbar_layout_probe` | 工具栏分组布局与折行 | 33 |
-| `toolbar_width_probe` | 工具栏单行宽度上限 | 11 |
+| `toolbar_width_probe` | 工具栏单行宽度上限（屏宽取窗口所在屏，折行上限用固定屏宽断言） | 16 |
 | `redaction_probe` | 打码：块平均、硬边、模糊边缘、隐私抹平、每帧成本、强度按比例 | 37 |
 | `downscale_probe` | 降采样实现横向对比（CG 各插值档 / 手写平均 / vImage） | 判据式 |
 | `history_probe` | 截图历史：索引与磁盘同步、自愈、损坏降级 | 29 |
@@ -83,7 +83,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `eraser_probe` | 橡皮擦：整笔一步撤销、级联删除箭头（合成鼠标事件） | 22 |
 | `picker_probe` | 取色器：Y 翻转方向、倍率反推、放大镜切片 | 28 |
 | `ocr_probe` | OCR：归一化框 → 画布的**无翻转**换算、阅读顺序（真跑 Vision） | 20 |
-| `settings_scroll_probe` | 设置窗口滚动容器（E06）：钳高可滚、翻转停在顶部、窗口复用语义 | 11 |
+| `settings_scroll_probe` | 设置窗口滚动容器（E06）：钳高可滚、翻转停在顶部、窗口复用语义；**屏高注入**（O2：断言不再依赖本机屏幕） | 29（多屏机器 §4 多 3 条） |
 | `postfix_probe` | 第一轮复核 13 项修复的回归（整模块 + 真实窗口） | 80 |
 | `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离、线宽能力协议 | 98（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
 | `freehand_probe` | 自由画笔/马克笔：过采样点、双图层命中、质心锚定的缩放移动 | 16 |

@@ -18,6 +18,14 @@ final class SettingsWindowController: NSWindowController {
     /// 那是应用级的事情，不是设置窗口的职责。
     var onCheckForUpdates: (() -> Void)?
 
+    /// 钳制用的「屏幕可视高度」来源。默认取**窗口实际所在**屏（见 `screenVisibleHeight(for:)`）。
+    ///
+    /// 做成注入点是为了**可测**：断言「窗口内容高度 = 钳制上限」要求内容比钳制值高，
+    /// 而内容高度由布局决定（随系统字号变）、钳制值随屏幕变 —— 原来探针直接读
+    /// 本机 `NSScreen.main`，于是「内容装不装得下」这件事在不同机器上结论不同，
+    /// 红灯常态化 = 回归网失效。探针给定固定高度后，任何机器上都是同一组数字。
+    var visibleHeightProvider: (() -> CGFloat)?
+
     private var regionButton: NSButton!
     private var windowButton: NSButton!
     private var statusLabel: NSTextField!
@@ -363,9 +371,33 @@ final class SettingsWindowController: NSWindowController {
     private func fitWindowToContent() {
         guard let window = window else { return }
         let fit = contentContainer?.fittingSize ?? window.frame.size
-        let maxH = max(320, (NSScreen.main?.visibleFrame.height ?? 900) - 80)
+        let visibleHeight = visibleHeightProvider?() ?? screenVisibleHeight(for: window)
+        let maxH = Self.clampMaxHeight(visibleHeight: visibleHeight)
         window.setContentSize(NSSize(width: max(460, fit.width),
                                      height: min(max(fit.height, 320), maxH)))
+    }
+
+    /// 窗口高度上限 = 屏幕可视高度 − 80，且不小于 320。
+    ///
+    /// **−80 的构成（2026-11-11 实测，本机 macOS 27）**：标题栏 **28**
+    /// （窗口 frame 与 contentRect 的高度差）+ 上下各 **26** 的呼吸边 = 80。
+    /// visibleFrame 已排除 Dock 与菜单栏，所以这里不再叠加系统边距。
+    ///
+    /// 抽成纯函数是为了让探针能**注入固定高度**断言 —— 原来探针把
+    /// `NSScreen.main?.visibleFrame.height ?? 900 - 80` 又抄了一遍，
+    /// 两边读同一台机器，于是「钳制取错了屏幕」这件事探针永远看不见
+    /// （`NSScreen.main` 是「当前持键盘焦点的屏幕」，不是窗口所在的屏）。
+    static func clampMaxHeight(visibleHeight: CGFloat) -> CGFloat {
+        max(320, visibleHeight - 80)
+    }
+
+    /// 窗口**实际所在**屏的可视高度。
+    ///
+    /// 用 `window.screen` 而不是 `NSScreen.main`：后者是「当前持键盘焦点的屏幕」，
+    /// 设置窗开在副屏时会被钳到主屏的高度 —— 副屏比主屏矮时窗口就掉出了
+    /// 副屏可视区，正是 E06 要修的那个 bug 的镜像。
+    private func screenVisibleHeight(for window: NSWindow) -> CGFloat {
+        (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
     }
 
     private func makeRecorderButton(action: Selector) -> NSButton {

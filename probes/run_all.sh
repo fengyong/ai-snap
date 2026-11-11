@@ -334,6 +334,19 @@ done
 # 但仍可能有探针写过它（实测 settings_scroll_probe 会写
 # `Preferences.shared.ignoredBundleIdentifiers`），所以按名字逐个清掉。
 #
+# ⚠️ 2026-11-11（O2）实测结论：这一段**还不能删**。
+# 设计稿原以为「O6 落地 ⇒ 探针不再写 UserDefaults.standard ⇒ 整段删掉」，
+# 但 O6 的范围是**纯逻辑层**去全局化，不是「所有生产代码都不读 Preferences.shared」。
+# 仍有两份探针**必须**走 `Preferences.shared` —— 因为它们要验的正是
+# 生产代码读真实偏好的那条路径：
+#   · settings_scroll_probe —— 设置窗的内容行数由 `Preferences.shared.ignoredBundleIdentifiers`
+#     决定（SettingsWindowController.refreshFromPreferences 直接读它，没有注入点）
+#   · postfix_probe §5 —— `AnnotationWindow.init` 读 `Preferences.shared.color` / paletteIndex
+# 而 `Preferences.shared` 是 `static let shared = Preferences()`（用 .standard），
+# 不可重定向 → 这两份探针必然写标准域 → 清理段必须留着。
+# 要删掉它，得给 SettingsWindowController / AnnotationWindow 加 Preferences 注入点，
+# 那是比 O2 大得多的改动，不在本项范围内。
+#
 # cfprefsd 异步落盘：探针退出后写入可能还没到磁盘 —— 同样要「等一下再删、
 # 删完复查」。
 for _attempt in 1 2 3 4 5; do

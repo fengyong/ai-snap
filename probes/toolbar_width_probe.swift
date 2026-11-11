@@ -5,6 +5,12 @@ import Cocoa
 // 背景：工具栏用绝对坐标排布，内容涨到 1490 点宽 —— 比常见笔记本屏幕的可见宽度
 // （1473）还宽。窗口比屏幕宽 ⇒ 就地编辑只能整体左移 ⇒ 画布离开用户刚框住的选区。
 // 现在改成按组折行，窗口宽度必须落回屏幕之内。**这一条就是本文件要守住的底线。**
+//
+// **2026-11-11（O2 · 去环境依赖）**：原来屏宽取自 `NSScreen.main` ——
+// 那是「当前持键盘焦点的屏幕」，多屏下会随 key window 漂移，而且它本身
+// 就是**环境依赖**：换台屏幕不同的机器，这几行算出来的数就变了。
+// 现在改取**窗口所在屏**（与生产侧同源，兜底值也一致：1440×900），
+// 屏宽相关的计算则收进纯函数，用固定用例值断言。
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
@@ -32,10 +38,30 @@ guard let container = window.contentView,
           v.subviews.contains { $0 is NSButton }
       }) else { print("❌ 找不到工具栏"); exit(1) }
 
-let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+// 屏幕宽度：取**窗口所在屏**，不用 `NSScreen.main`。
+//
+// `NSScreen.main` 是「当前持键盘焦点的屏幕」—— 多屏下会随 key window 漂移，
+// 拿它跟窗口宽度比，是在比两个可能不相干的东西；而且它是**环境依赖**：
+// 换台屏幕不同的机器，这几行算出来的数就变了。
+// 窗口所在屏与生产侧同源（生产用的是宿主屏 = 选区所在屏，本探针无锚 → 主屏），
+// 兜底值也与生产一致（1440×900）。
+let screen = window.screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 let rowHeight: CGFloat = 48
 let rows = Int((toolbar.frame.height / rowHeight).rounded())
 let limit = ToolbarLayout.effectiveLimit(screenVisibleWidth: screen.width)
+
+print("=== 0. 纯函数：折行上限只依赖注入的屏宽（与本机屏幕无关）===\n")
+for (screenWidth, expected) in [(1440.0, 900.0), (1280.0, 900.0), (2560.0, 900.0)] {
+    check("屏宽 \(Int(screenWidth)) → 折行上限 \(Int(expected))",
+          ToolbarLayout.effectiveLimit(screenVisibleWidth: screenWidth) == expected,
+          "\(Int(ToolbarLayout.effectiveLimit(screenVisibleWidth: screenWidth)))")
+}
+check("屏宽 1440 → 屏幕硬约束 1416（比屏窄 24 点）",
+      ToolbarLayout.widthLimit(screenVisibleWidth: 1440) == 1416,
+      "\(Int(ToolbarLayout.widthLimit(screenVisibleWidth: 1440)))")
+check("屏宽 1280 → 屏幕硬约束 1256",
+      ToolbarLayout.widthLimit(screenVisibleWidth: 1280) == 1256,
+      "\(Int(ToolbarLayout.widthLimit(screenVisibleWidth: 1280)))")
 
 print("=== 1. 尺寸 ===\n")
 print(String(format: "  窗口      %.0f × %.0f", window.frame.width, window.frame.height))
