@@ -838,6 +838,33 @@ extension AnnotationObject {
     }
 }
 
+// MARK: - 能力子协议：变换
+//
+// 沿用 `RectResizable` / `LineWidthSupporting` 的既有范式：**能力子协议 + 扩展默认实现**。
+// 形状只声明自己具备哪项能力，默认实现由协议扩展提供 ——
+// 「新形状抄漏一个方法」从此不再是「静默少一项能力」。
+//
+// 为什么默认实现**不能**直接挂在 `AnnotationObject` 扩展上：
+// 协议本体里 `center` / `rotation` 是 `{ get }` **只读**要求，扩展里改不动。
+// 所以用子协议把要求**收紧**成 `{ get set }` —— 编译器于是只让
+// 「真有可写字段」的形状 conform；Arrow 那种「中心与旋转是算出来的」形状
+// 自然落在外面，不受这套默认实现影响。
+
+/// 可旋转的形状：绕自身中心旋转 = `rotation` 累加。
+///
+/// 抽出来的原因：9 个形状的 `rotate(by:)` 是**逐字相同**的 `rotation += angle`
+/// —— 逐个核实过，无一例外，也都没有额外副作用。
+/// 抄漏一个不报错：新形状只写一半，旋转就静默失效
+/// （用户拖不动、撤销还照样把它算回去）。
+protocol RotatableShape: AnnotationObject {
+    var rotation: CGFloat { get set }
+}
+
+extension RotatableShape {
+    /// 绕自身中心旋转。**纯累加**，无额外副作用。
+    func rotate(by angle: CGFloat) { rotation += angle }
+}
+
 // MARK: - Arrow
 
 class Arrow: AnnotationObject, LineWidthSupporting {
@@ -1141,7 +1168,7 @@ class Arrow: AnnotationObject, LineWidthSupporting {
 
 // MARK: - RectangleShape
 
-class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RectResizable {
+class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RectResizable, RotatableShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1318,9 +1345,6 @@ class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting
         center.y += delta.dy
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle
-    }
 
     func scale(by factor: CGFloat) {
         let f = abs(factor)
@@ -1336,7 +1360,7 @@ class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting
 
 // MARK: - CircleShape (Ellipse)
 
-class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting {
+class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RotatableShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1471,9 +1495,6 @@ class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting {
         center.y += delta.dy
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle
-    }
 
     func scale(by factor: CGFloat) {
         let f = abs(factor)
@@ -1493,7 +1514,7 @@ class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting {
 
 // MARK: - StampObject
 
-class StampObject: AnnotationObject {
+class StampObject: AnnotationObject, RotatableShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1664,9 +1685,6 @@ class StampObject: AnnotationObject {
         center.y += delta.dy
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle
-    }
 
     func scale(by factor: CGFloat) {
         size = Self.scaledExtent(size, by: abs(factor))
@@ -1687,7 +1705,7 @@ class StampObject: AnnotationObject {
 ///
 /// 因为命中检测走 Layer B 的像素读取，本类只需正确实现 `drawHitTest`，
 /// 选中 / 移动 / 旋转 / 缩放 / 撤销重做会全部自动继承，无额外代码。
-class StepBadge: AnnotationObject {
+class StepBadge: AnnotationObject, RotatableShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1825,9 +1843,6 @@ class StepBadge: AnnotationObject {
         center.y += delta.dy
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle
-    }
 
     func scale(by factor: CGFloat) {
         radius = max(radius * abs(factor), 6)
@@ -1849,7 +1864,7 @@ class StepBadge: AnnotationObject {
 /// **尺寸由文字内容与字号推导，不单独存宽高**：改字号、改文字之后，
 /// 包围盒 / 命中区 / 选择手柄会自动跟着变。若额外存一份宽高，就得在
 /// 「改文字」「改字号」「缩放」三处都记得同步，漏一处就出 bug。
-final class TextShape: AnnotationObject {
+final class TextShape: AnnotationObject, RotatableShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2027,9 +2042,6 @@ final class TextShape: AnnotationObject {
         center.y += delta.dy
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle
-    }
 
     /// 缩放作用在**字号**上 —— 文字的「大小」就是字号，改宽高没有意义
     func scale(by factor: CGFloat) {
@@ -2054,7 +2066,7 @@ final class TextShape: AnnotationObject {
 ///
 /// 「马克笔」与「画笔」共用本类（isMarker 开关），取舍与「圆角矩形复用
 /// RectangleShape」一致：旋转/缩放/撤销/命中全部免费。
-class FreehandShape: AnnotationObject, LineWidthSupporting {
+class FreehandShape: AnnotationObject, LineWidthSupporting, RotatableShape {
     let id: UUID
     let hitTestColorKey: UInt32
     /// 笔画点集（**画布坐标**，未含 rotation）。mouseDragged 采点、经距离抽稀。
@@ -2300,9 +2312,6 @@ class FreehandShape: AnnotationObject, LineWidthSupporting {
         points = points.map { CGPoint(x: $0.x + delta.dx, y: $0.y + delta.dy) }
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle
-    }
 
     func scale(by factor: CGFloat) {
         // 以「主延伸」（宽高中较大者）为缩放判据：一笔横线的高是 0，
@@ -2344,7 +2353,7 @@ class FreehandShape: AnnotationObject, LineWidthSupporting {
 ///
 /// 与打码同一约定：源图与倍率由 handler 在构造时注入（`ToolContext` 统一给），
 /// 形状自己不持有画布引用。旋转无意义（圆对称 + 内容来自底图），保留字段但绘制不使用。
-class MagnifierShape: AnnotationObject {
+class MagnifierShape: AnnotationObject, RotatableShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2521,9 +2530,6 @@ class MagnifierShape: AnnotationObject {
         center.y += delta.dy
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle   // 保留字段兼容协议/撤销管线；绘制对称，视觉无变化
-    }
 
     func scale(by factor: CGFloat) {
         let f = abs(factor)
@@ -2541,7 +2547,7 @@ class MagnifierShape: AnnotationObject {
 
 // MARK: - SpotlightShape
 
-class SpotlightShape: AnnotationObject, RectResizable {
+class SpotlightShape: AnnotationObject, RectResizable, RotatableShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2688,9 +2694,6 @@ class SpotlightShape: AnnotationObject, RectResizable {
         center.y += delta.dy
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle
-    }
 
     func scale(by factor: CGFloat) {
         let f = abs(factor)

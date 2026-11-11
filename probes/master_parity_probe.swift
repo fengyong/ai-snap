@@ -1339,6 +1339,46 @@ do {
     }
 }
 
+// MARK: - 形状变换走能力子协议（O14）
+
+print("\n=== 变换能力子协议：只 conform 就能移动/旋转，不必自己写 ===\n")
+do {
+    // O14 的验收点：**新形状不写 rotate 也能正确旋转**。
+    // 原来 rotate 是 9 份逐字相同的样板，抄漏一个不报错 ——
+    // 新形状只写一半，旋转就静默失效（用户拖不动、撤销还照样算回去）。
+    // 现在只要 conform `RotatableShape`，默认实现就位。
+
+    // 只 conform `RotatableShape`（没有中心点）的形状：能旋转，但**不能**套用
+    // 「中心点累加」那套平移 —— Arrow / FreehandShape 正是这一类
+    //（移动的是两端点 / 整条笔迹）。
+    final class RotatableOnlyShape: RotatableShape {
+        let id = UUID()
+        let hitTestColorKey: UInt32 = 997
+        var center: CGPoint { CGPoint(x: 0, y: 0) }   // 算出来的，不可写
+        var rotation: CGFloat = 0
+        var color: NSColor = .black
+        var boundingBox: CGRect = CGRect(x: 0, y: 0, width: 20, height: 20)
+        func draw(in ctx: CGContext) {}
+        func drawHitTest(in ctx: CGContext, color: NSColor) {}
+        func selectionHandlePoints() -> [CGPoint] { [] }
+        func snapPoints() -> [SnapPoint] { [] }
+        func nearestPerimeterPoint(to point: CGPoint) -> CGPoint { center }
+        func pointOnPerimeter(at parameter: CGFloat) -> CGPoint { center }
+        func perimeterParameter(for point: CGPoint) -> CGFloat { 0 }
+        func move(by delta: CGVector) {}               // 自己那套移动语义
+        func scale(by factor: CGFloat) {}
+        var stateFingerprint: Int { commonStateFingerprint() }
+    }
+    let r = RotatableOnlyShape()
+    r.rotate(by: 0.75)
+    check("只 conform RotatableShape 的新形状：rotate 生效",
+          abs(r.rotation - 0.75) < 0.0001, "\(r.rotation)")
+    let rViaAny: any AnnotationObject = r
+    rViaAny.rotate(by: 0.25)
+    check("只 conform RotatableShape 的新形状：经 any 调用 rotate 同样生效",
+          abs(r.rotation - 1.0) < 0.0001, "\(r.rotation)")
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

@@ -32,7 +32,7 @@ enum RedactionStyle: Hashable {
 /// 打码结果按「取样矩形 + 样式 + 像素倍率」缓存，且在 `draw` 时比对缓存键自动失效 ——
 /// **不需要在 move/scale/rotate 里逐个挂钩子**。挂钩子的写法漏一处就是「拖完还是旧的
 /// 打码」，而且没有任何报错。
-final class RedactionShape: AnnotationObject, RectResizable {
+final class RedactionShape: AnnotationObject, RectResizable, RotatableShape {
     let id = UUID()
     let hitTestColorKey: UInt32
 
@@ -255,9 +255,6 @@ final class RedactionShape: AnnotationObject, RectResizable {
         center.y += delta.dy
     }
 
-    func rotate(by angle: CGFloat) {
-        rotation += angle
-    }
 
     func scale(by factor: CGFloat) {
         let f = abs(factor)
