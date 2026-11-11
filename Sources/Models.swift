@@ -185,26 +185,26 @@ struct SnapPoint {
 
 // MARK: - Attachment
 
-enum AnchorType {
+enum AnchorType: Hashable {
     case snapPoint(index: Int)
     case perimeter(parameter: CGFloat) // 0...1
 }
 
-struct Attachment {
+struct Attachment: Hashable {
     let parentKey: UInt32
     var anchorType: AnchorType
 }
 
 // MARK: - Arrow Style
 
-enum ArrowHeadType {
+enum ArrowHeadType: Hashable {
     case triangle
     case open
     case diamond
     case none
 }
 
-enum ArrowTailType {
+enum ArrowTailType: Hashable {
     case none
     case circle
     case perpendicular
@@ -275,7 +275,7 @@ protocol LineStyleSupporting: AnyObject {
 }
 
 /// `Equatable` 是为了让 `Preferences` 能按值反查预设下标（存下标比存整个结构稳）。
-struct ArrowStyle: Equatable {
+struct ArrowStyle: Hashable {
     var headType: ArrowHeadType
     var tailType: ArrowTailType
     var lineStyle: LineStyle
@@ -393,7 +393,7 @@ struct WatermarkConfig {
 
 // MARK: - Stamp Type
 
-enum StampType {
+enum StampType: Hashable {
     case emoji(String)
     case checkmark
     case crossmark
@@ -616,6 +616,81 @@ extension RectResizable {
     }
 }
 
+// MARK: - 形状状态指纹
+
+/// 把形状的可变状态折叠成一个 `Int` 的累加器。
+///
+/// 为什么要它：画布的「有没有未送出的改动」判定，原来靠**画布单方面枚举字段** ——
+/// 形状新增一个可变字段（线型、贴纸类型、放大倍数、序号…），画布不会自动知道，
+/// 那次改动对指纹就不可见，于是**关窗时不再提醒用户还有没存的东西** ——
+/// 正好是最不该出错的方向。
+///
+/// 现在改成每个形状自己报自己的指纹（`stateFingerprint`），画布只负责组合。
+///
+/// 混合用 `&* 31 &+` 链式（与画布原有的指纹算法一致）：乘加对「相邻字段只差 1」
+/// 的输入区分度好。
+struct FingerprintHasher {
+    private var hash: Int
+
+    init(seed: Int = 1_000_003) { hash = seed }
+
+    /// 任意可哈希值（样式枚举、附着点…）。
+    ///
+    /// 用 Swift 的 `hashValue`：它在**进程内**稳定，而指纹只用于同一进程内的
+    /// 「变没变」判定（`exportedFingerprint` 也是进程内的），不需要跨进程可复现。
+    ///
+    /// **不要**拿它哈希 `CGPoint` / `CGSize`：它们的一致性是 macOS 15+ 才有的，
+    /// 而这个工程支持 macOS 14（用泛型重载会得到可用性告警，Swift 6 模式下直接是错）。
+    mutating func combine<T: Hashable>(_ value: T) {
+        hash = hash &* 31 &+ value.hashValue
+    }
+
+    /// 点集（自由笔画的笔迹）。逐点混入，不走 `Hashable` —— 见上面的说明。
+    mutating func combine(_ points: [CGPoint]) {
+        hash = hash &* 31 &+ points.count
+        for p in points {
+            hash = hash &* 31 &+ Int((p.x * 1000).rounded())
+            hash = hash &* 31 &+ Int((p.y * 1000).rounded())
+        }
+    }
+
+    /// 标量：按 1/1000 精度量化后混入。
+    ///
+    /// 精度取 0.001 而不是整点：形状自己的字段（宽、高、线宽、字号…）原来只能靠
+    /// 包围盒**间接**感知，整点量化会漏掉小幅改动。判定「变了没有」宁可灵敏 ——
+    /// 漏判的后果是**关窗不提醒**（最不该出错的方向），而灵敏的代价至多是
+    /// 偶尔多提醒一次。
+    mutating func combine(_ scalar: CGFloat) {
+        hash = hash &* 31 &+ Int((scalar * 1000).rounded())
+    }
+
+    /// 中心坐标：整点精度（与画布原实现逐项一致）。
+    mutating func combine(_ point: CGPoint) {
+        hash = hash &* 31 &+ Int(point.x.rounded())
+        hash = hash &* 31 &+ Int(point.y.rounded())
+    }
+
+    /// 包围盒尺寸：整点精度（与画布原实现逐项一致）。
+    mutating func combine(_ size: CGSize) {
+        hash = hash &* 31 &+ Int(size.width.rounded())
+        hash = hash &* 31 &+ Int(size.height.rounded())
+    }
+
+    /// 颜色：RGB 各 0–255（与画布原实现逐项一致）。
+    ///
+    /// 必须在**自己的 DeviceRGB 空间**取分量 —— 别处构造的同色可能带着不同的
+    /// 色彩空间，直接取分量会差 ±1（与 `HitTestBuffer` 里同源的坑）。
+    mutating func combine(_ color: NSColor) {
+        if let c = color.usingColorSpace(.deviceRGB) {
+            hash = hash &* 31 &+ Int((c.redComponent * 255).rounded())
+            hash = hash &* 31 &+ Int((c.greenComponent * 255).rounded())
+            hash = hash &* 31 &+ Int((c.blueComponent * 255).rounded())
+        }
+    }
+
+    var result: Int { hash }
+}
+
 // MARK: - AnnotationObject Protocol
 
 /// All annotation objects conform to this protocol.
@@ -686,11 +761,40 @@ protocol AnnotationObject: AnyObject {
     /// 有钳制的形状各自覆写（判据 = 自己 scale 里那个钳制条件的镜像）；
     /// 其余形状吃默认放行。
     func canScale(by factor: CGFloat) -> Bool
+
+    /// 本形状**全部可变状态**的指纹。
+    ///
+    /// 不给默认实现 —— 理由同 `pointOnPerimeter` / `perimeterParameter`：
+    /// 给了默认值，新形状就会静默继承一份「只覆盖通用字段」的指纹，
+    /// 形状特有的可变字段（线型、贴纸类型、放大倍数、序号…）就漏了 ——
+    /// 而漏的后果是**关窗时不再提醒用户还有未送出的改动**，
+    /// 正好是最不该出错的方向。列进协议且无默认，才能让编译器逼着新类型表态。
+    ///
+    /// 画布的 `contentFingerprint` 只组合 z序 + key + 本指纹，不再自己猜字段。
+    var stateFingerprint: Int { get }
 }
 
 extension AnnotationObject {
     /// 默认：放行（无钳制的形状）。
     func canScale(by factor: CGFloat) -> Bool { true }
+
+    /// 通用几何/颜色字段的指纹基底。
+    ///
+    /// **不是 `stateFingerprint` 的默认实现** —— 每个形状必须**显式调用它**，
+    /// 再追加自己的特有字段。这样「忘了追加某个字段」表现为遗漏，
+    /// 而不是静默继承一份只覆盖通用字段的指纹。
+    ///
+    /// 覆盖的正是画布原来手工枚举的那几项（中心 / 旋转 / 包围盒 / 颜色），
+    /// 量化精度与原实现**逐项一致** —— 形状追加自己的字段是**只增不减**的覆盖：
+    /// 原来能被认出来的改动，现在仍然被认出来；原来认不出来的，现在能了。
+    func commonStateFingerprint() -> Int {
+        var h = FingerprintHasher()
+        h.combine(center)
+        h.combine(rotation)
+        h.combine(boundingBox.size)
+        h.combine(color)
+        return h.result
+    }
 
     /// 默认：导出与屏幕所见一致
     func drawForExport(in ctx: CGContext) { draw(in: ctx) }
@@ -760,6 +864,24 @@ class Arrow: AnnotationObject {
         let maxX = max(startPoint.x, endPoint.x) + padding
         let maxY = max(startPoint.y, endPoint.y) + padding
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+    }
+
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// 几何用**两端点**（`center`/`rotation`/`boundingBox` 都是从它们推出来的，
+    /// 推出来的量已经被 `commonStateFingerprint` 覆盖，这里补的是原始状态）。
+    /// 附着点也算进去：父对象动了箭头会跟着动，那是**用户看得见的变化**，
+    /// 漏掉它会让「已送出」标记在箭头实际已经挪位时仍然成立。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(startPoint)
+        h.combine(endPoint)
+        h.combine(lineWidth)
+        h.combine(style)
+        h.combine(startAttachment)
+        h.combine(endAttachment)
+        return h.result
     }
 
     // MARK: Drawing
@@ -1045,6 +1167,24 @@ class RectangleShape: AnnotationObject, LineStyleSupporting, RectResizable {
         return enclosingBox(of: cornerPoints(), padding: padding) ?? fallbackBox(padding: padding)
     }
 
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// `lineStyle` 与 `cornerRadius` 是**原来漏掉**的两项 —— 画布的旧指纹只看
+    /// 中心/旋转/包围盒/颜色，而包围盒不随这两项变，于是「改了线型」在旧实现里
+    /// 完全不可见，关窗时不会提醒还有没存的东西。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(center)
+        h.combine(width)
+        h.combine(height)
+        h.combine(rotation)
+        h.combine(lineWidth)
+        h.combine(lineStyle)
+        h.combine(cornerRadius)
+        return h.result
+    }
+
     /// 角点算不出包围盒时的退化值（理论上不可达 —— 矩形永远有 4 个角点）。
     /// 退回"以中心为原点、尺寸为 0"的框，比强解包崩掉强。
     private func fallbackBox(padding: CGFloat) -> CGRect {
@@ -1210,6 +1350,22 @@ class CircleShape: AnnotationObject, LineStyleSupporting {
         return CGRect(x: center.x - hw, y: center.y - hh, width: hw * 2, height: hh * 2)
     }
 
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// `lineStyle` 是**原来漏掉**的一项：旧指纹只看中心/旋转/包围盒/颜色，
+    /// 包围盒不随线型变，于是「改成虚线」在旧实现里不可见。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(center)
+        h.combine(radiusX)
+        h.combine(radiusY)
+        h.combine(rotation)
+        h.combine(lineWidth)
+        h.combine(lineStyle)
+        return h.result
+    }
+
     /// 4 quadrant points on the ellipse
     func quadrantPoints() -> [CGPoint] {
         [CGFloat(0), .pi / 2, .pi, 3 * .pi / 2].map { a in
@@ -1343,6 +1499,20 @@ class StampObject: AnnotationObject {
         let half = size / 2 + 2
         return CGRect(x: center.x - half, y: center.y - half,
                       width: half * 2, height: half * 2)
+    }
+
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// `stampType` 是**原来漏掉**的一项 —— 贴纸类型换了（打勾 → 叉），
+    /// 旧指纹的四个量一个都不变，改动完全不可见。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(center)
+        h.combine(size)
+        h.combine(rotation)
+        h.combine(stampType)
+        return h.result
     }
 
     // MARK: Drawing
@@ -1525,6 +1695,20 @@ class StepBadge: AnnotationObject {
         let half = radius + 2
         return CGRect(x: center.x - half, y: center.y - half,
                       width: half * 2, height: half * 2)
+    }
+
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// `number` 是**原来漏掉**的一项 —— 序号徽章的编号变了（重编号、或用户改序号），
+    /// 旧指纹的四个量一个都不变。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(center)
+        h.combine(radius)
+        h.combine(rotation)
+        h.combine(number)
+        return h.result
     }
 
     // MARK: Drawing
@@ -1718,6 +1902,24 @@ final class TextShape: AnnotationObject {
         return CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
 
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// 文字内容与字号显式计入：画布的旧指纹把 `text` 单独哈希了一次，
+    /// 但 `fontSize` 只靠包围盒间接感知 —— 字号变了而排版尺寸没变时
+    /// （比如换了个等宽字体）就漏了。
+    ///
+    /// **不计** `cachedContentSize` / `cachedContentSizeKey`：那是渲染缓存，
+    /// 由文字与字号推导，不是用户状态。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(center)
+        h.combine(text)
+        h.combine(fontSize)
+        h.combine(rotation)
+        return h.result
+    }
+
     // MARK: Drawing
 
     func draw(in ctx: CGContext) {
@@ -1881,6 +2083,22 @@ class FreehandShape: AnnotationObject {
         let rotated = points.map { rotatePoint($0, around: center, by: rotation) }
         return enclosingBox(of: rotated, padding: strokeLineWidth)
             ?? CGRect(x: center.x - 2, y: center.y - 2, width: 4, height: 4)
+    }
+
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// 笔迹点集显式计入：旧指纹靠包围盒间接感知，而包围盒是**取整**后的外接矩形，
+    /// 笔画挪动一点点（仍在同一个整点框里）就认不出来 —— 但画布上的笔迹确实动了。
+    ///
+    /// `isMarker` 也要计：画笔与马克笔的线宽与透明度都不同，是用户看得见的差别。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(points)
+        h.combine(lineWidth)
+        h.combine(isMarker)
+        h.combine(rotation)
+        return h.result
     }
 
     // MARK: Drawing
@@ -2146,6 +2364,25 @@ class MagnifierShape: AnnotationObject {
                       width: (radius + padding) * 2, height: (radius + padding) * 2)
     }
 
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// `zoom` 是**原来漏掉**的一项：放大倍数变了，镜面里取样的区域就变了，
+    /// 旧指纹的四个量却一个都不动 —— 于是「改了倍数没存」完全看不出来。
+    ///
+    /// **不计** `sourceImage` / `pixelScale`：它们是画布在建对象时注入的**底图上下文**
+    /// （同一次会话内不变），不是用户状态；而且 `sourceImage` 是 `CGImage` ——
+    /// 按对象身份哈希的话，每次重新取样都会造出新对象，指纹会无谓地一直变。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(center)
+        h.combine(radius)
+        h.combine(zoom)
+        h.combine(rotation)
+        h.combine(lineWidth)
+        return h.result
+    }
+
     // MARK: Drawing
 
     func draw(in ctx: CGContext) {
@@ -2323,6 +2560,21 @@ class SpotlightShape: AnnotationObject, RectResizable {
     var boundingBox: CGRect {
         let padding: CGFloat = 2 // stroke width used in draw()
         return enclosingBox(of: cornerPoints(), padding: padding) ?? fallbackBox(padding: padding)
+    }
+
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// `cornerRadius` 是**原来漏掉**的一项 —— 聚光灯的圆角变了，遮罩形状就变了，
+    /// 旧指纹的四个量一个都不动。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(center)
+        h.combine(width)
+        h.combine(height)
+        h.combine(rotation)
+        h.combine(cornerRadius)
+        return h.result
     }
 
     /// 同 RectangleShape：兜住"角点算不出包围盒"这种不可达情况

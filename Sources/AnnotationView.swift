@@ -134,23 +134,19 @@ class AnnotationView: NSView {
     ///
     /// 用"算出来的指纹"而不是"每次改动手动 +1"：后者要在十几个改动点各插一行，
     /// 漏掉任何一处都会让"有没有未送出的改动"判错 —— 而漏掉的后果是**关闭时不再提醒**，
-    /// 正好是最不该出错的方向。指纹是纯计算结果，不存在漏插。
+    /// 正好是最不该出错的方向。
+    ///
+    /// **形状知道自己的状态，指纹只负责组合。** 每个形状实现 `stateFingerprint`
+    /// （协议里**没有默认实现** —— 新形状不表态就编译不过）。
+    /// 这里只组合「z 序 + 对象键 + 形状自报的指纹」，不再自己枚举字段 ——
+    /// 画布单方面猜形状有哪些可变字段，就是原来漏掉线型/贴纸类型/放大倍数/序号
+    /// 的根因；那些漏掉的后果都是**关窗时不再提醒还有没存的东西**。
     var contentFingerprint: Int {
         var h = zOrder.count &* 1_000_003
         for key in zOrder {
             guard let o = objects[key] else { continue }
             h = h &* 31 &+ Int(key)
-            h = h &* 31 &+ Int(o.center.x.rounded())
-            h = h &* 31 &+ Int(o.center.y.rounded())
-            h = h &* 31 &+ Int((o.rotation * 1000).rounded())
-            h = h &* 31 &+ Int(o.boundingBox.width.rounded())
-            h = h &* 31 &+ Int(o.boundingBox.height.rounded())
-            if let c = o.color.usingColorSpace(.deviceRGB) {
-                h = h &* 31 &+ Int((c.redComponent * 255).rounded())
-                h = h &* 31 &+ Int((c.greenComponent * 255).rounded())
-                h = h &* 31 &+ Int((c.blueComponent * 255).rounded())
-            }
-            if let t = o as? TextShape { h = h &* 31 &+ t.text.hashValue }
+            h = h &* 31 &+ o.stateFingerprint
         }
         return h
     }

@@ -5,7 +5,7 @@ import Cocoa
 /// 两种打码共用一个形状类（`RedactionShape`），只是这里不同 —— 于是旋转、缩放、
 /// 吸附、撤销重做、选择手柄全部自动共用，不必写两个形状类。
 /// 这与「圆角矩形复用 `RectangleShape` + `cornerRadius`」是同一个取舍。
-enum RedactionStyle: Equatable {
+enum RedactionStyle: Hashable {
     /// 马赛克。`blockSize` 以**画布点**为单位（会按像素倍率换算）。
     case mosaic(blockSize: CGFloat)
     /// 高斯模糊。`radius` 以**画布点**为单位。
@@ -98,6 +98,25 @@ final class RedactionShape: AnnotationObject, RectResizable {
 
     var boundingBox: CGRect {
         sampleRect.insetBy(dx: -1, dy: -1)
+    }
+
+    /// 本形状全部可变状态的指纹。
+    ///
+    /// `style`（马赛克块大小 / 模糊半径）是**原来漏掉**的一项：打码参数变了，
+    /// 旧指纹的四个量一个都不动 —— 而打码强度恰恰是最该被记住的改动。
+    ///
+    /// **不计** `sourceImage` / `pixelScale`：它们是画布建对象时注入的底图上下文，
+    /// 同一次会话内不变，不是用户状态（`sourceImage` 还是 `CGImage`，
+    /// 按身份哈希会因为重新取样而无谓地一直变）。
+    var stateFingerprint: Int {
+        var h = FingerprintHasher()
+        h.combine(commonStateFingerprint())
+        h.combine(center)
+        h.combine(width)
+        h.combine(height)
+        h.combine(rotation)
+        h.combine(style)
+        return h.result
     }
 
     // MARK: - 绘制

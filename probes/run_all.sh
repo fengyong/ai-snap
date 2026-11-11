@@ -193,6 +193,10 @@ run_probe window_lifetime_probe  "${ALL_SOURCES[@]}"
 #                     （drawingFromCenter 原来只在落框一侧被处理）
 run_probe ocr_order_probe         "${ALL_SOURCES[@]}"
 run_probe redaction_preview_probe "${ALL_SOURCES[@]}"
+# 形状状态指纹（O11）：逐字段断言「改一个可变字段 → 指纹变化」
+#   —— 旧实现由画布单方面枚举字段，漏了线型/贴纸类型/放大倍数/序号/打码参数，
+#      那些改动的后果是**关窗时不再提醒还有没存的东西**
+run_probe fingerprint_probe       "${ALL_SOURCES[@]}"
 
 # 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
 # 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次

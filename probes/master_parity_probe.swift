@@ -392,6 +392,9 @@ do {
         func move(by delta: CGVector) {}
         func rotate(by angle: CGFloat) {}
         func scale(by factor: CGFloat) {}
+        // 协议在 2026-11-11 补了 `stateFingerprint`（O11）：同样**不给默认实现** ——
+        // stub 也必须表态，否则「改了什么」对它不可见（漏判的后果是关窗不提醒）。
+        var stateFingerprint: Int { commonStateFingerprint() }
     }
 
     /// 第二个对象：只画自己的形状，**完全不碰线型**。
@@ -426,6 +429,8 @@ do {
         func move(by delta: CGVector) {}
         func rotate(by angle: CGFloat) {}
         func scale(by factor: CGFloat) {}
+        // 同上：协议要求表态，stub 就得表态。
+        var stateFingerprint: Int { commonStateFingerprint() }
     }
 
     let view = AnnotationView(image: blankCanvas(400, 200))
