@@ -73,16 +73,6 @@ final class RedactionShape: AnnotationObject, RectResizable, CenteredShape, Rect
 
     // MARK: - 几何
 
-    func cornerPoints() -> [CGPoint] {
-        let hw = width / 2, hh = height / 2
-        let locals = [CGPoint(x: -hw, y: -hh), CGPoint(x: hw, y: -hh),
-                      CGPoint(x: hw, y: hh), CGPoint(x: -hw, y: hh)]
-        return locals.map {
-            rotatePoint(CGPoint(x: center.x + $0.x, y: center.y + $0.y),
-                        around: center, by: rotation)
-        }
-    }
-
     /// 形状自身（可能已旋转）的矩形路径 —— 绘制时用它裁剪。
     private func shapePath() -> CGPath {
         let rect = CGRect(x: -width / 2, y: -height / 2, width: width, height: height)

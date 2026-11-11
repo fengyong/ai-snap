@@ -632,6 +632,33 @@ extension RectResizable {
         return Self.scaledExtent(width, by: f) == width * f
             && Self.scaledExtent(height, by: f) == height * f
     }
+
+    /// 4 corner points in canvas coordinates (after rotation)
+    ///
+    /// 矩形 / 聚光灯 / 打码 三个形状原本各写一份**逐字相同**的 ——
+    /// 抄漏一次「绕中心旋转」就会让角点与本体错开，不崩不报错。
+    func cornerPoints() -> [CGPoint] {
+        let hw = width / 2, hh = height / 2
+        let locals = [
+            CGPoint(x: -hw, y: -hh), CGPoint(x: hw, y: -hh),
+            CGPoint(x: hw, y: hh), CGPoint(x: -hw, y: hh),
+        ]
+        return locals.map { local in
+            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
+                        around: center, by: rotation)
+        }
+    }
+
+    /// 角点算不出包围盒时的退化值（理论上不可达 —— 矩形永远有 4 个角点）。
+    /// 退回"以中心为原点、尺寸为 0"的框，比强解包崩掉强。
+    ///
+    /// 原本是矩形与聚光灯各自的一份 `private` 拷贝；随 `cornerPoints()`
+    /// 一起收进这个扩展。可见性由 private 变成 internal（同模块可见）——
+    /// 协议扩展的成员天然是模块级共享的，这与 `RectResizable` 既有成员一致。
+    func fallbackBox(padding: CGFloat) -> CGRect {
+        CGRect(x: center.x - padding, y: center.y - padding,
+               width: padding * 2, height: padding * 2)
+    }
 }
 
 // MARK: - 形状状态指纹
@@ -1322,24 +1349,7 @@ class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting
 
     /// 角点算不出包围盒时的退化值（理论上不可达 —— 矩形永远有 4 个角点）。
     /// 退回"以中心为原点、尺寸为 0"的框，比强解包崩掉强。
-    private func fallbackBox(padding: CGFloat) -> CGRect {
-        CGRect(x: center.x - padding, y: center.y - padding,
-               width: padding * 2, height: padding * 2)
-    }
-
     /// 4 corner points in canvas coordinates (after rotation)
-    func cornerPoints() -> [CGPoint] {
-        let hw = width / 2, hh = height / 2
-        let locals = [
-            CGPoint(x: -hw, y: -hh), CGPoint(x: hw, y: -hh),
-            CGPoint(x: hw, y: hh), CGPoint(x: -hw, y: hh),
-        ]
-        return locals.map { local in
-            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
-                        around: center, by: rotation)
-        }
-    }
-
     /// 4 edge midpoints in canvas coordinates
     func edgeMidpoints() -> [CGPoint] {
         let hw = width / 2, hh = height / 2
@@ -2570,23 +2580,6 @@ class SpotlightShape: AnnotationObject, RectResizable, CenteredShape, RectPerime
     }
 
     /// 同 RectangleShape：兜住"角点算不出包围盒"这种不可达情况
-    private func fallbackBox(padding: CGFloat) -> CGRect {
-        CGRect(x: center.x - padding, y: center.y - padding,
-               width: padding * 2, height: padding * 2)
-    }
-
-    func cornerPoints() -> [CGPoint] {
-        let hw = width / 2, hh = height / 2
-        let locals = [
-            CGPoint(x: -hw, y: -hh), CGPoint(x: hw, y: -hh),
-            CGPoint(x: hw, y: hh), CGPoint(x: -hw, y: hh),
-        ]
-        return locals.map { local in
-            rotatePoint(CGPoint(x: center.x + local.x, y: center.y + local.y),
-                        around: center, by: rotation)
-        }
-    }
-
     // MARK: Drawing
 
     /// Spotlight 不在常规 draw 中绘制遮罩；遮罩由 AnnotationView 统一处理。

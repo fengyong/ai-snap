@@ -1461,6 +1461,52 @@ do {
           "\(rotated)")
     ch.rotation = 0
 
+    // 只 conform `RectResizable` 的新形状：角点与兜底框也不用自己写 ——
+    // 矩形 / 聚光灯 / 打码 原本各写一份逐字相同的。
+    final class RectResizableOnlyShape: RectResizable {
+        let id = UUID()
+        let hitTestColorKey: UInt32 = 994
+        var center = CGPoint(x: 100, y: 100)
+        var rotation: CGFloat = 0
+        var color: NSColor = .black
+        var width: CGFloat = 40
+        var height: CGFloat = 20
+        var boundingBox: CGRect {
+            CGRect(x: center.x - width / 2, y: center.y - height / 2, width: width, height: height)
+        }
+        func setSize(width: CGFloat, height: CGFloat) { self.width = width; self.height = height }
+        func draw(in ctx: CGContext) {}
+        func drawHitTest(in ctx: CGContext, color: NSColor) {}
+        func selectionHandlePoints() -> [CGPoint] { [] }
+        func snapPoints() -> [SnapPoint] { [] }
+        func nearestPerimeterPoint(to point: CGPoint) -> CGPoint { center }
+        func pointOnPerimeter(at parameter: CGFloat) -> CGPoint { center }
+        func perimeterParameter(for point: CGPoint) -> CGFloat { 0 }
+        func move(by delta: CGVector) {}
+        func rotate(by angle: CGFloat) {}
+        func scale(by factor: CGFloat) {}
+        var stateFingerprint: Int { commonStateFingerprint() }
+    }
+    let rr = RectResizableOnlyShape()
+    check("只 conform RectResizable 的新形状：四个角点不用自己写",
+          rr.cornerPoints() == [CGPoint(x: 80, y: 90), CGPoint(x: 120, y: 90),
+                                CGPoint(x: 120, y: 110), CGPoint(x: 80, y: 110)],
+          "\(rr.cornerPoints())")
+    check("...：角点算不出包围盒时的兜底框也不用自己写",
+          rr.fallbackBox(padding: 3) == CGRect(x: 97, y: 97, width: 6, height: 6),
+          "\(rr.fallbackBox(padding: 3))")
+    // 角点必须跟着本体的旋转走 —— 少一次「绕中心旋转」会让角点与本体错开。
+    rr.rotation = .pi / 4
+    let unrotatedCorners = [CGPoint(x: 80, y: 90), CGPoint(x: 120, y: 90),
+                             CGPoint(x: 120, y: 110), CGPoint(x: 80, y: 110)]
+    let expectedCorners = unrotatedCorners.map {
+        rotatePoint($0, around: rr.center, by: rr.rotation)
+    }
+    check("...：角点跟着本体旋转走（45°）",
+          rr.cornerPoints() == expectedCorners,
+          "\(rr.cornerPoints())")
+    rr.rotation = 0
+
     // 只 conform `RotatableShape`（没有中心点）的形状：能旋转，但**不能**套用
     // 「中心点累加」那套平移 —— Arrow / FreehandShape 正是这一类
     //（移动的是两端点 / 整条笔迹）。
