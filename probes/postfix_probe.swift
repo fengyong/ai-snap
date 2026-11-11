@@ -227,8 +227,15 @@ do {
     // 同一个根因还影响另外两处"出现状态提示后重新适配尺寸"的调用。
     let controller = SettingsWindowController()
     if let window = controller.window {
-        let fitting = window.contentView?.fittingSize ?? .zero
-        check("contentView 的 fittingSize 高度不为 0（约束完整）",
+        // B7（E06，2026-11-09）之后 `window.contentView` 是 NSScrollView，
+        // 真正带约束的内容宿主是它的 documentView —— **测错对象等于没测**：
+        // scrollView 自己的 fittingSize 恒为 (0, 0)，拿它断言会把
+        // 「容器缺 bottom 约束」这条真回归放过去（那正是窗口被压成一条细缝、
+        // 表现为"点了偏好设置没反应"的根因）。没有滚动容器时退回 contentView。
+        let content = window.contentView
+        let host = (content as? NSScrollView)?.documentView ?? content
+        let fitting = host?.fittingSize ?? .zero
+        check("内容宿主的 fittingSize 高度不为 0（约束完整）",
               fitting.height > 120, "fittingSize \(fitting)")
         check("窗口高度可用（不是只剩标题栏）",
               window.frame.height > 120,

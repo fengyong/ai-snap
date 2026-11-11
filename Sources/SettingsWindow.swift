@@ -37,6 +37,9 @@ final class SettingsWindowController: NSWindowController {
     /// 选区吸附窗口开关
     private var snapToWindowsBox: NSButton!
     private var keyMonitor: Any?
+    /// 滚动容器里的内容视图（root stack 的宿主）。fitting 高度以它为准 ——
+    /// 包了 NSScrollView 之后 contentView 是 scrollView 本身，fittingSize 不可靠。
+    private var contentContainer: NSView?
     /// 正在录制的目标：nil 表示没有在录制
     private var recordingTarget: RecordingTarget?
 
@@ -314,22 +317,55 @@ final class SettingsWindowController: NSWindowController {
 
         root.addArrangedSubview(buttonRow)
 
-        let container = NSView()
+        let container = FlippedContainerView()
         container.addSubview(root)
         NSLayoutConstraint.activate([
             root.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            root.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+            root.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             root.topAnchor.constraint(equalTo: container.topAnchor),
             // 【必须有 bottom】否则 container 在竖直方向是无约束的，
             // fittingSize.height 会退化成 0 —— 紧接着的 setContentSize 就把窗口
             // 压成一条只剩标题栏的细缝（实测 440×28），表现为"点了偏好设置没反应"。
             root.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        window.contentView = container
-        window.setContentSize(container.fittingSize)
+        self.contentContainer = container
+
+        // ── 滚动容器（E06，2026-11-09）──
+        //
+        // 内容按 fitting 高度撑窗口，而设置项只增不减：1280×800 的小屏上
+        // 「恢复默认」一行会被推到屏外且够不着（窗口顶部对齐后底部越界）。
+        // 包一层 NSScrollView，窗口高度钳到屏幕可视区内 —— 装得下时行为
+        // 与原先完全一致（无滚动条），装不下时滚动可达。
+        // 注意 container 宽度必须跟随 scrollView（trailing == 而不是 ≤）：
+        // documentView 若按自身宽度收缩，URL 输入框那行会被挤开。
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .windowBackgroundColor
+        scroll.documentView = container
+        // documentView 宽度跟随可视宽度（只纵向滚动）。用 clip view 而不是
+        // frameLayoutGuide —— 后者是 iOS UIScrollView 的 API，macOS 没有。
+        container.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
+        window.contentView = scroll
+        fitWindowToContent()
         // 尺寸定下来之后再居中：构造时的 center() 用的是临时尺寸，
         // setContentSize 之后窗口会偏。
         window.center()
+    }
+
+    /// 按内容 fitting 高度设置窗口尺寸，**钳到屏幕可视区内**（E06）。
+    ///
+    /// 装得下 = 原行为（窗口恰好贴合内容）；装不下 = 限高出滚动条。
+    /// 钳制值 = 可视高度 − 80（标题栏 + 上下呼吸边）；visibleFrame 已排除
+    /// Dock 与菜单栏，这里不再叠加系统边距。
+    /// 所有会改变内容行数的路径（开窗 / 忽略列表增删 / 开机启动提示）都走这里。
+    private func fitWindowToContent() {
+        guard let window = window else { return }
+        let fit = contentContainer?.fittingSize ?? window.frame.size
+        let maxH = max(320, (NSScreen.main?.visibleFrame.height ?? 900) - 80)
+        window.setContentSize(NSSize(width: max(460, fit.width),
+                                     height: min(max(fit.height, 320), maxH)))
     }
 
     private func makeRecorderButton(action: Selector) -> NSButton {
@@ -351,6 +387,13 @@ final class SettingsWindowController: NSWindowController {
         return row
     }
 
+    /// 滚动容器的内容宿主。**必须翻转**：documentView 默认从左下角铺开，
+/// 内容超高时初始可见的是**底部**（恢复默认按钮那一头），用户得先滚才能看到
+/// 顶部的快捷键设置 —— 翻转后内容自上而下铺，初始滚动位置就是顶部。
+private final class FlippedContainerView: NSView {
+    override var isFlipped: Bool { true }
+}
+
     /// 让窗口显示在已存偏好上。
     private func refreshFromPreferences() {
         regionButton.title = Preferences.shared.regionCaptureHotkey.displayString
@@ -364,9 +407,9 @@ final class SettingsWindowController: NSWindowController {
     }
 
     /// 内容行数变化后重算窗口高度（与 launchAtLoginToggled 里同一手法）。
+    /// 统一走 fitWindowToContent —— 那里有滚动容器与屏幕高度钳制的全部说明。
     private func fitWindow() {
-        guard let window = window else { return }
-        window.setContentSize(window.contentView?.fittingSize ?? window.frame.size)
+        fitWindowToContent()
     }
 
     @objc private func recordHistoryToggled(_ sender: NSButton) {
@@ -593,9 +636,7 @@ final class SettingsWindowController: NSWindowController {
             statusLabel.isHidden = false
         }
         refreshLaunchAtLogin()
-        if let window = window {
-            window.setContentSize(window.contentView?.fittingSize ?? window.frame.size)
-        }
+        fitWindow()
     }
 
     // MARK: - 更新设置
@@ -620,8 +661,8 @@ final class SettingsWindowController: NSWindowController {
         statusLabel.stringValue = problems.joined(separator: "\n")
         statusLabel.isHidden = problems.isEmpty
         statusLabel.textColor = problems.isEmpty ? .secondaryLabelColor : .systemOrange
-        if let window = window, !problems.isEmpty {
-            window.setContentSize(window.contentView?.fittingSize ?? window.frame.size)
+        if !problems.isEmpty {
+            fitWindow()
         }
     }
 

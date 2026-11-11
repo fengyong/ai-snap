@@ -151,6 +151,11 @@ run_probe eraser_probe           "${ALL_SOURCES[@]}"
 run_probe picker_probe           "${ALL_SOURCES[@]}"
 run_probe ocr_probe              "${ALL_SOURCES[@]}"
 run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
+# 设置窗口滚动容器（E06，2026-11-09）：长列表钳高可滚、短列表贴合不变
+run_probe settings_scroll_probe  Sources/Models.swift Sources/Capture/ScreenGeometry.swift \
+                                 Sources/Preferences.swift Sources/HotkeyManager.swift \
+                                 Sources/LaunchAtLogin.swift Sources/History/CaptureHistory.swift \
+                                 Sources/SettingsWindow.swift
 # 本轮修复的回归探针：整模块（要构造真实画布与标注窗口）
 run_probe postfix_probe          "${ALL_SOURCES[@]}"
 # A 区分叉里那些 master 仍然缺失的修复：重新实现后的对齐验证
