@@ -1,10 +1,11 @@
 #!/bin/bash
 #
 # 跑全部探针。每个探针都在临时目录里编译（顶层代码那份必须叫 main.swift），
-# 因此互不干扰、可以并行改。
+# 因此互不干扰、可以**并行**跑。
 #
 #   ./probes/run_all.sh             跑全部
 #   ./probes/run_all.sh redaction   只跑名字里含 redaction 的
+#   AISNAP_PROBE_JOBS=4 ./probes/run_all.sh   限制并行度（默认按核数，上限 6）
 #
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -49,8 +50,27 @@ while IFS= read -r f; do
   ALL_SOURCES+=("$f")
 done < <(ls Sources/*.swift Sources/*/*.swift | grep -v '^Sources/main.swift$')
 
-# 每个探针：名字 + 需要链接的源文件（相对仓库根）
-# 只列真实需要的源文件，不图省事全链 —— 这样「这个探针依赖哪些模块」在脚本里看得见。
+# ── 并行度 ───────────────────────────────────────────────────────
+#
+# 探针之间没有共享状态（各自的编译目录、各自的 UserDefaults 域），
+# 所以并行是安全的。并行度按核数取，上限 6 —— 再高就只是让机器更热，
+# 而编译本来就是 CPU 密集的（几个 swiftc 抢同一个核，谁也没快）。
+NCPU=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
+JOBS="${AISNAP_PROBE_JOBS:-$(( NCPU < 6 ? NCPU : 6 ))}"
+
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/aisnap-probes.XXXXXX")"
+# 脚本被 Ctrl-C / 超时杀掉时也要把编译目录清掉 —— 否则 TMPDIR 里会留下一堆
+# 探针目录（实测被我自己的 60 秒超时杀掉过一次，就漏了）。
+trap 'rm -rf "$WORK_ROOT"' EXIT
+
+# ── 探针登记 ─────────────────────────────────────────────────────
+#
+# 这里只**登记**（名字 + 需要链接的源文件），真正编译与执行在登记完之后并行做。
+# 源文件列表按仓库既有约定「只列真实需要的」—— 这样「这个探针依赖哪些模块」
+# 在脚本里看得见。
+PROBE_NAMES=()
+PROBE_SOURCES=()
+
 run_probe() {
   local name="$1"; shift
   local sources=("$@")
@@ -59,66 +79,46 @@ run_probe() {
   if [ ! -f "probes/$name.swift" ]; then
     echo "  ⚠️  找不到 probes/$name.swift，跳过"; return
   fi
-
-  local tmp
-  tmp="$(mktemp -d)"
-  # 脚本被 Ctrl-C / 超时杀掉时也要把编译目录清掉 —— 否则 TMPDIR 里会留下一堆
-  # 名叫 `run` 的探针二进制（实测被我自己的 60 秒超时杀掉过一次，就漏了）。
-  trap 'rm -rf "$tmp"' RETURN
-  cp "probes/$name.swift" "$tmp/main.swift"
-
-  # 拼成数组再执行：空数组直接展开在 bash 3.2 + set -u 下会报 unbound variable
-  local cmd=(swiftc -O -target arm64-apple-macos14.0 -o "$tmp/run")
-  if [ ${#sources[@]} -gt 0 ]; then cmd+=("${sources[@]}"); fi
-  cmd+=("$tmp/main.swift")
-
-  local out
-  if ! out=$("${cmd[@]}" 2>&1); then
-    echo "❌ $name —— 编译失败"
-    echo "$out" | grep -E "error:" | head -5
-    FAIL=$((FAIL + 1)); FAILED_NAMES+=("$name(编译)")
-    rm -rf "$tmp"; return
-  fi
-
-  out=$("$tmp/run" 2>&1)
-  local code=$?
-  # 新探针以「通过 N 项，失败 M 项」收尾，早期探针以「全部通过」收尾 —— 两种都接住
-  local summary
-  summary=$(echo "$out" | grep -E "^通过 " | tail -1)
-  if [ -z "$summary" ]; then
-    summary=$(echo "$out" | grep -vE "^[[:space:]]*$" | tail -1)
-  fi
-  # 对比型探针没有断言（它只给出实测数字让人判断），说明一下免得看着像漏了汇总
-  case "$summary" in
-    *通过*|*失败*|*✅*|*❌*) ;;
-    *) summary="（对比探针，无断言：以退出码为准）" ;;
-  esac
-
-  local reason
-  if [ $code -eq 0 ]; then
-    if reason=$(expected_reason "$name"); then
-      # 本该是红的却绿了 → 修复已落地，清单该删这条了
-      echo "🟢 $name  $summary  ← 已转绿（待修：$reason）"
-      TURNED_GREEN+=("$name")
-    else
-      echo "✅ $name  $summary"
-    fi
-    PASS=$((PASS + 1))
+  PROBE_NAMES+=("$name")
+  # bash 3.2 + set -u：空数组直接展开会报 unbound variable（downscale_probe 不链源码）
+  if [ ${#sources[@]} -eq 0 ]; then
+    PROBE_SOURCES+=("")
   else
-    if reason=$(expected_reason "$name"); then
-      echo "🟡 $name  $summary  ← 已知红灯，待修：$reason"
-      echo "$out" | grep -E "^  ❌" | head -8 | sed 's/^/     /'
-      KNOWN_RED=$((KNOWN_RED + 1))
-    else
-      echo "❌ $name  $summary"
-      echo "$out" | grep -E "^  ❌" | head -8
-      FAIL=$((FAIL + 1)); FAILED_NAMES+=("$name")
-    fi
+    PROBE_SOURCES+=("${sources[*]}")
   fi
-  rm -rf "$tmp"
 }
 
-echo "=== 探针（链接真实源码）==="
+# ── worker：编译一份探针并跑它 ──────────────────────────────────────
+#
+# 可执行文件**用探针自己的名字** —— macOS 对「没有 bundle 的裸可执行文件」
+# 用进程名当 UserDefaults.standard 的域，于是每份探针的偏好落在**自己**的
+# plist 里，而不是共用一个 `run.plist`：
+#   · 探针之间不再互相污染 → 可以安全并行
+#   · 上一次探针的取值不会漏给下一次
+# （以前所有探针都叫 `run`，共用 `~/Library/Preferences/run.plist`，
+#   只能靠串行 + 事后清理来躲开"上一次的取值漏给下一次"。）
+worker() {
+  local name="$1" srcs="$2"
+  local dir="$WORK_ROOT/$name"
+  mkdir -p "$dir" || return 1
+
+  cp "probes/$name.swift" "$dir/main.swift"
+
+  local cmd=(swiftc -O -target arm64-apple-macos14.0 -o "$dir/$name")
+  local s
+  for s in $srcs; do cmd+=("$s"); done
+  cmd+=("$dir/main.swift")
+
+  if ! "${cmd[@]}" > "$dir/compile.log" 2>&1; then
+    echo "compile_failed" > "$dir/status"
+    return 0
+  fi
+  "$dir/$name" > "$dir/out" 2>&1
+  echo $? > "$dir/status"
+  return 0
+}
+
+echo "=== 探针（链接真实源码）· 并行度 $JOBS ==="
 # Preferences 现在依赖 HotkeyConfig，所以 prefs_probe 也得链上 HotkeyManager
 run_probe prefs_probe            Sources/Models.swift Sources/Preferences.swift \
                                  Sources/HotkeyManager.swift Sources/Capture/ScreenGeometry.swift
@@ -216,7 +216,75 @@ case "${AISNAP_PROBE_ALLOW_CAPTURE:-0}" in 1) _perm=1 ;; *) _perm=0 ;; esac
 case "${FILTER:-}" in *permission*) _perm=1 ;; esac
 if [ "$_perm" = "1" ]; then
   run_probe permission_probe     "${ALL_SOURCES[@]}"
+  PERM_SKIPPED=0
 else
+  PERM_SKIPPED=1
+fi
+
+# ── 并行执行 ─────────────────────────────────────────────────────
+#
+# 滑动窗口：始终保持至多 $JOBS 个探针在跑。bash 3.2 没有 `wait -n`，
+# 所以用「等最老那个、把它从窗口里摘掉」的办法。
+pids=()
+for i in "${!PROBE_NAMES[@]}"; do
+  ( worker "${PROBE_NAMES[$i]}" "${PROBE_SOURCES[$i]}" ) &
+  pids+=($!)
+  if [ ${#pids[@]} -ge "$JOBS" ]; then
+    wait "${pids[0]}"
+    pids=("${pids[@]:1}")
+  fi
+done
+for pid in ${pids[@]+"${pids[@]}"}; do wait "$pid"; done
+
+# ── 汇总 ─────────────────────────────────────────────────────────
+for i in "${!PROBE_NAMES[@]}"; do
+  name="${PROBE_NAMES[$i]}"
+  dir="$WORK_ROOT/$name"
+  status="$(cat "$dir/status" 2>/dev/null || echo compile_failed)"
+  out="$(cat "$dir/out" 2>/dev/null)"
+
+  if [ "$status" = "compile_failed" ]; then
+    echo "❌ $name —— 编译失败"
+    grep -E "error:" "$dir/compile.log" 2>/dev/null | head -5
+    FAIL=$((FAIL + 1)); FAILED_NAMES+=("$name(编译)")
+    continue
+  fi
+
+  # 新探针以「通过 N 项，失败 M 项」收尾，早期探针以「全部通过」收尾 —— 两种都接住
+  summary=$(echo "$out" | grep -E "^通过 " | tail -1)
+  if [ -z "$summary" ]; then
+    summary=$(echo "$out" | grep -vE "^[[:space:]]*$" | tail -1)
+  fi
+  # 对比型探针没有断言（它只给出实测数字让人判断），说明一下免得看着像漏了汇总
+  case "$summary" in
+    *通过*|*失败*|*✅*|*❌*) ;;
+    *) summary="（对比探针，无断言：以退出码为准）" ;;
+  esac
+
+  reason=
+  if [ "$status" = "0" ]; then
+    if reason=$(expected_reason "$name"); then
+      # 本该是红的却绿了 → 修复已落地，清单该删这条了
+      echo "🟢 $name  $summary  ← 已转绿（待修：$reason）"
+      TURNED_GREEN+=("$name")
+    else
+      echo "✅ $name  $summary"
+    fi
+    PASS=$((PASS + 1))
+  else
+    if reason=$(expected_reason "$name"); then
+      echo "🟡 $name  $summary  ← 已知红灯，待修：$reason"
+      echo "$out" | grep -E "^  ❌" | head -8 | sed 's/^/     /'
+      KNOWN_RED=$((KNOWN_RED + 1))
+    else
+      echo "❌ $name  $summary"
+      echo "$out" | grep -E "^  ❌" | head -8
+      FAIL=$((FAIL + 1)); FAILED_NAMES+=("$name")
+    fi
+  fi
+done
+
+if [ "$PERM_SKIPPED" = "1" ]; then
   echo "⏭️  permission_probe  已跳过（会往「屏幕录制」列表里加一条记录，默认不跑）"
   echo "     要跑：AISNAP_PROBE_ALLOW_CAPTURE=1 ./probes/run_all.sh permission"
 fi
@@ -245,28 +313,27 @@ for _attempt in 1 2 3 4 5; do
   sleep 0.3
 done
 
-# ── 还有一份漏网的：探针二进制叫 `run`，它写的是 UserDefaults.standard ────────
+# ── 还有一份漏网的：每份探针自己的偏好域 ──────────────────────────────
 #
-# 探针进程的可执行文件叫 `run` —— macOS 对「没有 bundle 的裸可执行文件」用
-# 进程名当 `UserDefaults.standard` 的域，于是偏好落进了
-# `~/Library/Preferences/run.plist`。上面按 `com.aisnap.probe.*` 的清理扫不到它。
+# 探针的可执行文件现在**用它自己的名字**（`$name`），于是
+# `UserDefaults.standard` 的域就是那个名字 —— 探针之间不再共用一个 plist。
+# 但仍可能有探针写过它（实测 settings_scroll_probe 会写
+# `Preferences.shared.ignoredBundleIdentifiers`），所以按名字逐个清掉。
 #
-# **O6 之后，写它的探针从两个减到一个**：
-#   · update_probe —— 不再写全局偏好了（清单地址改成纯函数，调用方传进来），
-#     它以前留下的 `updateFeedURL = ""` 会让后面的探针读到「没配置地址」，
-#     行为跟预期不一样 —— 那个漏点已经堵上
-#   · settings_scroll_probe —— 还要写 `Preferences.shared.ignoredBundleIdentifiers`
-#     才能让设置窗口显示出长列表（设置窗口自己读全局偏好，没有注入缝），
-#     所以这一份清理还得留着
-#
-# 这个名字很通用，所以只在我们自己刚编译过 `run` 的前提下删是安全的 ——
-# 这里正是那个前提（每个探针都用 -o "$tmp/run" 编出来的）。
+# cfprefsd 异步落盘：探针退出后写入可能还没到磁盘 —— 同样要「等一下再删、
+# 删完复查」。
 for _attempt in 1 2 3 4 5; do
+  removed=0
+  for name in "${PROBE_NAMES[@]}"; do
+    f="$HOME/Library/Preferences/$name.plist"
+    if [ -e "$f" ]; then rm -f "$f"; removed=1; fi
+  done
+  # 旧版本留下的：那时所有探针都叫 `run`，共用这一个域
   if [ -e "$HOME/Library/Preferences/run.plist" ]; then
-    rm -f "$HOME/Library/Preferences/run.plist"; sleep 0.3
-  else
-    break
+    rm -f "$HOME/Library/Preferences/run.plist"; removed=1
   fi
+  [ "$removed" = "0" ] && break
+  sleep 0.3
 done
 
 echo
