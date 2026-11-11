@@ -205,6 +205,11 @@ run_probe redaction_preview_probe "${ALL_SOURCES[@]}"
 #   —— 旧实现由画布单方面枚举字段，漏了线型/贴纸类型/放大倍数/序号/打码参数，
 #      那些改动的后果是**关窗时不再提醒还有没存的东西**
 run_probe fingerprint_probe       "${ALL_SOURCES[@]}"
+# 撤销栈配对不变量（O12 步骤 0）：正向变更必须清空 redo 栈，重做**不得**清空它
+#   —— 这条不对称今天靠人手在 18 个点上维持，代码里没有任何表达。
+#      写错的后果是「重做只能做一次」，静默：不崩、不报错，只是第二次 ⇧⌘Z 没反应。
+#      它是 O12 动结构（把 undoStack/redoStack 搬进 AnnotationDocument）之前的护栏。
+run_probe undo_pairing_probe      "${ALL_SOURCES[@]}"
 
 # 权限探针**不默认跑** —— 它必须真的发一次抓屏请求，而那会让探针二进制被登记进
 # 「系统设置 → 隐私与安全性 → 屏幕录制」。探针每次都编译到新的临时路径，于是跑一次

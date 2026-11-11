@@ -101,6 +101,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `ocr_order_probe` | OCR 面板：显示顺序 ↔ 区间 ↔ 识别框必须同源 | 11 |
 | `redaction_preview_probe` | 打码预览与最终对象必须画在同一块地方（像素实测） | 6 |
 | `fingerprint_probe` | 形状状态指纹（O11）：逐字段「改了必须变」+ 反向「不该变的不变」+ 画布级未送出判定 | 74 |
+| `undo_pairing_probe` | 撤销栈配对不变量（O12 步骤 0）：正向变更清 redo / 撤销只追加 / 重做不清 redo（10 个正向变更写点逐类） | 111 |
 | `permission_probe` | 权限判定：**无权限时不得判成有权限**。用 launchctl 另起一个无 TCC 授权的自己来验 | 2 ~ 5（视环境）**默认不跑** |
 
 > **断言数怎么校**：跑一遍 `./probes/run_all.sh`，每份探针的汇总行就是它的断言数
