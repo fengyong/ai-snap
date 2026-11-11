@@ -65,6 +65,8 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `cyclic_index_probe` | Tab 循环的下标回绕（负数取模） | 14 |
 | `text_shape_probe` | 文字标注几何 + 周长参数互逆性 | 22 |
 | `screen_geometry_probe` | 屏幕/图像坐标换算（含与真实显示器布局交叉验证） | 13 |
+| `window_pick_probe` | 窗口挑选：Quartz→AppKit 矩形翻转、标题拼接、滚轮换选回绕 | 22 |
+| `export_encode_probe` | 导出编码：PNG 逐位一致、JPEG/HEIC 魔数（硬件不支持时如实跳过） | 7 |
 | `anchored_placement_probe` | 标注窗口按选区锚定摆放 | 23 |
 | `overlay_style_probe` | 冻结覆盖层的外观 | 10 |
 | `toolbar_layout_probe` | 工具栏分组布局与折行 | 33 |
@@ -72,36 +74,51 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `redaction_probe` | 打码：块平均、硬边、模糊边缘、隐私抹平、每帧成本 | 29 |
 | `downscale_probe` | 降采样实现横向对比（CG 各插值档 / 手写平均 / vImage） | 判据式 |
 | `history_probe` | 截图历史：索引与磁盘同步、自愈、损坏降级 | 29 |
-| `update_probe` | 更新检查：版本号比较（1.10.0 > 1.9.0）、清单地址校验 | 42 |
+| `update_probe` | 更新检查：版本号比较（1.10.0 > 1.9.0）、清单地址校验 | 53 |
 | `eraser_probe` | 橡皮擦：整笔一步撤销、级联删除箭头（合成鼠标事件） | 22 |
 | `picker_probe` | 取色器：Y 翻转方向、倍率反推、放大镜切片 | 28 |
-| `ocr_probe` | OCR：归一化框 → 画布的**无翻转**换算、阅读顺序（真跑 Vision） | 19 |
-| `postfix_probe` | 第一轮复核 13 项修复的回归（整模块 + 真实窗口） | 78 |
+| `ocr_probe` | OCR：归一化框 → 画布的**无翻转**换算、阅读顺序（真跑 Vision） | 20 |
+| `settings_scroll_probe` | 设置窗口滚动容器（E06）：钳高可滚、翻转停在顶部、窗口复用语义 | 11 |
+| `postfix_probe` | 第一轮复核 13 项修复的回归（整模块 + 真实窗口） | 80 |
+| `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离 | 75（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
+| `freehand_probe` | 自由画笔/马克笔：过采样点、双图层命中、质心锚定的缩放移动 | 16 |
+| `magnifier_probe` | 放大镜：取样位置（Y 翻转）/ 拖动重取样 / 命中 / 缩放下限 | 11 |
+| `stitch_scroll_probe` | 滚动长截图拼接算法 spike：偏移识别 / 接缝连续 / nil 边界 / 性能预算 | 11 |
+| `snap_priority_probe` | 吸附优先：落笔 vs 移动的优先级（吸附指示不许成谎言） | 14 |
+| `selection_adjust_probe` | 选区可调整态（两步语义）：松手不立即确认、移动/缩放/重选、Enter（小键盘 76）/双击确认、Esc 取消 | 38 |
 | `resize_handle_probe` | 矩形族边/角手柄：单维调整、对边锚定、Esc 还原、下限 | 20 |
 | `resize_drag_probe` | 手柄**多事件**拖拽：中心不得二次累加（单事件探针测不出） | 12 |
-| `resize_undo_probe` | `.resize` / `.scale` / `.move` 撤销是否完整还原（尺寸**与位置**） | 21 |
-| `text_undo_probe` | 文字标注撤销：创建态首编 ⌘Z 是否留下隐形空对象 | 10 |
-| `pin_lifetime_probe` | 贴图窗口生命周期：close 后窗口是否真被释放 | 6 |
+| `resize_undo_probe` | `.resize` / `.scale` / `.move` 撤销是否完整还原（尺寸**与位置**） | 26 |
+| `text_undo_probe` | 文字标注撤销：创建态首编 ⌘Z 是否留下隐形空对象 | 12 |
+| `export_perf_probe` | 导出路径成本拆解（P2-8 量化基准） | 对比探针 |
+| `pin_lifetime_probe` | 贴图窗口生命周期：close 之后窗口是否真被释放 | 5 |
+| `window_lifetime_probe` | 标注窗 / OCR 面板生命周期：close 之后窗口是否真被释放 | 7 |
 | `ocr_order_probe` | OCR 面板：显示顺序 ↔ 区间 ↔ 识别框必须同源 | 11 |
 | `redaction_preview_probe` | 打码预览与最终对象必须画在同一块地方（像素实测） | 6 |
-| `selection_adjust_probe` | 选区可调整态（两步语义）：松手不立即确认、移动/缩放/重选、Enter（小键盘 76）/双击确认、Esc 取消 | 38 |
-| `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离 | 36（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
+| `fingerprint_probe` | 形状状态指纹（O11）：逐字段「改了必须变」+ 画布级未送出判定 | 67 |
 | `permission_probe` | 权限判定：**无权限时不得判成有权限**。用 launchctl 另起一个无 TCC 授权的自己来验 | 2 ~ 5（视环境）**默认不跑** |
+
+> **断言数怎么校**：跑一遍 `./probes/run_all.sh`，每份探针的汇总行就是它的断言数
+> （`通过 N 项，失败 M 项`；老探针只印「全部通过」，数字见上表）。
+> 数字漂了就照实改这张表 —— **表里写的数要能对着跑出来的结果**。
 
 ### 已知红灯（`run_all.sh` 的 `EXPECTED_FAIL`）
 
-`resize_undo_probe`、`text_undo_probe`、`pin_lifetime_probe` 三份**已注册**为常驻回归，
-但各自还有一条断言是红的 —— 对应《AISnap-修复计划-2026-10-23.md》里尚未落地的批次：
+**当前无已知红灯** —— `run_all.sh` 的 `EXPECTED_FAIL` 是空数组，默认轮次应当全绿。
 
-| 探针 | 红的断言 | 待修批次 |
-|---|---|---|
-| `resize_undo_probe` | §6 `.scale` 撤销在下限处过冲 | 批次 3 / P1-1 |
-| `text_undo_probe` | §1 创建态首编 ⌘Z 留下隐形空对象 | 批次 3 / P1-2 |
-| `pin_lifetime_probe` | §1 关闭后窗口仍被 `NSApp.windows` 留住 | 批次 4 / P1-6 |
-
-红灯本身就在盯那个行为，等修复落地那一刻它会**自己转绿**。但清单必须同步清理 ——
+机制保留：清单里的探针**照样注册**为常驻回归（红灯本身就在盯那个行为，
+等修复落地那一刻它会自己转绿，比事后补测试可靠）；但**对应批次落地后必须删条目** ——
 `run_all.sh` 在探针意外转绿时会报错并要求从 `EXPECTED_FAIL` 删掉对应条目，
 免得「已知红灯」变成吞掉回归的遮羞布。
+
+> **2026-11-11 更新**：下面三条曾经常驻红灯，现已全部修复、清单已清空 ——
+> 留着这张表是为了记下「它们盯的是什么」，**不是**「它们现在还红着」：
+>
+> | 探针 | 曾经红的断言 | 修复提交 |
+> |---|---|---|
+> | `resize_undo_probe` | §6 `.scale` 撤销在下限处过冲 | `4986858`（批次 3 / P1-1） |
+> | `text_undo_probe` | §1 创建态首编 ⌘Z 留下隐形空对象 | `e7c7206`（批次 3 / P1-2） |
+> | `pin_lifetime_probe` | §1 关闭后窗口仍被 `NSApp.windows` 留住 | `25ff3c7`（批次 4 / P1-6） |
 
 `legacy/` 是更早期的一次性验证脚本（自带实现、不依赖仓库源码），保留作历史记录，
 不参与 `run_all.sh`。

@@ -292,7 +292,7 @@ LaunchServices 一直保留注册，「打开方式」与 Spotlight 里就会冒
 ## 回归测试（离屏探针）
 
 ```bash
-./probes/run_all.sh              # 34 个探针（默认 33 个常驻 + 权限探针按需），600+ 条断言
+./probes/run_all.sh              # 38 个探针（默认 37 个常驻 + 权限探针按需），700+ 条断言
 ./probes/run_all.sh redaction    # 只跑名字里含 redaction 的
 ```
 
@@ -302,7 +302,7 @@ LaunchServices 一直保留注册，「打开方式」与 Spotlight 里就会冒
 
 ## 代码统计
 
-约 13,800 行 Swift / 47 个源文件，**无第三方依赖**（截图用系统 ScreenCaptureKit、
+约 14,300 行 Swift / 47 个源文件，**无第三方依赖**（截图用系统 ScreenCaptureKit、
 快捷键用 Carbon、OCR 用 Vision、模糊用 CoreImage）。
-另有 34 个离屏探针（约 7,000 行）与 `scripts/make_icon.swift`（图标由代码生成，
+另有 38 个离屏探针（约 7,800 行）与 `scripts/make_icon.swift`（图标由代码生成，
 不存来路不明的二进制资源）。
