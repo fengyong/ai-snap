@@ -1249,6 +1249,11 @@ do {
     // 原来「改线宽」是一条 4 分支的 `as?` 链，新增形状漏改不报错，
     // 只是那个形状的线宽调不动（用户看到「选了却改不动」）。
     // 现在只要 conform `LineWidthSupporting` 就自动生效。
+    //
+    // ⚠️ 它同时是 `probes/README.md`「加一个形状」那条硬约定的**样板**：
+    // 所以它必须把 `lineWidth` 也哈希进指纹 —— 编译器只强制「表态」，
+    // 不强制「覆盖完整」；一个只调 `commonStateFingerprint()` 就收工的桩
+    // 会示范出 O11 明令禁止的心智模式（改线宽而指纹不变）。
     final class NewShapeWithStroke: AnnotationObject, LineWidthSupporting {
         let id = UUID()
         let hitTestColorKey: UInt32 = 999
@@ -1267,14 +1272,26 @@ do {
         func move(by delta: CGVector) {}
         func rotate(by angle: CGFloat) {}
         func scale(by factor: CGFloat) {}
-        var stateFingerprint: Int { commonStateFingerprint() }
+        // 基底 + 本形状自己的可变字段（线宽）—— 与 README「加一个形状」第 3 条一致
+        var stateFingerprint: Int {
+            var h = FingerprintHasher()
+            h.combine(commonStateFingerprint())
+            h.combine(lineWidth)
+            return h.result
+        }
     }
 
     let fresh = NewShapeWithStroke()
     check("新形状（只 conform 能力协议）能被读到线宽",
           AnnotationView.lineWidth(of: fresh) == 5,
           "\(String(describing: AnnotationView.lineWidth(of: fresh)))")
+    // 桩也必须把线宽哈希进指纹 —— 它是 README「加一个形状」的**样板**。
+    // 编译器只强制「表态」，不强制「覆盖完整」；这里把它钉住。
+    let freshFP = fresh.stateFingerprint
     AnnotationView.setLineWidth(11, on: fresh)
+    check("新形状的线宽也进了指纹（它是「加一个形状」的样板）",
+          fresh.stateFingerprint != freshFP,
+          "\(freshFP) → \(fresh.stateFingerprint)")
     check("新形状能被改线宽（不用改 AnnotationView）",
           fresh.lineWidth == 11 && AnnotationView.lineWidth(of: fresh) == 11,
           "\(fresh.lineWidth)")

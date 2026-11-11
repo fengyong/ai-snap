@@ -85,7 +85,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `ocr_probe` | OCR：归一化框 → 画布的**无翻转**换算、阅读顺序（真跑 Vision） | 20 |
 | `settings_scroll_probe` | 设置窗口滚动容器（E06）：钳高可滚、翻转停在顶部、窗口复用语义 | 11 |
 | `postfix_probe` | 第一轮复核 13 项修复的回归（整模块 + 真实窗口） | 80 |
-| `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离、线宽能力协议 | 97（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
+| `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离、线宽能力协议 | 98（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
 | `freehand_probe` | 自由画笔/马克笔：过采样点、双图层命中、质心锚定的缩放移动 | 16 |
 | `magnifier_probe` | 放大镜：取样位置（Y 翻转）/ 拖动重取样 / 命中 / 缩放下限 | 11 |
 | `stitch_scroll_probe` | 滚动长截图拼接算法 spike：偏移识别 / 接缝连续 / nil 边界 / 性能预算 | 11 |
@@ -100,7 +100,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `window_lifetime_probe` | 标注窗 / OCR 面板生命周期：close 之后窗口是否真被释放 | 7 |
 | `ocr_order_probe` | OCR 面板：显示顺序 ↔ 区间 ↔ 识别框必须同源 | 11 |
 | `redaction_preview_probe` | 打码预览与最终对象必须画在同一块地方（像素实测） | 6 |
-| `fingerprint_probe` | 形状状态指纹（O11）：逐字段「改了必须变」+ 画布级未送出判定 | 67 |
+| `fingerprint_probe` | 形状状态指纹（O11）：逐字段「改了必须变」+ 反向「不该变的不变」+ 画布级未送出判定 | 74 |
 | `permission_probe` | 权限判定：**无权限时不得判成有权限**。用 launchctl 另起一个无 TCC 授权的自己来验 | 2 ~ 5（视环境）**默认不跑** |
 
 > **断言数怎么校**：跑一遍 `./probes/run_all.sh`，每份探针的汇总行就是它的断言数
@@ -135,3 +135,21 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
    - 只链真正需要的文件 —— 这样"这个探针依赖哪些模块"在脚本里一眼可见
    - 需要构造真实 `NSView` / 合成 `NSEvent` 的，用 `${ALL_SOURCES[@]}` 整模块链
 3. 探针里写清楚**为什么需要它**（有几处错了不会报错），以及断言依据从哪来
+
+## 加一个形状　**（O11 之后的硬约定，别绕过）**
+
+1. **conform `AnnotationObject`** —— 它要求实现 `stateFingerprint`，且**没有默认实现**：
+   新形状不表态就**编译不过**。这是有意的（同 `pointOnPerimeter` / `perimeterParameter`
+   的既有范式）—— 给了默认值，新形状就会静默继承一份"只覆盖通用字段"的指纹。
+2. **必须同时向 `fingerprint_probe §1` 追加逐字段断言**：改那个字段 → 指纹必须变。
+   **编译器只能强制「表态」，不能强制「覆盖完整」** —— 这是 O11 剩下的最后一个手工不变量，
+   只能靠这条规矩 + 下面第 3 条兜住。
+3. **`stateFingerprint` 必须覆盖该形状的全部可变存储字段**（几何 + 样式 + 类型特有字段）。
+   `commonStateFingerprint()` 是**基底**，不是全部 —— 只调基底就收工，是本仓库唯一的反面教材：
+   那样改这个形状的线宽，指纹不变，"未送出的改动"就永远看不见。
+   - 顺带排除**环境字段**：`sourceImage` / `pixelScale` **不算**用户状态
+     （它们是画布注入的底图上下文，同一会话内不变）—— 算进去会因重新取样而
+     指纹持续变化，表现为**关窗前反复误提醒**。
+     这条由 `fingerprint_probe §4` 的反方向断言钉住。
+4. 若形状有线宽，还要 conform `LineWidthSupporting`（O7）—— 否则「改线宽」对它无效，
+   而漏改不报错，只是用户看到"选了却改不动"。

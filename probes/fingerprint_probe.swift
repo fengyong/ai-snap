@@ -273,6 +273,65 @@ do {
     check("改放大倍数 → 判定为有未送出的改动（旧实现漏掉这项）", view.hasUnsavedAnnotations)
 }
 
+print("\n=== 4. 反方向：该不变的必须不变 ===\n")
+do {
+    // O11 里**唯一可能引入新错**的判断，就是把「环境字段」排除在指纹之外：
+    // `sourceImage`（底图）与 `pixelScale`（倍率）如果算进去，
+    // 底图**重新取样**就会造出新对象 → 指纹持续变化 →
+    // 表现为**关窗前反复误提醒**（用户什么都没改，却被问「还有未送出的改动吗」）。
+    //
+    // §1 全是「改了必须变」，**没有一条测「不该变的必须不变」** ——
+    // 那个判断当时只由注释守着，而注释正是 O11 要消灭的东西。
+    // 所以这里把它钉成断言。
+    func tinyImage(_ w: Int, _ h: Int) -> CGImage {
+        let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                            bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        return ctx.makeImage()!
+    }
+
+    // 放大镜
+    let mag = MagnifierShape(center: CGPoint(x: 100, y: 100), radius: 60, zoom: 2.5,
+                              color: .black, lineWidth: 3, hitTestColorKey: 1)
+    let magFP = mag.stateFingerprint
+    mag.sourceImage = tinyImage(8, 8)
+    check("放大镜：换掉 sourceImage → 指纹不变",
+          mag.stateFingerprint == magFP,
+          "\(magFP) → \(mag.stateFingerprint)")
+    mag.pixelScale = 2
+    check("放大镜：改 pixelScale → 指纹不变",
+          mag.stateFingerprint == magFP,
+          "\(magFP) → \(mag.stateFingerprint)")
+    check("放大镜：反复计算指纹结果一致（无隐藏顺序依赖）",
+          mag.stateFingerprint == mag.stateFingerprint)
+
+    // 打码
+    let red = RedactionShape(center: CGPoint(x: 100, y: 100), width: 120, height: 60,
+                              style: .mosaic(blockSize: 8), hitTestColorKey: 2)
+    let redFP = red.stateFingerprint
+    red.sourceImage = tinyImage(8, 8)
+    check("打码：换掉 sourceImage → 指纹不变",
+          red.stateFingerprint == redFP,
+          "\(redFP) → \(red.stateFingerprint)")
+    red.pixelScale = 3
+    check("打码：改 pixelScale → 指纹不变",
+          red.stateFingerprint == redFP,
+          "\(redFP) → \(red.stateFingerprint)")
+
+    // 同状态的两个实例必须同指纹 —— 否则「指纹」根本不能用来判「变没变」
+    let mag2 = MagnifierShape(center: CGPoint(x: 100, y: 100), radius: 60, zoom: 2.5,
+                               color: .black, lineWidth: 3, hitTestColorKey: 3)
+    check("放大镜：同状态两个实例指纹相同（与 sourceImage 无关）",
+          mag2.stateFingerprint == magFP,
+          "\(mag2.stateFingerprint) vs \(magFP)")
+
+    // 反过来：真的改了**用户状态**，指纹必须变（漏掉 sourceImage/pixelScale
+    // 不等于把用户状态也漏掉 —— 那是另一个方向的错）
+    mag.zoom = 3
+    check("放大镜：改了用户状态（倍数）→ 指纹仍要变",
+          mag.stateFingerprint != magFP)
+}
+
 print()
 if failures == 0 {
     print("通过 \(count) 项，失败 0 项")
