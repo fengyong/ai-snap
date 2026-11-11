@@ -304,10 +304,19 @@ fi
 #
 # 而且要「等一下再删、删完复查」：cfprefsd 是**异步落盘**的，探针刚退出时
 # 写入可能还没到磁盘 —— 立刻删等于删了个空气，文件随后才出现（实测踩到）。
+# 清理失败**必须可见**：`removed` 只记录「文件当时存不存在」，不代表删掉了。
+# 实测（受限沙箱）rm 被拦截 36 次，而脚本照报「失败 0 个」并 exit 0 ——
+# 守门脚本不该自带静默失效：残留的 plist 里是真实偏好键（线宽 / 水印 / 上次工具），
+# 会跨运行保留，下一次探针的初值就不再是干净的。环境差异要变成红灯，不是「看起来干净」。
+CLEANUP_FAILED=""
 for _attempt in 1 2 3 4 5; do
   removed=0
   for f in "$HOME"/Library/Preferences/com.aisnap.probe.*.plist; do
-    if [ -e "$f" ]; then rm -f "$f"; removed=1; fi
+    if [ -e "$f" ]; then
+      rm -f "$f" || CLEANUP_FAILED="$CLEANUP_FAILED$f
+"
+      removed=1
+    fi
   done
   [ "$removed" = "0" ] && break
   sleep 0.3
@@ -326,11 +335,18 @@ for _attempt in 1 2 3 4 5; do
   removed=0
   for name in "${PROBE_NAMES[@]}"; do
     f="$HOME/Library/Preferences/$name.plist"
-    if [ -e "$f" ]; then rm -f "$f"; removed=1; fi
+    if [ -e "$f" ]; then
+      rm -f "$f" || CLEANUP_FAILED="$CLEANUP_FAILED$f
+"
+      removed=1
+    fi
   done
   # 旧版本留下的：那时所有探针都叫 `run`，共用这一个域
   if [ -e "$HOME/Library/Preferences/run.plist" ]; then
-    rm -f "$HOME/Library/Preferences/run.plist"; removed=1
+    rm -f "$HOME/Library/Preferences/run.plist" \
+      || CLEANUP_FAILED="$CLEANUP_FAILED$HOME/Library/Preferences/run.plist
+"
+    removed=1
   fi
   [ "$removed" = "0" ] && break
   sleep 0.3
@@ -341,6 +357,12 @@ echo "========================================"
 echo "通过 $PASS 个探针，失败 $FAIL 个"
 if [ $KNOWN_RED -gt 0 ]; then
   echo "已知红灯 $KNOWN_RED 个（对应修复尚未落地，见 EXPECTED_FAIL）"
+fi
+
+if [ -n "$CLEANUP_FAILED" ]; then
+  echo
+  echo "⚠️  偏好域清理未完成（探针结果不受影响，但下一次跑的初值不再干净）："
+  printf '%s' "$CLEANUP_FAILED" | sort -u | sed 's/^/     /'
 fi
 
 # 已知红灯**意外转绿** = 对应批次已落地 → 清单该删那条了。
@@ -355,5 +377,11 @@ fi
 
 if [ $FAIL -gt 0 ]; then
   printf '失败的：%s\n' "${FAILED_NAMES[*]}"
+  exit 1
+fi
+
+# 清理失败也要红：见上方清理段的说明。放在最后，让探针失败优先报出来。
+if [ -n "$CLEANUP_FAILED" ]; then
+  echo "❌ 偏好域清理未完成 —— 环境差异必须可见，不能报「失败 0 个」了事"
   exit 1
 fi
