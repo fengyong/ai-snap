@@ -71,7 +71,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `text_shape_probe` | 文字标注几何 + 周长参数互逆性 | 22 |
 | `screen_geometry_probe` | 屏幕/图像坐标换算（含与真实显示器布局交叉验证） | 13 |
 | `window_pick_probe` | 窗口挑选：Quartz→AppKit 矩形翻转、标题拼接、滚轮换选回绕 | 22 |
-| `export_encode_probe` | 导出编码：PNG 逐位一致、JPEG/HEIC 魔数（硬件不支持时如实跳过） | 7 |
+| `export_encode_probe` | 导出编码：PNG 逐位一致、JPEG/HEIC 魔数（硬件不支持时如实跳过）；**O8 编码单源化**：两条入口字节一致 + 贴图旧路径与新路径**像素/alpha 逐像素一致**（透明边缘不许变） | 18 |
 | `anchored_placement_probe` | 标注窗口按选区锚定摆放 | 23 |
 | `overlay_style_probe` | 冻结覆盖层的外观 | 10 |
 | `toolbar_layout_probe` | 工具栏分组布局与折行 | 33 |
@@ -85,7 +85,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `ocr_probe` | OCR：归一化框 → 画布的**无翻转**换算、阅读顺序（真跑 Vision） | 20 |
 | `settings_scroll_probe` | 设置窗口滚动容器（E06）：钳高可滚、翻转停在顶部、窗口复用语义；**屏高注入**（O2：断言不再依赖本机屏幕） | 29（多屏机器 §4 多 3 条） |
 | `postfix_probe` | 第一轮复核 13 项修复的回归（整模块 + 真实窗口） | 80 |
-| `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离、线宽能力协议 | 98（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
+| `master_parity_probe` | A 区分叉缺失项在 master 上的重新实现：箭头几何（含对照）、导出像素、restyle 撤销/重做、窗口挑选、命中层隔离、线宽能力协议、**O14 变换能力子协议**（旋转/平移/周长/手柄） | 113（第 9 节需 `AISNAP_PROBE_ALLOW_CAPTURE=1`，另 +2） |
 | `freehand_probe` | 自由画笔/马克笔：过采样点、双图层命中、质心锚定的缩放移动 | 16 |
 | `magnifier_probe` | 放大镜：取样位置（Y 翻转）/ 拖动重取样 / 命中 / 缩放下限 | 11 |
 | `stitch_scroll_probe` | 滚动长截图拼接算法 spike：偏移识别 / 接缝连续 / nil 边界 / 性能预算 | 11 |

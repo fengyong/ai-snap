@@ -1302,27 +1302,20 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
     // MARK: - 导出辅助
 
-    /// 把 NSImage 编码为 PNG 数据。
-    ///
-    /// **不走 `tiffRepresentation` 中转**：那条路会先把整幅图编码成 TIFF、再解码回
-    /// `NSBitmapImageRep`，等于为了拿到一个位图白白搬运一遍全图数据（Retina 全屏 60MB 级），
-    /// 而且这一步跑在主线程（⌘S / ⌘C 会卡住）。
-    ///
-    /// 复合图本身就是 `NSBitmapImageRep`（见 `AnnotationView.compositeImage`），
-    /// 直接拿它编码即可；只有"没有位图 rep"的图（例如纯 PDF 矢量 rep）才退回 ImageIO。
-    ///
-    /// 非 private：探针要验证"编码出来的像素与原图逐位一致"——换编码器最容易悄悄改变
-    /// 颜色/透明度，而那种错用户只会觉得"存出来的图有点不对"。
-    func pngData(from image: NSImage) -> Data? {
-        ImageEncode.png(from: image)
-    }
-
     /// 写入剪贴板用的临时 PNG，返回其 URL。
     ///
     /// 失败时返回 nil —— 此时调用方仍会写入图片内容，复制功能不受影响。
     /// 文件名带毫秒时间戳，避免连续复制时互相覆盖（文件引用会失效）。
+    ///
+    /// 2026-11-11（O8）：编码改调 `ImageEncode.png(from:)`。原先这里有个
+    /// `pngData(from:)` 转发层（只做一次转调），已删掉 —— 同一语义的编码只留
+    /// `ImageEncode` 一份。原先记在这儿的理由（**不走 `tiffRepresentation` 中转**：
+    /// 那条路会先把整幅图编码成 TIFF、再解码回 `NSBitmapImageRep`，等于为了拿到
+    /// 一个位图白白搬运一遍全图数据（Retina 全屏 60MB 级），而且这一步跑在主线程
+    /// （⌘S / ⌘C 会卡住））现在写在 `ImageEncode.png` 的文档里 —— 那里才是这份理由
+    /// 真正约束的代码。
     private func writeTemporaryPNG(_ image: NSImage) -> URL? {
-        guard let data = pngData(from: image) else { return nil }
+        guard let data = ImageEncode.png(from: image) else { return nil }
 
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("AISnap", isDirectory: true)

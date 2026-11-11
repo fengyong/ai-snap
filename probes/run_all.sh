@@ -150,7 +150,8 @@ run_probe redaction_probe        Sources/Models.swift Sources/Capture/ScreenGeom
                                  Sources/Tools/ShapeToolHandlers.swift \
                                  Sources/Tools/TextToolHandler.swift
 run_probe downscale_probe        # 自带全部实现，不依赖仓库源码
-run_probe history_probe          Sources/History/CaptureHistory.swift
+run_probe history_probe          Sources/History/CaptureHistory.swift \
+                                 Sources/Export/ImageEncode.swift
 run_probe update_probe           Sources/Models.swift \
                                  Sources/Update/UpdateChecker.swift \
                                  Sources/Capture/ScreenGeometry.swift
@@ -163,6 +164,7 @@ run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
 run_probe settings_scroll_probe  Sources/Models.swift Sources/Capture/ScreenGeometry.swift \
                                  Sources/Preferences.swift Sources/HotkeyManager.swift \
                                  Sources/LaunchAtLogin.swift Sources/History/CaptureHistory.swift \
+                                 Sources/Export/ImageEncode.swift \
                                  Sources/SettingsWindow.swift
 # 本轮修复的回归探针：整模块（要构造真实画布与标注窗口）
 run_probe postfix_probe          "${ALL_SOURCES[@]}"
@@ -191,7 +193,8 @@ run_probe text_undo_probe        "${ALL_SOURCES[@]}"
 # 导出路径成本拆解（P2-8 量化基准；对比探针，以退出码为准）
 run_probe export_perf_probe      "${ALL_SOURCES[@]}"
 # 贴图窗口生命周期：close 之后窗口是否真被释放（只需这两个文件，不必整模块）
-run_probe pin_lifetime_probe     Sources/Pin/PinWindow.swift Sources/Pin/PinManager.swift
+run_probe pin_lifetime_probe     Sources/Pin/PinWindow.swift Sources/Pin/PinManager.swift \
+                                 Sources/Export/ImageEncode.swift
 # 标注窗 / OCR 面板生命周期：与贴图同根的 NSApp.windows 泄漏（2026-11-09 修复）
 run_probe window_lifetime_probe  "${ALL_SOURCES[@]}"
 # 2026-10-23 批次 2 新增：

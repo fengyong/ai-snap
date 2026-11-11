@@ -225,14 +225,14 @@ final class PinWindow: NSPanel {
         panel.nameFieldStringValue = "pinned.png"
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url, let self = self else { return }
-            // 经 TIFF 再包成 NSBitmapImageRep：它能吃下任意来源的图像（含非 RGB
-            // 色彩空间），不必先拿到 CGImage。
+            // 走 `ImageEncode` 正典 —— 同一语义的编码曾有三份独立实现
+            // （这里 / 截图历史 / 导出），编码参数将来要调时改一处漏一处。
             //
-            // 订正一处注释：这里原先写"转成 sRGB 再编码"，但代码并没有做任何色彩空间
-            // 转换，实际就是原样编码 —— 注释与实现不符，且不需要转，所以改注释。
-            guard let tiff = self.image.tiffRepresentation,
-                  let rep = NSBitmapImageRep(data: tiff),
-                  let data = rep.representation(using: .png, properties: [:]) else {
+            // 原来这里多绕一次 TIFF 往返（`tiffRepresentation` → NSBitmapImageRep），
+            // 2026-11-11 实测：绕与不绕**像素完全一致**、**字节不同**（162 vs 150），
+            // 往返纯属白费一次编解码（还会丢精度）。去掉后透明通道行为不变 ——
+            // 像素级比对见 probes/export_encode_probe §5。
+            guard let data = ImageEncode.png(from: self.image) else {
                 self.reportSaveFailure("无法把图像编码为 PNG。")
                 return
             }

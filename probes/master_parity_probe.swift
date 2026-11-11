@@ -1051,7 +1051,7 @@ do {
     image.addRepresentation(rep)
 
     let window = AnnotationWindow(image: image)
-    guard let data = window.pngData(from: image),
+    guard let data = ImageEncode.png(from: image),
           let decoded = NSBitmapImageRep(data: data) else {
         check("能编码出 PNG", false); exit(1)
     }

@@ -107,7 +107,7 @@ final class CaptureHistory {
                 onFailure: (() -> Void)? = nil) {
         queue.async { [weak self] in
             guard let self = self else { return }
-            guard let data = Self.pngData(from: image) else {
+            guard let data = ImageEncode.png(from: image) else {
                 Self.reportFailure(onFailure, why: "PNG 编码失败")
                 return
             }
@@ -261,10 +261,5 @@ final class CaptureHistory {
         NSLog("[AISnap] 截图历史记录失败：%@", why)
         guard let handler = handler else { return }
         DispatchQueue.main.async(execute: handler)
-    }
-
-    private static func pngData(from image: CGImage) -> Data? {
-        let rep = NSBitmapImageRep(cgImage: image)
-        return rep.representation(using: .png, properties: [:])
     }
 }
