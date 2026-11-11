@@ -60,6 +60,7 @@ func makeContext(drawingFromCenter: Bool) -> ToolContext {
         colorKey: 1,
         sourceImage: nil,          // 没有底图 → 打码退化为灰块，正好量它的覆盖范围
         pixelScale: 1,
+        redactionStrength: 1,      // 基准强度（打码强度的来源是画布注入，不是全局偏好）
         detectAttachment: { _ in nil },
         resolveAttachmentPosition: { _ in nil },
         nextStepNumber: { 1 }

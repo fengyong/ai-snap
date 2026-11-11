@@ -6,8 +6,13 @@ import Cocoa
 // 另一处是分支覆盖：「远端更旧」「本地版本读不出来」「下载地址非法」这些分支
 // 只有走网络才能跑到的话，一辈子不会被测到，所以判定逻辑抽成了纯函数。
 //
-// 链接**真实的** UpdateChecker.swift + Preferences.swift + Models.swift
-// （Preferences 依赖 HotkeyConfig / LineStyle 等，因此一并链上）。
+// 链接**真实的** UpdateChecker.swift + Models.swift。
+//
+// 不再链接 Preferences.swift：`UpdateChecker` 已经不读全局偏好了（清单地址由
+// 调用方传进来），这份探针因此**一个字节的偏好都不碰** —— 原来它要改
+// `Preferences.shared.updateFeedURL`，写的是用户的真实偏好文件
+// （探针进程叫 `run`，落进 `~/Library/Preferences/run.plist`），
+// 于是 `run_all.sh` 得专门写一段善后清理，而且上一次的取值会漏给下一次。
 
 var passed = 0, failed = 0
 func check(_ name: String, _ ok: Bool, _ detail: String = "") {
@@ -137,39 +142,35 @@ do {
 
 print("\n=== 4. 清单地址（留空 / 非法都不检查）===")
 do {
-    let prefs = Preferences.shared
-    let saved = prefs.updateFeedURL
-    defer { prefs.updateFeedURL = saved }
+    // 直接喂**字面量**给纯函数，不去改 `Preferences.shared` ——
+    // 原来的写法要写用户的真实偏好文件（探针进程叫 `run`，写的是
+    // `~/Library/Preferences/run.plist`），于是 `run_all.sh` 得专门写一段善后清理，
+    // 而且上一次的取值会漏给下一次。现在这一节一个字节的偏好都不碰。
+    check("留空 → nil（不发起请求）", UpdateChecker.feedURL(from: "") == nil)
 
-    prefs.updateFeedURL = ""
-    check("留空 → nil（不发起请求）", UpdateChecker.configuredFeedURL == nil)
+    check("只有空白 → nil", UpdateChecker.feedURL(from: "   ") == nil)
 
-    prefs.updateFeedURL = "   "
-    check("只有空白 → nil", UpdateChecker.configuredFeedURL == nil)
-
-    prefs.updateFeedURL = "https://example.com/latest.json"
     check("正常地址 → 能解析出 URL",
-          UpdateChecker.configuredFeedURL?.host == "example.com",
-          "\(String(describing: UpdateChecker.configuredFeedURL))")
+          UpdateChecker.feedURL(from: "https://example.com/latest.json")?.host == "example.com",
+          "\(String(describing: UpdateChecker.feedURL(from: "https://example.com/latest.json")))")
 
-    prefs.updateFeedURL = "不是地址"
     check("非法地址 → nil（URL(string:) 对非 ASCII 很宽容，必须自己校验 scheme）",
-          UpdateChecker.configuredFeedURL == nil,
-          "\(String(describing: UpdateChecker.configuredFeedURL))")
+          UpdateChecker.feedURL(from: "不是地址") == nil,
+          "\(String(describing: UpdateChecker.feedURL(from: "不是地址")))")
 
-    prefs.updateFeedURL = "ftp://example.com/latest.json"
     check("非 http(s)/file 的 scheme → nil",
-          UpdateChecker.configuredFeedURL == nil,
-          "\(String(describing: UpdateChecker.configuredFeedURL))")
+          UpdateChecker.feedURL(from: "ftp://example.com/latest.json") == nil,
+          "\(String(describing: UpdateChecker.feedURL(from: "ftp://example.com/latest.json")))")
 
-    prefs.updateFeedURL = "https://"
     check("有 scheme 但没有主机 → nil",
-          UpdateChecker.configuredFeedURL == nil,
-          "\(String(describing: UpdateChecker.configuredFeedURL))")
+          UpdateChecker.feedURL(from: "https://") == nil,
+          "\(String(describing: UpdateChecker.feedURL(from: "https://")))")
 
-    prefs.updateFeedURL = "http://example.com/latest.json"
     check("http 也接受（内网自建更新源）",
-          UpdateChecker.configuredFeedURL?.scheme == "http")
+          UpdateChecker.feedURL(from: "http://example.com/latest.json")?.scheme == "http")
+
+    check("file:// 也接受（探针靠它跑通整条链路）",
+          UpdateChecker.feedURL(from: "file:///tmp/manifest.json")?.scheme == "file")
 }
 
 // MARK: - 5. 端到端：真的取一次清单（用 file:// 走完整链路）

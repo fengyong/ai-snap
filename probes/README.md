@@ -71,10 +71,10 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `overlay_style_probe` | 冻结覆盖层的外观 | 10 |
 | `toolbar_layout_probe` | 工具栏分组布局与折行 | 33 |
 | `toolbar_width_probe` | 工具栏单行宽度上限 | 11 |
-| `redaction_probe` | 打码：块平均、硬边、模糊边缘、隐私抹平、每帧成本 | 29 |
+| `redaction_probe` | 打码：块平均、硬边、模糊边缘、隐私抹平、每帧成本、强度按比例 | 37 |
 | `downscale_probe` | 降采样实现横向对比（CG 各插值档 / 手写平均 / vImage） | 判据式 |
 | `history_probe` | 截图历史：索引与磁盘同步、自愈、损坏降级 | 29 |
-| `update_probe` | 更新检查：版本号比较（1.10.0 > 1.9.0）、清单地址校验 | 53 |
+| `update_probe` | 更新检查：版本号比较（1.10.0 > 1.9.0）、清单地址校验 | 54 |
 | `eraser_probe` | 橡皮擦：整笔一步撤销、级联删除箭头（合成鼠标事件） | 22 |
 | `picker_probe` | 取色器：Y 翻转方向、倍率反推、放大镜切片 | 28 |
 | `ocr_probe` | OCR：归一化框 → 画布的**无翻转**换算、阅读顺序（真跑 Vision） | 20 |

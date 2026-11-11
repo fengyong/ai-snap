@@ -140,11 +140,19 @@ run_probe overlay_style_probe    Sources/OverlayWindowStyle.swift
 run_probe toolbar_layout_probe   Sources/ToolbarLayout.swift
 run_probe redaction_probe        Sources/Models.swift Sources/Capture/ScreenGeometry.swift \
                                  Sources/Redaction/ImageRedaction.swift \
-                                 Sources/Redaction/RedactionShape.swift
+                                 Sources/Redaction/RedactionShape.swift \
+                                 Sources/Tools/AnnotationToolHandler.swift \
+                                 Sources/Tools/ArrowToolHandler.swift \
+                                 Sources/Tools/ClickPlacementToolHandler.swift \
+                                 Sources/Tools/MagnifierToolHandler.swift \
+                                 Sources/Tools/PenToolHandler.swift \
+                                 Sources/Tools/RedactionToolHandlers.swift \
+                                 Sources/Tools/ShapeToolHandlers.swift \
+                                 Sources/Tools/TextToolHandler.swift
 run_probe downscale_probe        # 自带全部实现，不依赖仓库源码
 run_probe history_probe          Sources/History/CaptureHistory.swift
-run_probe update_probe           Sources/Models.swift Sources/Preferences.swift \
-                                 Sources/HotkeyManager.swift Sources/Update/UpdateChecker.swift \
+run_probe update_probe           Sources/Models.swift \
+                                 Sources/Update/UpdateChecker.swift \
                                  Sources/Capture/ScreenGeometry.swift
 # 这三个要整模块编译：它们构造真实的画布并合成鼠标事件
 run_probe eraser_probe           "${ALL_SOURCES[@]}"
@@ -239,14 +247,20 @@ done
 
 # ── 还有一份漏网的：探针二进制叫 `run`，它写的是 UserDefaults.standard ────────
 #
-# 会构造真实 AnnotationWindow 的那几个探针，走的是 `Preferences.shared`
-# （= UserDefaults.standard），而探针进程的可执行文件叫 `run` —— 于是偏好落进了
-# `~/Library/Preferences/run.plist`。上面按 `com.aisnap.probe.*` 清理扫不到它，
-# 结果**上一次探针的取值会漏给下一次**：实测里面留着 `updateFeedURL = ""`，
-# 后面的探针就会读到 `configuredFeedURL == nil`，行为跟预期不一样。
+# 探针进程的可执行文件叫 `run` —— macOS 对「没有 bundle 的裸可执行文件」用
+# 进程名当 `UserDefaults.standard` 的域，于是偏好落进了
+# `~/Library/Preferences/run.plist`。上面按 `com.aisnap.probe.*` 的清理扫不到它。
+#
+# **O6 之后，写它的探针从两个减到一个**：
+#   · update_probe —— 不再写全局偏好了（清单地址改成纯函数，调用方传进来），
+#     它以前留下的 `updateFeedURL = ""` 会让后面的探针读到「没配置地址」，
+#     行为跟预期不一样 —— 那个漏点已经堵上
+#   · settings_scroll_probe —— 还要写 `Preferences.shared.ignoredBundleIdentifiers`
+#     才能让设置窗口显示出长列表（设置窗口自己读全局偏好，没有注入缝），
+#     所以这一份清理还得留着
 #
 # 这个名字很通用，所以只在我们自己刚编译过 `run` 的前提下删是安全的 ——
-# 这里正是那个前提下（每个探针都用 -o "$tmp/run" 编出来的）。
+# 这里正是那个前提（每个探针都用 -o "$tmp/run" 编出来的）。
 for _attempt in 1 2 3 4 5; do
   if [ -e "$HOME/Library/Preferences/run.plist" ]; then
     rm -f "$HOME/Library/Preferences/run.plist"; sleep 0.3

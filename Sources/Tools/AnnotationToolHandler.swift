@@ -21,6 +21,12 @@ struct ToolContext {
     let sourceImage: CGImage?
     /// 「画布点 → 底图像素」的倍率。打码的块大小 / 模糊半径都要乘上它。
     let pixelScale: CGFloat
+    /// 打码强度系数（0.5…3.0，设置窗口可调）。
+    ///
+    /// 由画布注入，handler 不去读全局偏好 —— 它是纯构造逻辑，
+    /// 读全局意味着「给定强度测打码算法」这件事做不到，探针只能去改真实的
+    /// `UserDefaults`（那会污染用户的偏好文件）。
+    let redactionStrength: CGFloat
 
     /// 端点吸附到已有对象（仅箭头用）。需要访问画布对象表，因此由画布注入。
     let detectAttachment: (CGPoint) -> Attachment?

@@ -129,13 +129,15 @@ enum AppInfo {
 enum UpdateChecker {
     /// 清单地址：优先用用户填的，没填（或不合法）则视为「尚未配置」。
     ///
+    /// **纯函数**：输入是用户填的原始字符串，不读任何全局状态 ——
+    /// 调用方（应用外壳）负责从偏好里取值传进来。
+    ///
     /// 这里要**主动校验 scheme**：`URL(string:)` 对非 ASCII 很宽容，
     /// `"不是地址"` 也能被它解析成一个没有 scheme 的相对地址 —— 那样会一路走到
     /// 网络请求才失败，用户看到的是"unsupported URL"这种看不懂的报错。
     /// 在入口处挡掉，才能给出"还没配置更新地址"这种说得清的提示。
-    static var configuredFeedURL: URL? {
-        let raw = Preferences.shared.updateFeedURL
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    static func feedURL(from raw: String) -> URL? {
+        let raw = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty, let url = URL(string: raw),
               let scheme = url.scheme?.lowercased(),
               ["http", "https", "file"].contains(scheme) else { return nil }

@@ -288,6 +288,84 @@ do {
     print(String(format: "     （对照）上一版每帧放大铺满：%.2f ms", oldWay))
 }
 
+// MARK: - 9. 打码强度：系数由调用方给，块大小 / 半径按比例
+
+print("\n=== 9. 打码强度：给定系数 → 块大小 / 半径按比例 ===")
+do {
+    // 强度**由 `ToolContext` 注入**（画布从偏好读一次传进来），
+    // handler 不再读 `Preferences.shared` —— 于是「给定强度测打码算法」
+    // 不用碰真实的 UserDefaults（那会写进用户的偏好文件）。
+    func makeContext(strength: CGFloat) -> ToolContext {
+        ToolContext(
+            color: .red,
+            lineWidth: 15,
+            lineStyle: .solid,
+            arrowStyle: .default,
+            drawingFromCenter: false,
+            canvasSize: CGSize(width: 400, height: 300),
+            colorKey: 1,
+            sourceImage: nil,
+            pixelScale: 1,
+            redactionStrength: strength,
+            detectAttachment: { _ in nil },
+            resolveAttachmentPosition: { _ in nil },
+            nextStepNumber: { 1 }
+        )
+    }
+
+    let handler = RedactionToolHandler()
+    /// 走**真实**的 handler 构造路径，拿它产出的形状样式。
+    func style(for tool: DrawingTool, strength: CGFloat) -> RedactionStyle? {
+        let obj = handler.makeObject(from: CGPoint(x: 0, y: 0),
+                                      to: CGPoint(x: 100, y: 50),
+                                      tool: tool,
+                                      context: makeContext(strength: strength))
+        return (obj as? RedactionShape)?.style
+    }
+
+    func mosaicBlock(strength: CGFloat) -> CGFloat? {
+        if case .mosaic(let blockSize) = style(for: .mosaic, strength: strength) {
+            return blockSize
+        }
+        return nil
+    }
+    func blurRadius(strength: CGFloat) -> CGFloat? {
+        if case .blur(let radius) = style(for: .blur, strength: strength) {
+            return radius
+        }
+        return nil
+    }
+
+    let base = RedactionToolHandler.mosaicBlockSize
+    check("强度 1.0 → 马赛克块 = 基准值",
+          mosaicBlock(strength: 1.0) == base, "\(String(describing: mosaicBlock(strength: 1.0)))")
+    check("强度 1.0 → 模糊半径 = 基准值",
+          blurRadius(strength: 1.0) == RedactionToolHandler.blurRadius,
+          "\(String(describing: blurRadius(strength: 1.0)))")
+
+    check("强度 0.5 → 马赛克块减半",
+          mosaicBlock(strength: 0.5) == base / 2,
+          "\(String(describing: mosaicBlock(strength: 0.5)))")
+    check("强度 0.5 → 模糊半径减半",
+          blurRadius(strength: 0.5) == RedactionToolHandler.blurRadius / 2,
+          "\(String(describing: blurRadius(strength: 0.5)))")
+
+    check("强度 3.0 → 马赛克块三倍",
+          mosaicBlock(strength: 3.0) == base * 3,
+          "\(String(describing: mosaicBlock(strength: 3.0)))")
+    check("强度 3.0 → 模糊半径三倍",
+          blurRadius(strength: 3.0) == RedactionToolHandler.blurRadius * 3,
+          "\(String(describing: blurRadius(strength: 3.0)))")
+
+    // 三个强度必须给出三个不同的结果 —— 否则「按比例」其实是「不随强度变」
+    let all = [mosaicBlock(strength: 0.5), mosaicBlock(strength: 1.0), mosaicBlock(strength: 3.0)]
+    check("不同强度 → 不同的块大小", Set(all.compactMap { $0 }).count == 3,
+          "\(all)")
+
+    check("非打码工具 → nil",
+          style(for: .rectangle, strength: 1.0) == nil)
+}
+
 print("\n========================================")
 print("通过 \(passed) 项，失败 \(failed) 项")
 exit(failed == 0 ? 0 : 1)

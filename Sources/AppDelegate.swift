@@ -149,7 +149,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     /// 而启动时自动检查失败应该**完全静默** —— 一个截图工具因为后台联网失败弹窗，
     /// 是纯粹的打扰。
     private func runUpdateCheck(triggeredByUser: Bool) {
-        guard let feedURL = UpdateChecker.configuredFeedURL else {
+        // 偏好在**外壳**读一次传进去：`UpdateChecker` 保持纯逻辑，
+        // 于是「给定一段地址测它的解析」可以离屏做，不必碰真实的 UserDefaults。
+        guard let feedURL = UpdateChecker.feedURL(from: Preferences.shared.updateFeedURL) else {
             guard triggeredByUser else { return }
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()

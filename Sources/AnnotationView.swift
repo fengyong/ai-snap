@@ -1640,6 +1640,7 @@ class AnnotationView: NSView {
             colorKey: colorKey,
             sourceImage: baseCGImage,
             pixelScale: pixelScale,
+            redactionStrength: CGFloat(Preferences.shared.redactionStrength),
             detectAttachment: { [weak self] point in
                 self?.detectAttachment(at: point, excludeKey: colorKey)
             },

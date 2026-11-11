@@ -17,7 +17,7 @@ struct RedactionToolHandler: AnnotationToolHandler {
     func makeObject(from start: CGPoint, to end: CGPoint,
                     tool: DrawingTool, context: ToolContext) -> (any AnnotationObject)? {
         guard let shape = makeShape(from: start, to: end,
-                                    style: style(for: tool),
+                                    style: style(for: tool, strength: context.redactionStrength),
                                     drawingFromCenter: context.drawingFromCenter,
                                     colorKey: context.colorKey) else { return nil }
         shape.sourceImage = context.sourceImage
@@ -37,7 +37,7 @@ struct RedactionToolHandler: AnnotationToolHandler {
         // 兄弟 handler（矩形、椭圆）都让两条路径共用一个构造（见
         // `EllipseToolHandler.makeShape`），打码当时漏了。
         guard let preview = makeShape(from: start, to: end,
-                                      style: style(for: tool),
+                                      style: style(for: tool, strength: context.redactionStrength),
                                       drawingFromCenter: context.drawingFromCenter,
                                       colorKey: 0) else { return }
         preview.sourceImage = context.sourceImage
@@ -71,13 +71,17 @@ struct RedactionToolHandler: AnnotationToolHandler {
     }
 
     /// 打码强度**基准值**。12 点的块/半径已经足以让屏幕上的正文和数字无法辨认。
-    /// 实际值 = 基准 × 偏好系数（`Preferences.redactionStrength`，0.5…3.0，
-    /// 设置窗口可调）—— 小图（表情包）可以调细，4K 大屏截图可以调粗。
+    /// 实际值 = 基准 × 强度系数（0.5…3.0，设置窗口可调）——
+    /// 小图（表情包）可以调细，4K 大屏截图可以调粗。
+    ///
+    /// 系数由 `ToolContext` 注入，**不在这里读全局偏好**：
+    /// 这段是纯构造逻辑，读全局就等于「给定强度测打码算法」这件事做不到 ——
+    /// 探针只能去改真实的 `UserDefaults`，而那会写进用户的偏好文件。
     static let mosaicBlockSize: CGFloat = 12
     static let blurRadius: CGFloat = 12
 
-    private func style(for tool: DrawingTool) -> RedactionStyle? {
-        let strength = CGFloat(Preferences.shared.redactionStrength)
+    /// 工具 → 打码样式。强度由调用方给（画布从偏好里读一次注入进来）。
+    private func style(for tool: DrawingTool, strength: CGFloat) -> RedactionStyle? {
         switch tool {
         case .mosaic: return .mosaic(blockSize: Self.mosaicBlockSize * strength)
         case .blur:   return .blur(radius: Self.blurRadius * strength)
