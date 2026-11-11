@@ -1220,7 +1220,12 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let url = self?.writeTemporaryPNG(image) else { return }
             DispatchQueue.main.async {
-                guard let self else { return }
+                // 窗口可能在这期间被关掉（`self` 是弱引用捕获）。关掉了就不该再往
+                // 剪贴板补写文件 URL —— 那是给一个已经不存在的窗口擦屁股。
+                // 写成 `self != nil` 而不是 `guard let self`：绑定的 `self` 后面
+                // 并没被用到，编译器会报「defined but never used」（既有告警，
+                // 2026-11-11 随 O8 重新编译才暴露出来），而这里的语义就是判空。
+                guard self != nil else { return }
                 let pb = NSPasteboard.general
                 guard pb.changeCount == changeCountAtCopy + 1 else { return }
                 pb.clearContents()
