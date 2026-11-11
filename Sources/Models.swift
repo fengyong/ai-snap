@@ -865,6 +865,27 @@ extension RotatableShape {
     func rotate(by angle: CGFloat) { rotation += angle }
 }
 
+/// 有中心点的形状：平移 = 中心点加增量。
+///
+/// 8 个形状的 `move(by:)` 是**逐字相同**的
+/// `center.x += delta.dx; center.y += delta.dy` —— 逐个核实过，
+/// 无一例外，也都没有额外副作用。抄漏一个不报错：新形状只写一半，
+/// 平移就静默失效。
+///
+/// Arrow 与 FreehandShape 不 conform：它们移动的是**两端点** / **整条笔迹的点集**，
+/// 没有单一中心点可加 —— 它们自己那套实现保留。
+protocol CenteredShape: RotatableShape {
+    var center: CGPoint { get set }
+}
+
+extension CenteredShape {
+    /// 平移。**纯中心点累加**，无额外副作用。
+    func move(by delta: CGVector) {
+        center.x += delta.dx
+        center.y += delta.dy
+    }
+}
+
 // MARK: - Arrow
 
 class Arrow: AnnotationObject, LineWidthSupporting {
@@ -1168,7 +1189,7 @@ class Arrow: AnnotationObject, LineWidthSupporting {
 
 // MARK: - RectangleShape
 
-class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RectResizable, RotatableShape {
+class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RectResizable, CenteredShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1340,10 +1361,6 @@ class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting
 
     // MARK: Transform
 
-    func move(by delta: CGVector) {
-        center.x += delta.dx
-        center.y += delta.dy
-    }
 
 
     func scale(by factor: CGFloat) {
@@ -1360,7 +1377,7 @@ class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting
 
 // MARK: - CircleShape (Ellipse)
 
-class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RotatableShape {
+class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, CenteredShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1490,10 +1507,6 @@ class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, R
 
     // MARK: Transform
 
-    func move(by delta: CGVector) {
-        center.x += delta.dx
-        center.y += delta.dy
-    }
 
 
     func scale(by factor: CGFloat) {
@@ -1514,7 +1527,7 @@ class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, R
 
 // MARK: - StampObject
 
-class StampObject: AnnotationObject, RotatableShape {
+class StampObject: AnnotationObject, CenteredShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1680,10 +1693,6 @@ class StampObject: AnnotationObject, RotatableShape {
 
     // MARK: Transform
 
-    func move(by delta: CGVector) {
-        center.x += delta.dx
-        center.y += delta.dy
-    }
 
 
     func scale(by factor: CGFloat) {
@@ -1705,7 +1714,7 @@ class StampObject: AnnotationObject, RotatableShape {
 ///
 /// 因为命中检测走 Layer B 的像素读取，本类只需正确实现 `drawHitTest`，
 /// 选中 / 移动 / 旋转 / 缩放 / 撤销重做会全部自动继承，无额外代码。
-class StepBadge: AnnotationObject, RotatableShape {
+class StepBadge: AnnotationObject, CenteredShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1838,10 +1847,6 @@ class StepBadge: AnnotationObject, RotatableShape {
 
     // MARK: Transform
 
-    func move(by delta: CGVector) {
-        center.x += delta.dx
-        center.y += delta.dy
-    }
 
 
     func scale(by factor: CGFloat) {
@@ -1864,7 +1869,7 @@ class StepBadge: AnnotationObject, RotatableShape {
 /// **尺寸由文字内容与字号推导，不单独存宽高**：改字号、改文字之后，
 /// 包围盒 / 命中区 / 选择手柄会自动跟着变。若额外存一份宽高，就得在
 /// 「改文字」「改字号」「缩放」三处都记得同步，漏一处就出 bug。
-final class TextShape: AnnotationObject, RotatableShape {
+final class TextShape: AnnotationObject, CenteredShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2037,10 +2042,6 @@ final class TextShape: AnnotationObject, RotatableShape {
 
     // MARK: Transform
 
-    func move(by delta: CGVector) {
-        center.x += delta.dx
-        center.y += delta.dy
-    }
 
 
     /// 缩放作用在**字号**上 —— 文字的「大小」就是字号，改宽高没有意义
@@ -2353,7 +2354,7 @@ class FreehandShape: AnnotationObject, LineWidthSupporting, RotatableShape {
 ///
 /// 与打码同一约定：源图与倍率由 handler 在构造时注入（`ToolContext` 统一给），
 /// 形状自己不持有画布引用。旋转无意义（圆对称 + 内容来自底图），保留字段但绘制不使用。
-class MagnifierShape: AnnotationObject, RotatableShape {
+class MagnifierShape: AnnotationObject, CenteredShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2525,10 +2526,6 @@ class MagnifierShape: AnnotationObject, RotatableShape {
 
     // MARK: Transform
 
-    func move(by delta: CGVector) {
-        center.x += delta.dx
-        center.y += delta.dy
-    }
 
 
     func scale(by factor: CGFloat) {
@@ -2547,7 +2544,7 @@ class MagnifierShape: AnnotationObject, RotatableShape {
 
 // MARK: - SpotlightShape
 
-class SpotlightShape: AnnotationObject, RectResizable, RotatableShape {
+class SpotlightShape: AnnotationObject, RectResizable, CenteredShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2688,12 +2685,6 @@ class SpotlightShape: AnnotationObject, RectResizable, RotatableShape {
     }
 
     // MARK: Transform
-
-    func move(by delta: CGVector) {
-        center.x += delta.dx
-        center.y += delta.dy
-    }
-
 
     func scale(by factor: CGFloat) {
         let f = abs(factor)

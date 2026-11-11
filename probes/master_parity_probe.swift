@@ -1348,6 +1348,44 @@ do {
     // 新形状只写一半，旋转就静默失效（用户拖不动、撤销还照样算回去）。
     // 现在只要 conform `RotatableShape`，默认实现就位。
 
+    // 只 conform `CenteredShape` 的新形状：**move 与 rotate 都不用自己写** ——
+    // O14 的验收点。原来 move/rotate 是 8~9 份逐字相同的样板，抄漏一个不报错，
+    // 新形状只写一半，移动或旋转就静默失效。
+    final class CenteredOnlyShape: CenteredShape {
+        let id = UUID()
+        let hitTestColorKey: UInt32 = 998
+        var center = CGPoint(x: 10, y: 20)
+        var rotation: CGFloat = 0
+        var color: NSColor = .black
+        var boundingBox: CGRect = CGRect(x: 0, y: 0, width: 20, height: 20)
+        func draw(in ctx: CGContext) {}
+        func drawHitTest(in ctx: CGContext, color: NSColor) {}
+        func selectionHandlePoints() -> [CGPoint] { [] }
+        func snapPoints() -> [SnapPoint] { [] }
+        func nearestPerimeterPoint(to point: CGPoint) -> CGPoint { center }
+        func pointOnPerimeter(at parameter: CGFloat) -> CGPoint { center }
+        func perimeterParameter(for point: CGPoint) -> CGFloat { 0 }
+        func scale(by factor: CGFloat) {}
+        var stateFingerprint: Int { commonStateFingerprint() }
+    }
+    let s = CenteredOnlyShape()
+    s.move(by: CGVector(dx: 5, dy: -3))
+    check("只 conform CenteredShape 的新形状：move 生效（不用自己写）",
+          s.center == CGPoint(x: 15, y: 17), "\(s.center)")
+    s.rotate(by: 0.5)
+    check("只 conform CenteredShape 的新形状：rotate 生效（不用自己写）",
+          abs(s.rotation - 0.5) < 0.0001, "\(s.rotation)")
+
+    // 经 `any AnnotationObject` 调用也必须正确分发 ——
+    // 默认实现要进 witness table，否则这里会静默走空（真实产品路径就是经 any 调用的）。
+    let viaAny: any AnnotationObject = s
+    viaAny.move(by: CGVector(dx: 1, dy: 1))
+    check("经 any AnnotationObject 调用 move 同样生效（动态分发）",
+          s.center == CGPoint(x: 16, y: 18), "\(s.center)")
+    viaAny.rotate(by: 0.25)
+    check("经 any AnnotationObject 调用 rotate 同样生效（动态分发）",
+          abs(s.rotation - 0.75) < 0.0001, "\(s.rotation)")
+
     // 只 conform `RotatableShape`（没有中心点）的形状：能旋转，但**不能**套用
     // 「中心点累加」那套平移 —— Arrow / FreehandShape 正是这一类
     //（移动的是两端点 / 整条笔迹）。
