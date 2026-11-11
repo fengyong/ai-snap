@@ -1386,6 +1386,35 @@ do {
     check("经 any AnnotationObject 调用 rotate 同样生效（动态分发）",
           abs(s.rotation - 0.75) < 0.0001, "\(s.rotation)")
 
+    // 只 conform `RectPerimeterShape` 的新形状：周长三件套也不用自己写 ——
+    // 三件套必须**互逆**（附着系统就靠这一对），抄漏一个不报错。
+    final class RectPerimeterOnlyShape: RectPerimeterShape {
+        let id = UUID()
+        let hitTestColorKey: UInt32 = 996
+        var center = CGPoint(x: 100, y: 100)
+        var rotation: CGFloat = 0
+        var color: NSColor = .black
+        var boundingBox: CGRect = CGRect(x: 80, y: 90, width: 40, height: 20)
+        var perimeterSize: CGSize { CGSize(width: 40, height: 20) }
+        func draw(in ctx: CGContext) {}
+        func drawHitTest(in ctx: CGContext, color: NSColor) {}
+        func selectionHandlePoints() -> [CGPoint] { [] }
+        func snapPoints() -> [SnapPoint] { [] }
+        func move(by delta: CGVector) {}
+        func rotate(by angle: CGFloat) {}
+        func scale(by factor: CGFloat) {}
+        var stateFingerprint: Int { commonStateFingerprint() }
+    }
+    let rp = RectPerimeterOnlyShape()
+    let onEdge = rp.pointOnPerimeter(at: 0.125)
+    check("只 conform RectPerimeterShape 的新形状：周长参数 → 点，落在周长上",
+          hypot(rp.nearestPerimeterPoint(to: onEdge).x - onEdge.x,
+                rp.nearestPerimeterPoint(to: onEdge).y - onEdge.y) < 0.5,
+          "点 \(onEdge)")
+    check("只 conform RectPerimeterShape 的新形状：参数 ↔ 点互逆",
+          abs(rp.perimeterParameter(for: onEdge) - 0.125) < 0.01,
+          "0.125 → \(rp.perimeterParameter(for: onEdge))")
+
     // 只 conform `RotatableShape`（没有中心点）的形状：能旋转，但**不能**套用
     // 「中心点累加」那套平移 —— Arrow / FreehandShape 正是这一类
     //（移动的是两端点 / 整条笔迹）。

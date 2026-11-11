@@ -32,7 +32,7 @@ enum RedactionStyle: Hashable {
 /// 打码结果按「取样矩形 + 样式 + 像素倍率」缓存，且在 `draw` 时比对缓存键自动失效 ——
 /// **不需要在 move/scale/rotate 里逐个挂钩子**。挂钩子的写法漏一处就是「拖完还是旧的
 /// 打码」，而且没有任何报错。
-final class RedactionShape: AnnotationObject, RectResizable, CenteredShape {
+final class RedactionShape: AnnotationObject, RectResizable, CenteredShape, RectPerimeterShape {
     let id = UUID()
     let hitTestColorKey: UInt32
 
@@ -232,21 +232,8 @@ final class RedactionShape: AnnotationObject, RectResizable, CenteredShape {
         return points
     }
 
-    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        RectPerimeter.nearestPoint(to: point, center: center,
-                                   size: CGSize(width: width, height: height),
-                                   rotation: rotation)
-    }
-
-    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        RectPerimeter.point(at: parameter, center: center,
-                            size: CGSize(width: width, height: height), rotation: rotation)
-    }
-
-    func perimeterParameter(for point: CGPoint) -> CGFloat {
-        RectPerimeter.parameter(for: point, center: center,
-                                size: CGSize(width: width, height: height), rotation: rotation)
-    }
+    /// 周长框（未旋转本地坐标）—— 周长三件套据此转发给 `RectPerimeter`。
+    var perimeterSize: CGSize { CGSize(width: width, height: height) }
 
     // MARK: - 变换
 

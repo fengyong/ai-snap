@@ -886,6 +886,38 @@ extension CenteredShape {
     }
 }
 
+/// 周长是**矩形**的形状：周长三件套转发给 `RectPerimeter`。
+///
+/// 抽出来的原因：矩形 / 聚光灯 / 打码 / 贴纸 / 文字 这 5 个形状的周长三件套是
+/// **逐字相同**的转发 —— 只有「周长框多大」这一项不同。
+/// 抄漏一个不报错：三件套必须**互逆**（附着系统就靠这一对），
+/// 漏改一个就变成「箭头吸附到错的位置」，而且不崩不报错。
+///
+/// 注意：`AnnotationObject` 本体里那三个方法**仍然不给默认实现** ——
+/// 新形状不表态就编译不过，这条没有被削弱；这里只是把「矩形周长」
+/// 这一档变成了可以选填的标准答案。
+protocol RectPerimeterShape: AnnotationObject {
+    /// 周长框在**未旋转**本地坐标系下的尺寸。
+    var perimeterSize: CGSize { get }
+}
+
+extension RectPerimeterShape {
+    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
+        RectPerimeter.nearestPoint(to: point, center: center,
+                                   size: perimeterSize, rotation: rotation)
+    }
+
+    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
+        RectPerimeter.point(at: parameter, center: center,
+                            size: perimeterSize, rotation: rotation)
+    }
+
+    func perimeterParameter(for point: CGPoint) -> CGFloat {
+        RectPerimeter.parameter(for: point, center: center,
+                                size: perimeterSize, rotation: rotation)
+    }
+}
+
 // MARK: - Arrow
 
 class Arrow: AnnotationObject, LineWidthSupporting {
@@ -1189,7 +1221,7 @@ class Arrow: AnnotationObject, LineWidthSupporting {
 
 // MARK: - RectangleShape
 
-class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RectResizable, CenteredShape {
+class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, RectResizable, CenteredShape, RectPerimeterShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1342,22 +1374,9 @@ class RectangleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting
         return points
     }
 
-    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        RectPerimeter.nearestPoint(to: point, center: center, size: CGSize(width: width, height: height), rotation: rotation)
-    }
-
-    func perimeterParameter(for point: CGPoint) -> CGFloat {
-        RectPerimeter.parameter(for: point, center: center,
-                                size: CGSize(width: width, height: height),
-                                rotation: rotation)
-    }
-
     /// 周长参数 (0...1) → 对应的周长上的世界坐标点
-    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        RectPerimeter.point(at: parameter, center: center,
-                            size: CGSize(width: width, height: height),
-                            rotation: rotation)
-    }
+    /// 周长框（未旋转本地坐标）—— 周长三件套据此转发给 `RectPerimeter`。
+    var perimeterSize: CGSize { CGSize(width: width, height: height) }
 
     // MARK: Transform
 
@@ -1527,7 +1546,7 @@ class CircleShape: AnnotationObject, LineStyleSupporting, LineWidthSupporting, C
 
 // MARK: - StampObject
 
-class StampObject: AnnotationObject, CenteredShape {
+class StampObject: AnnotationObject, CenteredShape, RectPerimeterShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -1671,25 +1690,9 @@ class StampObject: AnnotationObject, CenteredShape {
         return points
     }
 
-    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        RectPerimeter.nearestPoint(to: point, center: center,
-                                   size: CGSize(width: size, height: size),
-                                   rotation: rotation)
-    }
-
-    func perimeterParameter(for point: CGPoint) -> CGFloat {
-        RectPerimeter.parameter(for: point, center: center,
-                                size: CGSize(width: size, height: size),
-                                rotation: rotation)
-    }
-
     /// 周长参数 (0...1) → 正方形包围盒周长上的世界坐标点
-    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        // 正方形 → 尺寸就是边长；与「点 → 参数」共用 RectPerimeter 的同一套分段
-        RectPerimeter.point(at: parameter, center: center,
-                            size: CGSize(width: size, height: size),
-                            rotation: rotation)
-    }
+    /// 周长框（未旋转本地坐标）—— 周长三件套据此转发给 `RectPerimeter`。
+    var perimeterSize: CGSize { CGSize(width: size, height: size) }
 
     // MARK: Transform
 
@@ -1869,7 +1872,7 @@ class StepBadge: AnnotationObject, CenteredShape {
 /// **尺寸由文字内容与字号推导，不单独存宽高**：改字号、改文字之后，
 /// 包围盒 / 命中区 / 选择手柄会自动跟着变。若额外存一份宽高，就得在
 /// 「改文字」「改字号」「缩放」三处都记得同步，漏一处就出 bug。
-final class TextShape: AnnotationObject, CenteredShape {
+final class TextShape: AnnotationObject, CenteredShape, RectPerimeterShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2016,29 +2019,12 @@ final class TextShape: AnnotationObject, CenteredShape {
         return points
     }
 
-    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        // 文字的周长也是一个矩形（内容框），所以走与矩形家族同一套几何。
-        //
-        // 原来这里是"只钳制、不推边"：**内部点原样返回**。矩形 / 印章 / 聚光灯 / 打码
-        // 上一轮都收敛到 RectPerimeter 了，唯独漏了文字 —— 于是"点在文字内部"时
-        // 附着锚点落在框内而不是框上，与其它形状的行为不一致。
-        RectPerimeter.nearestPoint(to: point, center: center,
-                                   size: contentSize, rotation: rotation)
-    }
-
-    func perimeterParameter(for point: CGPoint) -> CGFloat {
-        RectPerimeter.parameter(for: point, center: center,
-                                size: contentSize, rotation: rotation)
-    }
-
     /// 周长参数 (0...1) → 矩形边界上的世界坐标点。
     ///
     /// 与「点 → 参数」共用 `RectPerimeter` 的同一套分段 —— 两者是互逆的一对，
     /// 各写一份会让箭头吸附到错的位置。
-    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        RectPerimeter.point(at: parameter, center: center,
-                            size: contentSize, rotation: rotation)
-    }
+    /// 周长框（未旋转本地坐标）—— 周长三件套据此转发给 `RectPerimeter`。
+    var perimeterSize: CGSize { contentSize }
 
     // MARK: Transform
 
@@ -2544,7 +2530,7 @@ class MagnifierShape: AnnotationObject, CenteredShape {
 
 // MARK: - SpotlightShape
 
-class SpotlightShape: AnnotationObject, RectResizable, CenteredShape {
+class SpotlightShape: AnnotationObject, RectResizable, CenteredShape, RectPerimeterShape {
     let id: UUID
     let hitTestColorKey: UInt32
     var center: CGPoint
@@ -2670,19 +2656,8 @@ class SpotlightShape: AnnotationObject, RectResizable, CenteredShape {
         return points
     }
 
-    func nearestPerimeterPoint(to point: CGPoint) -> CGPoint {
-        RectPerimeter.nearestPoint(to: point, center: center, size: CGSize(width: width, height: height), rotation: rotation)
-    }
-
-    func pointOnPerimeter(at parameter: CGFloat) -> CGPoint {
-        RectPerimeter.point(at: parameter, center: center,
-                            size: CGSize(width: width, height: height), rotation: rotation)
-    }
-
-    func perimeterParameter(for point: CGPoint) -> CGFloat {
-        RectPerimeter.parameter(for: point, center: center,
-                                size: CGSize(width: width, height: height), rotation: rotation)
-    }
+    /// 周长框（未旋转本地坐标）—— 周长三件套据此转发给 `RectPerimeter`。
+    var perimeterSize: CGSize { CGSize(width: width, height: height) }
 
     // MARK: Transform
 
