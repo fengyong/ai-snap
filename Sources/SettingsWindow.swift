@@ -1356,10 +1356,14 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         alert.alertStyle = .warning
         let confirmButton = alert.addButton(withTitle: "恢复默认")
         let cancelButton = alert.addButton(withTitle: "取消")
-        pendingResetAlert = alert
 
         guard let window = window else { return }
+        pendingResetAlert = alert
         alert.beginSheetModal(for: window) { [weak self] response in
+            // 收起就清空，**两条响应都要清**。留着不清的话控制器会一直持有
+            // 一个已经关掉的 alert（连带它的 window），而「有没有待确认的危险操作」
+            // 这个问题从此永远答「有」。
+            self?.pendingResetAlert = nil
             guard response == .alertFirstButtonReturn else { return }
             self?.performResetAll()
         }

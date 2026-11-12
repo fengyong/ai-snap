@@ -636,6 +636,20 @@ do {
         check("确认框里没有默认的「直接恢复」按钮",
               !alert.buttons.contains { $0.title == "恢复" },
               "\(alert.buttons.map { $0.title })")
+
+        // ── 收起之后必须清空 pendingResetAlert ──
+        //
+        // 不清的话控制器会一直持有一个已经关掉的 alert（连带它的 window），
+        // 而「有没有待确认的危险操作」这个问题从此永远答「有」。
+        // 走「取消」这条路验：清空写在响应分支**之前**，两条响应共用同一句。
+        cancel?.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        check("取消之后 pendingResetAlert 已清空（不留悬挂的确认框）",
+              controller.pendingResetAlert == nil,
+              controller.pendingResetAlert == nil ? "" : "仍持有 alert")
+        check("取消之后偏好仍然不动",
+              Preferences.shared.lineWidth == 7.5,
+              "\(Preferences.shared.lineWidth)")
     }
     window.close()
 }
