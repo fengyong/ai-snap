@@ -83,7 +83,7 @@ func findButton(_ root: NSView, titled title: String) -> NSButton? {
     return nil
 }
 
-/// 在视图树里收集某一类的视图。
+/// 视图树里收集某一类的视图。
 func findAll<T: NSView>(_ root: NSView, of type: T.Type) -> [T] {
     var found: [T] = []
     if let hit = root as? T { found.append(hit) }
@@ -91,6 +91,38 @@ func findAll<T: NSView>(_ root: NSView, of type: T.Type) -> [T] {
         found.append(contentsOf: findAll(sub, of: type))
     }
     return found
+}
+
+/// 一行「标签列 + 控件」。
+struct LabelRow {
+    let row: NSStackView
+    let column: NSView
+    let control: NSView
+    var text: String { (column.subviews.first as? NSTextField)?.stringValue ?? "" }
+}
+
+/// 找出所有「标签列 + 控件」行 —— **按结构认，不按控件类型认**。
+///
+/// 为什么不再按 `NSPopUpButton` 找（2026-11-12 复核）：那样只看得见通用组的
+/// 状态栏三行，快捷键组的两个录制按钮、通用组的强度滑杆、高级组的地址输入框
+/// 全都测不到 —— 而「标签列 96pt、控件左边界对齐」这条规范说的是**所有**行。
+/// 按类型找还有个更坏的后果：新加一行别的控件，探针不会红，只会默默漏掉。
+///
+/// 标签列的结构签名（见 `SettingsWindowController.makeLabelColumn`）：
+/// 横向 stack 的第一个 arranged subview 是**恰好一个 NSTextField 的裸 NSView**。
+/// 说明行（首个是 NSTextField）、按钮行（首个是 NSButton）、忽略清单行
+/// （首个是 NSTextField）都不满足，实测 5 组共 8 行、零误判。
+func labelRows(in root: NSView) -> [LabelRow] {
+    findAll(root, of: NSStackView.self).compactMap { row in
+        guard row.orientation == .horizontal,
+              row.arrangedSubviews.count >= 2,
+              let column = row.arrangedSubviews.first,
+              type(of: column) == NSView.self,
+              column.subviews.count == 1,
+              column.subviews[0] is NSTextField
+        else { return nil }
+        return LabelRow(row: row, column: column, control: row.arrangedSubviews[1])
+    }
 }
 
 /// 侧栏当前选中的那一行是不是「忽略的应用」。
@@ -372,69 +404,98 @@ do {
     let (controller, window) = openSettings(visibleHeight: 1050)
     window.layoutIfNeeded()
 
-    // ── 间距：组内 8、子分区之间 24 ──
+    // 每组的**结构规模**用字面量钉住，5 组一个不落。
     //
-    // **数值用字面量、不跟着代码里的常量走**：改成常量引用的话，
-    // 有人把常量从 8 改成 12，断言会拿新常量当期望值 → 恒真 → 探针形同虚设
-    // （O2 的教训）。这里钉的是**设计规范里的数**。
+    // 为什么必须逐组给期望值、不能只写 allSatisfy：某组一行都没找到时
+    // allSatisfy 恒真 —— 断言看着绿，其实什么都没测。数字是 2026-11-12 实测。
+    //
+    // 标签文本连**顺序**一起钉：顺序就是屏幕上的行序，只比个数的话
+    // 「把『中键』那行换成别的」不会被发现。
+    let expectedSeparators: [SettingsWindowController.Section: Int] = [
+        .shortcuts: 1, .ignoredApps: 0, .general: 4, .advanced: 0, .about: 1,
+    ]
+    let expectedLabels: [SettingsWindowController.Section: [String]] = [
+        .shortcuts: ["区域截图", "窗口截图", "忽略的应用"],
+        .ignoredApps: [],
+        .general: ["左键", "右键", "中键", "强度"],
+        .advanced: ["清单地址"],
+        .about: [],
+    ]
+
     for section in SettingsWindowController.Section.allCases {
-        guard let stack = controller.groupStacks[section] else { continue }
+        guard let stack = controller.groupStacks[section],
+              let view = controller.sectionContentViews[section] else {
+            check("能拿到「\(section.title)」组的根栈与内容视图", false)
+            continue
+        }
+        let host = (view as? NSScrollView)?.documentView ?? view
+
+        // ── 间距：组内 8、子分区之间 24 ──
+        //
+        // **数值用字面量、不跟着代码里的常量走**：改成常量引用的话，
+        // 有人把常量从 8 改成 12，断言会拿新常量当期望值 → 恒真 → 探针形同虚设
+        // （O2 的教训）。这里钉的是**设计规范里的数**。
         check("「\(section.title)」组内间距 = 8",
               stack.spacing == 8, "\(stack.spacing)")
-    }
-    guard let general = controller.groupStacks[.general] else {
-        check("能拿到通用组的根栈", false)
-        exit(1)
-    }
-    let separators = findAll(general, of: NSBox.self)
-    check("通用组用分隔线把子分区隔开",
-          separators.count >= 4, "\(separators.count) 条分隔线")
-    let groupGaps = separators.map { general.customSpacing(after: $0) }
-    check("分隔线后是 24pt 组间距（组间 24 > 组内 8）",
-          !groupGaps.isEmpty && groupGaps.allSatisfy { $0 == 24 },
-          "\(groupGaps)")
+        let separators = findAll(stack, of: NSBox.self).filter { $0.boxType == .separator }
+        check("「\(section.title)」分隔线条数 = \(expectedSeparators[section]!)",
+              separators.count == expectedSeparators[section]!,
+              "\(separators.count) 条")
+        if !separators.isEmpty {
+            let gaps = separators.map { stack.customSpacing(after: $0) }
+            check("「\(section.title)」每条分隔线后都是 24pt 组间距（组间 24 > 组内 8）",
+                  gaps.allSatisfy { $0 == 24 }, "\(gaps)")
+        }
 
-    // ── 标签列：同页控件左边界一致 ──
-    let generalView = controller.sectionContentViews[.general]!
-    let popups = findAll(generalView, of: NSPopUpButton.self)
-    // 量 alignmentRect 而不是 frame：NSStackView 按 alignmentRect 排布，
-    // 而 NSButton 默认有 3pt 的 alignmentRectInsets（bezel 内缩）——
-    // 按 frame 量会平白差 3pt。
-    let leftEdges = popups.map { $0.alignmentRect(forFrame: $0.frame).minX }
-    check("状态栏三行的控件左边界一致（标签列统一 96pt）",
-          popups.count == 3 && Set(leftEdges).count == 1,
-          "x = \(leftEdges.map { Int($0) })")
-    // 标签列是「非 popup 的那个子视图」—— 一个固定宽度的容器，标签排在里面。
-    // 宽度要量 **alignmentRect**（有效布局列）而不是 frame：
-    // NSButton/NSTextField 默认有 2pt 的 alignmentRectInsets，
-    // frame 会比实际占位大 4pt（实测 frame 100 / 对齐 96）。
-    let columns = popups.map { popup -> NSView? in
-        popup.superview?.subviews.first(where: { !($0 is NSPopUpButton) })
+        // ── 标签列：同页控件左边界一致 ──
+        let rows = labelRows(in: host)
+        check("「\(section.title)」的标签行 = \(expectedLabels[section]!)",
+              rows.map { $0.text } == expectedLabels[section]!,
+              "\(rows.map { $0.text })")
+        if !rows.isEmpty {
+            // 宽度要量 **alignmentRect**（有效布局列）而不是 frame：
+            // NSButton/NSTextField 默认有 2pt 的 alignmentRectInsets，
+            // frame 会比实际占位大 4pt。裸 NSView 容器两者相同（实测都是 96）。
+            let widths = rows.map { $0.column.alignmentRect(forFrame: $0.column.frame).width }
+            check("「\(section.title)」每个标签列有效宽 = 96pt",
+                  widths.allSatisfy { abs($0 - 96) <= 0.5 },
+                  "\(widths.map { Int($0) })")
+            // 行内相对偏移：标签列 → 控件。这条与控件类型无关 ——
+            // NSStackView 按 alignmentRect 排布，所以按钮/标签/下拉/滑杆
+            // 都该是 96 + 12。按 frame 量会因各自的 alignmentRectInsets 差几 pt。
+            let offsets = rows.map {
+                $0.control.alignmentRect(forFrame: $0.control.frame).minX
+                    - $0.column.alignmentRect(forFrame: $0.column.frame).minX
+            }
+            check("「\(section.title)」每行控件紧跟 96pt 标签列之后（行内间距 12）",
+                  offsets.allSatisfy { abs($0 - (96 + 12)) <= 0.5 },
+                  "\(offsets.map { Int($0) })")
+            // 换算到窗口坐标的**对齐**左边界：这才是「控件左边界一致」的真身。
+            // 实测 8 行全是 296.00 —— 而 frame 左边界因控件类型不同散在 289~296，
+            // 拿 frame 比会误判成「没对齐」。
+            let lefts = rows.map {
+                $0.row.convert($0.control.alignmentRect(forFrame: $0.control.frame), to: nil).minX
+            }
+            check("「\(section.title)」所有控件左边界一致（跨控件类型）",
+                  Set(lefts.map { ($0 * 2).rounded() }).count == 1,
+                  "\(lefts.map { String(format: "%.1f", $0) })")
+        }
+
+        // ── 文档高度装得下全部内容（E06 根因，逐组版）──
+        //
+        // 期望值是**推出来的**，不是魔数：文档高 = 内容最高沿 + 上内边距。
+        // 缺 bottom 约束时 fittingSize 塌成 0，这条必红。
+        // 注意 stack **不翻转**（原点在左下），所以「内容顶」是 maxY 的最大值。
+        let rects = stack.arrangedSubviews.map { $0.alignmentRect(forFrame: $0.frame) }
+        let contentTop = rects.map { $0.maxY }.max() ?? 0
+        let contentBottom = rects.map { $0.minY }.min() ?? 0
+        check("「\(section.title)」文档高度 = 内容顶 + 上内边距（没有内容被裁掉）",
+              abs(host.fittingSize.height - (contentTop + stack.edgeInsets.top)) <= 0.5,
+              "文档 \(host.fittingSize.height) vs 内容顶 \(contentTop) + \(stack.edgeInsets.top)")
+        check("「\(section.title)」内容底边落在下内边距上（约束完整）",
+              abs(contentBottom - stack.edgeInsets.bottom) <= 0.5,
+              "\(contentBottom) vs \(stack.edgeInsets.bottom)")
     }
-    check("每行都有标签列容器",
-          columns.count == 3 && columns.allSatisfy { $0 != nil })
-    check("标签列容器里有文本标签",
-          columns.allSatisfy { column in
-              guard let column = column else { return false }
-              return !findAll(column, of: NSTextField.self).isEmpty
-          })
-    let columnWidths = columns.map {
-        $0.map { $0.alignmentRect(forFrame: $0.frame).width } ?? -1
-    }
-    check("标签列有效宽 = 96pt",
-          columnWidths.count == 3
-          && columnWidths.allSatisfy { abs($0 - 96) <= 0.5 },
-          "\(columnWidths.map { Int($0) })")
-    // 行内相对偏移：标签列 → 控件（同在行的坐标系里）
-    let rowOffsets = zip(popups, columns).map { popup, column -> CGFloat in
-        guard let column = column else { return -1 }
-        return popup.alignmentRect(forFrame: popup.frame).minX
-            - column.alignmentRect(forFrame: column.frame).minX
-    }
-    check("每行控件紧跟在 96pt 标签列之后（行内间距 12）",
-          rowOffsets.count == 3
-          && rowOffsets.allSatisfy { abs($0 - (96 + 12)) <= 1 },
-          "\(rowOffsets.map { Int($0) })")
 
     // ── 输入框宽度跟随内容区 ──
     guard let feed = controller.updateFeedURLField else {
