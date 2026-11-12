@@ -26,13 +26,22 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
 
     // MARK: - 侧栏分组
 
-    /// 侧栏分组。internal 供探针断言侧栏结构与分组切换。
+    /// 侧栏条目。既是分组也是面板 —— 一个条目对应右侧一块内容。
+    ///
+    /// 顶层 4 组（快捷键 / 通用 / 高级 / 关于）+ 1 个子面板（快捷键下的「忽略的应用」）。
+    ///
+    /// **为什么「忽略的应用」要独立成子面板（2026-11-12）**：它回答的是
+    /// 「哪些地方**不**按快捷键」，不是「快捷键怎么设」—— 混在快捷键组里，
+    /// 主页面既不像配置也不像清单。更要紧的是它**长度不可控**：
+    /// 实测 40 条清单 = 1020pt，放在主页面里就会把「恢复默认」之类低频入口
+    /// 推到几千点之外。独立之后，主页面长度与清单长度彻底解耦。
     enum Section: Int, CaseIterable {
-        case shortcuts, general, advanced, about
+        case shortcuts, ignoredApps, general, advanced, about
 
         var title: String {
             switch self {
             case .shortcuts: return "快捷键"
+            case .ignoredApps: return "忽略的应用"
             case .general: return "通用"
             case .advanced: return "高级"
             case .about: return "关于"
@@ -42,10 +51,29 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         var symbolName: String {
             switch self {
             case .shortcuts: return "keyboard"
+            case .ignoredApps: return "eye.slash"
             case .general: return "gearshape"
             case .advanced: return "slider.horizontal.3"
             case .about: return "info.circle"
             }
+        }
+
+        /// 父条目。nil = 顶层分组。
+        var parent: Section? {
+            switch self {
+            case .ignoredApps: return .shortcuts
+            case .shortcuts, .general, .advanced, .about: return nil
+            }
+        }
+
+        /// 子条目（「忽略的应用」是「快捷键」的唯一子条目）。
+        var children: [Section] {
+            Section.allCases.filter { $0.parent == self }
+        }
+
+        /// 顶层分组（侧栏第一层）。顺序即侧栏里的显示顺序。
+        static var topLevel: [Section] {
+            allCases.filter { $0.parent == nil }
         }
     }
 
@@ -76,6 +104,14 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     private(set) var selectedSection: Section = .shortcuts
     /// 各分组的内容视图。internal 供探针断言「只有当前组可见」。
     private(set) var sectionContentViews: [Section: NSView] = [:]
+    /// 侧栏树控件。internal 供探针断言侧栏结构（4 顶层 + 1 子项、子项挂在谁下面）。
+    var sidebarTree: NSOutlineView { sidebarOutline }
+    /// 「忽略的应用」清单容器。internal 供探针断言「清单在子面板里，不在快捷键组里」。
+    var ignoredAppsListContainer: NSView? { ignoredAppsBox }
+    /// 快捷键页摘要行上的清单计数标签。internal 供探针断言「计数与偏好一致」。
+    private(set) var ignoredAppsSummaryCountLabel: NSTextField?
+    /// 侧栏「忽略的应用」条目右侧的计数徽标。
+    private(set) var sidebarCountBadge: NSTextField?
 
     private var regionButton: NSButton!
     private var windowButton: NSButton!
@@ -205,6 +241,10 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
             equalToConstant: Self.preferredContentWidth - Self.sidebarWidth).isActive = true
 
         selectSection(.shortcuts)
+        // 「快捷键」默认展开：子条目「忽略的应用」得**看得见** ——
+        // 收起的话用户根本不知道有这个页面，等于把入口藏起来了。
+        // 5 行 × 30pt = 150pt，在 520pt 高的窗口里绰绰有余。
+        sidebarOutline.expandItem(Section.shortcuts)
         fitWindowToContent()
         // 尺寸定下来之后再居中：构造时的 center() 用的是临时尺寸，
         // setContentSize 之后窗口会偏。
@@ -223,7 +263,9 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         outline.style = .sourceList          // macOS 12+ 的 sourceList 样式（系统设置那种）
         outline.dataSource = self
         outline.delegate = self
-        outline.indentationPerLevel = 0
+        // 子条目（"忽略的应用"）要缩进一级，否则它和顶层分组平齐，
+        // 用户看不出谁属于谁 —— 树形结构就白做了。
+        outline.indentationPerLevel = 12
         outline.autoresizesOutlineColumn = false
 
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("section"))
@@ -282,24 +324,47 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
             view.isHidden = (s != section)
         }
         guard let outline = sidebarOutline else { return }
-        let row = Section.allCases.firstIndex(of: section) ?? 0
-        guard outline.selectedRow != row else { return }
+        // 子条目的行号只在父项展开时才有意义 —— 先展开父项再问行号。
+        if let parent = section.parent {
+            outline.expandItem(parent)
+        }
+        let row = outlineRow(for: section)
+        guard row >= 0, outline.selectedRow != row else { return }
         isSwitchingSection = true
         outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         isSwitchingSection = false
     }
 
+    /// 条目在侧栏里的行号。问不到时返回 -1（= 别动选中行）。
+    ///
+    /// 优先问 outline —— 它知道当前的展开状态（父项收起时子条目的行号不存在）。
+    /// 兜底按 allCases 序号取，但**必须校验那一行确实是它**：宁可不同步选中行，
+    /// 也不能选错行 —— 选错行会让侧栏高亮停在别的分组上，
+    /// 用户点了「忽略的应用」却看到「通用」被选中。
+    private func outlineRow(for section: Section) -> Int {
+        let row = sidebarOutline.row(forItem: section)
+        if row >= 0 { return row }
+        let fallback = Section.allCases.firstIndex(of: section) ?? 0
+        guard let item = sidebarOutline.item(atRow: fallback) else { return -1 }
+        return (item as? Section) == section ? fallback : -1
+    }
+
     // MARK: - 侧栏数据源 / 委托
 
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        item == nil ? Section.allCases.count : 0
+        // item 为 nil = 根节点 → 顶层分组；有 item = 该条目的子条目。
+        guard let section = item as? Section else { return Section.topLevel.count }
+        return section.children.count
     }
 
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        Section.allCases[index]
+        guard let section = item as? Section else { return Section.topLevel[index] }
+        return section.children[index]
     }
 
-    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool { false }
+    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
+        (item as? Section)?.children.isEmpty == false
+    }
 
     func outlineView(_ outlineView: NSOutlineView, isGroupItem item: Any) -> Bool { false }
 
@@ -324,6 +389,17 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
 
         row.addArrangedSubview(icon)
         row.addArrangedSubview(label)
+
+        if section == .ignoredApps {
+            // 徽标：清单长度会变，放在侧栏就不用点进去才知道有几条。
+            let badge = NSTextField(
+                labelWithString: "\(Preferences.shared.ignoredBundleIdentifiers.count)")
+            badge.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            badge.textColor = .secondaryLabelColor
+            badge.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+            row.addArrangedSubview(badge)
+            sidebarCountBadge = badge
+        }
         return row
     }
 
@@ -340,6 +416,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     private func buildSectionContent(_ section: Section) -> NSStackView {
         switch section {
         case .shortcuts: return buildShortcutsSection()
+        case .ignoredApps: return buildIgnoredAppsSection()
         case .general: return buildGeneralSection()
         case .advanced: return buildAdvancedSection()
         case .about: return buildAboutSection()
@@ -382,7 +459,11 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         return separator
     }
 
-    /// 快捷键组：截图快捷键 + 忽略应用列表。
+    /// 快捷键组：截图快捷键 + 「忽略的应用」摘要行。
+    ///
+    /// 摘要行只报数量并给一个跳转按钮 —— **清单本身不在这里**（在子面板
+    /// `buildIgnoredAppsSection`）。理由见 `Section` 的注释：清单长度不可控，
+    /// 放在主页面就会把主页面长度和清单长度绑在一起。
     private func buildShortcutsSection() -> NSStackView {
         let root = makeGroupStack()
         root.addArrangedSubview(makeSectionTitle("全局快捷键"))
@@ -396,7 +477,19 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
             "点击按钮后按下新的组合键，按 Esc 取消。组合键需包含 ⌘ 或 ⌃ —— 只用 ⇧ / ⌥ 会抢掉系统范围内的正常打字。"))
 
         root.addArrangedSubview(makeSeparator())
-        root.addArrangedSubview(makeSectionTitle("在这些应用中忽略快捷键", size: 12))
+        root.addArrangedSubview(makeIgnoredAppsSummaryRow())
+        root.addArrangedSubview(makeHint("这些应用在前台时，截图快捷键不触发。"))
+        return root
+    }
+
+    /// 「忽略的应用」子面板：清单 + 添加按钮。
+    ///
+    /// 清单搬到这里（2026-11-12 步骤②）。这里才是清单的家 ——
+    /// 快捷键页只留一行摘要，于是「改一个快捷键」不需要滚过一屏应用名。
+    private func buildIgnoredAppsSection() -> NSStackView {
+        let root = makeGroupStack()
+        root.addArrangedSubview(makeSectionTitle("忽略的应用"))
+        root.addArrangedSubview(makeHint("这些应用处于前台时，截图快捷键不会触发。"))
 
         ignoredAppsBox = NSStackView()
         ignoredAppsBox.orientation = .vertical
@@ -411,9 +504,45 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         root.addArrangedSubview(addAppButton)
 
         root.addArrangedSubview(makeHint(
-            "列表中的应用处于前台时，截图快捷键不会触发。受 macOS 限制，被拦截的按键不会转发给该应用"
-            + "（默认组合 ⌃⌘A / ⌃⌘W 很冷门，一般无影响）。支持 bundle id 前缀规则，以 * 结尾。"))
+            "受 macOS 限制，被拦截的按键不会转发给该应用（默认组合 ⌃⌘A / ⌃⌘W 很冷门，一般无影响）。"
+            + "支持 bundle id 前缀规则，以 * 结尾。"))
         return root
+    }
+
+    /// 「忽略的应用」摘要行：标签 + 计数 + 「设置…」跳转按钮。
+    private func makeIgnoredAppsSummaryRow() -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 12
+
+        let label = NSTextField(labelWithString: "忽略的应用")
+        label.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        row.addArrangedSubview(label)
+
+        let count = NSTextField(
+            labelWithString: Self.ignoredAppsCountText(
+                Preferences.shared.ignoredBundleIdentifiers.count))
+        count.font = NSFont.systemFont(ofSize: 12)
+        count.textColor = .secondaryLabelColor
+        ignoredAppsSummaryCountLabel = count
+        row.addArrangedSubview(count)
+
+        let settingsButton = NSButton(title: "设置…",
+                                      target: self, action: #selector(showIgnoredAppsPanel))
+        settingsButton.bezelStyle = .rounded
+        row.addArrangedSubview(settingsButton)
+        return row
+    }
+
+    /// 清单条数的文案。0 条说「未设置」而不是「0 个应用」——
+    /// 后者读起来像「配了 0 个」，前者才说得清是**没配**。
+    private static func ignoredAppsCountText(_ count: Int) -> String {
+        count == 0 ? "未设置" : "\(count) 个应用"
+    }
+
+    /// 「设置…」按钮：跳到「忽略的应用」子面板。
+    @objc private func showIgnoredAppsPanel() {
+        selectSection(.ignoredApps)
     }
 
     /// 通用组：启动、截图历史、状态栏图标、选区、打码。
@@ -687,6 +816,11 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         ignoredAppsBox.subviews.forEach { $0.removeFromSuperview() }
 
         let ids = Preferences.shared.ignoredBundleIdentifiers
+        // 两处计数都要跟着变：快捷键页的摘要行、侧栏条目的徽标。
+        // 徽标可能还没被创建（侧栏视图懒加载），那就等它创建时按当前偏好填。
+        ignoredAppsSummaryCountLabel?.stringValue = Self.ignoredAppsCountText(ids.count)
+        sidebarCountBadge?.stringValue = "\(ids.count)"
+
         if ids.isEmpty {
             let empty = NSTextField(labelWithString: "（无）所有应用中快捷键都正常生效")
             empty.font = NSFont.systemFont(ofSize: 11)

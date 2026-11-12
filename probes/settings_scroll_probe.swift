@@ -11,7 +11,10 @@
 //   §0 纯函数：clampMaxHeight / contentHeight / resolveVisibleHeight 的固定用例值
 //   §1 窗口高度固定：忽略列表 0 条与 40 条时**同高**；可视高够大时恒为 520；
 //      屏特别矮时才被钳到上限（钳制作用在内容上，不是 frame 上）
-//   §2 侧栏结构：4 个分组都在、默认选中第一个、切换分组时只有该组可见
+//   §2 侧栏结构：4 个顶层分组都在、默认选中第一个、切换分组时只有该组可见
+//   §2b「忽略的应用」独立成子面板：侧栏树 4 顶层 + 1 子项；**清单容器不在
+//      快捷键组里**（快捷键页只留「计数 + 设置…」摘要行）；「设置…」点了
+//      真的切到子面板；清单增删时摘要行与侧栏徽标的计数跟着变
 //   §3 关窗后可复用：设置窗口是刻意常驻的（AppDelegate 缓存控制器、再次
 //      present() 显示**同一个**窗口）—— 与一次性窗口的「用完即释」约定相反，
 //      这里钉的是复用语义本身，防止将来误改成一次性窗口
@@ -59,6 +62,31 @@ func contentHeight(_ window: NSWindow) -> CGFloat {
 
 func contentWidth(_ window: NSWindow) -> CGFloat {
     window.contentRect(forFrameRect: window.frame).width
+}
+
+/// 视图树里是否包含某个子视图（递归）。
+///
+/// 为什么不能用 `view.subviews.contains`：要问的是
+/// 「清单容器在不在这个面板里」，而清单容器埋在
+/// 滚动视图 → 文档容器 → 分组栈 → 行 好几层之下。
+func containsView(_ root: NSView, _ target: NSView) -> Bool {
+    if root === target { return true }
+    return root.subviews.contains { containsView($0, target) }
+}
+
+/// 在视图树里找标题匹配的按钮。
+func findButton(_ root: NSView, titled title: String) -> NSButton? {
+    if let button = root as? NSButton, button.title == title { return button }
+    for sub in root.subviews {
+        if let hit = findButton(sub, titled: title) { return hit }
+    }
+    return nil
+}
+
+/// 侧栏当前选中的那一行是不是「忽略的应用」。
+func selectedRowIsIgnoredApps(_ tree: NSOutlineView) -> Bool {
+    guard tree.selectedRow >= 0, let item = tree.item(atRow: tree.selectedRow) else { return false }
+    return (item as? SettingsWindowController.Section) == .ignoredApps
 }
 
 let originalIgnored = Preferences.shared.ignoredBundleIdentifiers
@@ -150,24 +178,35 @@ do {
     }
 }
 
-print("\n=== 2. 侧栏结构：4 个分组 + 切换后只显示当前组 ===\n")
+print("\n=== 2. 侧栏结构：4 个顶层分组 + 1 个子面板 + 切换后只显示当前组 ===\n")
 do {
-    check("分组共 4 个（快捷键 / 通用 / 高级 / 关于）",
-          SettingsWindowController.Section.allCases.count == 4,
+    check("顶层分组共 4 个（快捷键 / 通用 / 高级 / 关于）",
+          SettingsWindowController.Section.topLevel.count == 4,
+          "\(SettingsWindowController.Section.topLevel.map(\.title).joined(separator: " / "))")
+    check("顶层分组标题齐全",
+          SettingsWindowController.Section.topLevel.map(\.title) == ["快捷键", "通用", "高级", "关于"],
+          "\(SettingsWindowController.Section.topLevel.map(\.title).joined(separator: " / "))")
+    check("侧栏条目共 5 个（4 顶层 + 1 子面板）",
+          SettingsWindowController.Section.allCases.count == 5,
           "\(SettingsWindowController.Section.allCases.map(\.title).joined(separator: " / "))")
-    check("分组标题齐全",
-          SettingsWindowController.Section.allCases.map(\.title) == ["快捷键", "通用", "高级", "关于"],
-          "\(SettingsWindowController.Section.allCases.map(\.title).joined(separator: " / "))")
+    check("「忽略的应用」是「快捷键」的子条目",
+          SettingsWindowController.Section.ignoredApps.parent == .shortcuts
+          && SettingsWindowController.Section.shortcuts.children == [.ignoredApps])
+    check("其余 4 个分组没有子条目（只有一棵一层子树）",
+          SettingsWindowController.Section.topLevel
+            .filter { $0 != .shortcuts }
+            .allSatisfy { $0.children.isEmpty })
 
     let (controller, window) = openSettings(visibleHeight: 1050)
     check("默认选中「快捷键」",
           controller.selectedSection == .shortcuts,
           "\(controller.selectedSection.title)")
-    check("4 个分组都有内容视图",
-          controller.sectionContentViews.count == 4,
+    check("5 个面板都有内容视图",
+          controller.sectionContentViews.count == 5,
           "\(controller.sectionContentViews.keys.map(\.title).joined(separator: " / "))")
     check("初始只有「快捷键」那一组可见",
           controller.sectionContentViews[.shortcuts]?.isHidden == false
+          && controller.sectionContentViews[.ignoredApps]?.isHidden == true
           && controller.sectionContentViews[.general]?.isHidden == true
           && controller.sectionContentViews[.advanced]?.isHidden == true
           && controller.sectionContentViews[.about]?.isHidden == true)
@@ -184,6 +223,119 @@ do {
               "可见的是 \(visible.map(\.title).joined(separator: " / "))")
     }
     window.close()
+}
+
+print("\n=== 2b. 「忽略的应用」是独立子面板：清单不在快捷键组里 ===\n")
+do {
+    Preferences.shared.ignoredBundleIdentifiers = ["com.probe.ignored.one", "com.probe.ignored.two"]
+    let (controller, window) = openSettings(visibleHeight: 1050)
+    let tree = controller.sidebarTree
+
+    check("侧栏共 5 行（「快捷键」默认展开，子条目可见）",
+          tree.numberOfRows == 5, "\(tree.numberOfRows) 行")
+    var row1Section: SettingsWindowController.Section?
+    if let item = tree.item(atRow: 1) {
+        row1Section = item as? SettingsWindowController.Section
+    }
+    check("侧栏第 2 行是「忽略的应用」（紧跟在「快捷键」下面，缩进一级）",
+          row1Section == .ignoredApps
+          && tree.isItemExpanded(SettingsWindowController.Section.shortcuts),
+          "第 2 行是 \(row1Section?.title ?? "nil")")
+    check("侧栏里只有「快捷键」是展开的父项",
+          SettingsWindowController.Section.allCases
+            .filter { controller.outlineView(tree, isItemExpandable: $0) } == [.shortcuts])
+
+    // 核心不变量：清单容器在子面板里，**不在**快捷键组里
+    guard let listBox = controller.ignoredAppsListContainer,
+          let shortcutsView = controller.sectionContentViews[.shortcuts],
+          let ignoredView = controller.sectionContentViews[.ignoredApps] else {
+        check("能拿到清单容器与两个面板的视图", false)
+        window.close()
+        exit(1)
+    }
+    check("清单容器在「忽略的应用」面板里",
+          containsView(ignoredView, listBox))
+    check("清单容器**不**在快捷键组里（快捷键页只留摘要行）",
+          !containsView(shortcutsView, listBox))
+
+    // 摘要行：计数 + 「设置…」跳转按钮
+    check("摘要行的计数与偏好一致（2 条）",
+          controller.ignoredAppsSummaryCountLabel?.stringValue == "2 个应用",
+          "\(controller.ignoredAppsSummaryCountLabel?.stringValue ?? "nil")")
+    check("侧栏徽标的计数与偏好一致（2）",
+          controller.sidebarCountBadge?.stringValue == "2",
+          "\(controller.sidebarCountBadge?.stringValue ?? "nil")")
+    check("快捷键页里能找到「设置…」按钮",
+          findButton(shortcutsView, titled: "设置…") != nil)
+
+    // 点「设置…」应当真的切到子面板（不是只改个标题）
+    controller.selectSection(.shortcuts)
+    controller.window?.layoutIfNeeded()
+    findButton(controller.sectionContentViews[.shortcuts]!, titled: "设置…")?
+        .performClick(nil)
+    controller.window?.layoutIfNeeded()
+    check("点「设置…」→ 切到「忽略的应用」子面板",
+          controller.selectedSection == .ignoredApps
+          && controller.sectionContentViews[.ignoredApps]?.isHidden == false,
+          "\(controller.selectedSection.title)")
+    check("切到子面板时侧栏选中行也跟着切过去",
+          tree.selectedRow == 1 && selectedRowIsIgnoredApps(tree),
+          "选中行 \(tree.selectedRow)")
+
+    // 计数变化要跟着变（增删一条）
+    Preferences.shared.ignoredBundleIdentifiers = ["com.probe.ignored.one"]
+    controller.present()
+    controller.window?.layoutIfNeeded()
+    check("清单变动后摘要行计数跟着变（1 条）",
+          controller.ignoredAppsSummaryCountLabel?.stringValue == "1 个应用",
+          "\(controller.ignoredAppsSummaryCountLabel?.stringValue ?? "nil")")
+    check("清单变动后侧栏徽标跟着变（1）",
+          controller.sidebarCountBadge?.stringValue == "1",
+          "\(controller.sidebarCountBadge?.stringValue ?? "nil")")
+    window.close()
+}
+
+print("\n=== 2c. 清单长度与主页面长度解耦（步骤② 的核心承诺）===\n")
+do {
+    /// 分组文档高度（滚动视图的 documentView 撑多高）
+    func documentHeight(_ view: NSView?) -> CGFloat {
+        (view as? NSScrollView)?.documentView?.fittingSize.height ?? -1
+    }
+    /// 内容区可视高度
+    func viewportHeight(_ view: NSView?) -> CGFloat {
+        (view as? NSScrollView)?.contentView.bounds.height ?? -1
+    }
+
+    // 2 条时量一次
+    Preferences.shared.ignoredBundleIdentifiers = ["com.probe.ignored.one", "com.probe.ignored.two"]
+    let (shortController, shortWindow) = openSettings(visibleHeight: 1050)
+    let shortShortcuts = documentHeight(shortController.sectionContentViews[.shortcuts])
+    let shortIgnored = documentHeight(shortController.sectionContentViews[.ignoredApps])
+    check("2 条清单 → 快捷键页文档高度 \(Int(shortShortcuts))pt（清单不在这一页）",
+          shortShortcuts > 0 && shortShortcuts < 400,
+          "\(Int(shortShortcuts))pt")
+    shortWindow.close()
+
+    // 40 条时再量一次：主页面必须一样高
+    Preferences.shared.ignoredBundleIdentifiers = (0..<40).map { "com.probe.ignored.app\($0)" }
+    let (longController, longWindow) = openSettings(visibleHeight: 1050)
+    let longShortcuts = documentHeight(longController.sectionContentViews[.shortcuts])
+    let longIgnored = documentHeight(longController.sectionContentViews[.ignoredApps])
+    check("40 条清单 → 快捷键页文档高度与 2 条时**完全相同**（主页面与清单长度解耦）",
+          abs(longShortcuts - shortShortcuts) <= 0.5,
+          "2 条 \(Int(shortShortcuts))pt vs 40 条 \(Int(longShortcuts))pt")
+    check("40 条清单 → 子面板文档高度 \(Int(longIgnored))pt（清单都在这一页）",
+          longIgnored > shortIgnored,
+          "2 条 \(Int(shortIgnored))pt vs 40 条 \(Int(longIgnored))pt")
+    check("40 条清单 → 子面板超出可视高度（自己在里面滚）",
+          longIgnored > viewportHeight(longController.sectionContentViews[.ignoredApps]),
+          "内容 \(Int(longIgnored))pt vs 可视 \(Int(viewportHeight(longController.sectionContentViews[.ignoredApps])))pt")
+    check("子面板有纵向滚动条",
+          (longController.sectionContentViews[.ignoredApps] as? NSScrollView)?.hasVerticalScroller == true)
+    check("窗口高度不受清单长度影响（仍是 520）",
+          abs(contentHeight(longWindow) - 520) <= 1,
+          "\(Int(contentHeight(longWindow)))pt")
+    longWindow.close()
 }
 
 do {
