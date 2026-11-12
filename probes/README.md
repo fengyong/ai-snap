@@ -76,6 +76,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `overlay_style_probe` | 冻结覆盖层的外观 | 10 |
 | `toolbar_layout_probe` | 工具栏分组布局与折行 | 33 |
 | `toolbar_width_probe` | 工具栏单行宽度上限（屏宽取窗口所在屏，折行上限用固定屏宽断言） | 16 |
+| `toolbar_budget_probe` | **O4 预算即干跑**：折行预算由排布代码干跑得出，逐组偏差 0；竖线/组尾距/行首内边距记账；8 档屏宽下逐行实际宽度 ≤ 上限；真实控件坐标与布局槽位逐个对齐 | 67 |
 | `redaction_probe` | 打码：块平均、硬边、模糊边缘、隐私抹平、每帧成本、强度按比例 | 37 |
 | `downscale_probe` | 降采样实现横向对比（CG 各插值档 / 手写平均 / vImage） | 判据式 |
 | `history_probe` | 截图历史：索引与磁盘同步、自愈、损坏降级 | 29 |

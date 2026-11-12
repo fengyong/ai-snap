@@ -19,6 +19,14 @@ func widths(_ rows: [ToolbarLayout.Row], _ source: [CGFloat]) -> [CGFloat] {
     rows.map { r in r.range.reduce(CGFloat.zero) { $0 + source[$1] } }
 }
 
+// 算法用的**合成**尺度夹具，不是生产预算的拷贝。
+//
+// 本探针只链接 `Sources/ToolbarLayout.swift`（纯算法、秒级编译），刻意不拖进
+// 整个模块。真实工具栏的组宽由 `AnnotationWindow.measureToolbarGroupWidths`
+// 干跑得出，"预算 == 真实排布"由 `toolbar_budget_probe` 逐组钉住 ——
+// 这里再抄一份生产数字只会多一处会过期的拷贝（O4 之前就有一份，且已过期）。
+let scaleFixture: [CGFloat] = [483, 96, 88, 172, 116, 88, 70, 136, 126, 64, 44]
+
 print("=== 1. balancedRows 的基本行为 ===\n")
 do {
     let w: [CGFloat] = [100, 100, 100, 100]
@@ -41,8 +49,8 @@ do {
     check("两行等宽 200 / 200（贪心会切成 300 / 100）",
           got == [200, 200], got.map { "\(Int($0))" }.joined(separator: " / "))
 
-    // 真实工具栏的尺度：11 个组，总宽约 1483，上限 1449
-    let real: [CGFloat] = [483, 96, 88, 172, 116, 88, 70, 136, 126, 64, 44]
+    // 合成尺度（见 scaleFixture）：总宽约 1483，上限 1449
+    let real = scaleFixture
     let realRows = ToolbarLayout.wrap(widths: real, limit: 1449)
     let realWidths = widths(realRows, real)
     check("真实宽度下折成 2 行", realRows.count == 2, "\(realRows.count)")
@@ -57,7 +65,7 @@ do {
 
 print("\n=== 3. 行数随上限单调 ===\n")
 do {
-    let w: [CGFloat] = [483, 96, 88, 172, 116, 88, 70, 136, 126, 64, 44]
+    let w = scaleFixture
     let total = w.reduce(0, +)
     check("上限 ≥ 总宽 → 1 行", ToolbarLayout.wrap(widths: w, limit: total).count == 1)
     check("上限 = 总宽 - 1 → 折行",
@@ -77,8 +85,8 @@ do {
     for limit in [total, 1449, 800, 400, 200] {
         let rows = ToolbarLayout.wrap(widths: w, limit: limit)
         let covered = rows.flatMap { Array($0.range) }
-        check("limit \(Int(limit))：11 个组不重不漏地覆盖",
-              covered == Array(0..<11), "\(covered.count) 个")
+        check("limit \(Int(limit))：夹具 11 个组不重不漏地覆盖",
+              covered == Array(0..<scaleFixture.count), "\(covered.count) 个")
     }
 }
 
@@ -109,7 +117,7 @@ do {
 
 print("\n=== 6. 不同屏幕宽度下，工具栏实际折几行 ===\n")
 do {
-    let w: [CGFloat] = [483, 96, 88, 172, 116, 88, 70, 136, 126, 64, 44]
+    let w = scaleFixture
     for screenWidth in [2560.0, 1473.0, 1280.0, 1024.0] {
         let limit = ToolbarLayout.widthLimit(screenVisibleWidth: screenWidth)
         let rows = ToolbarLayout.wrap(widths: w, limit: limit)

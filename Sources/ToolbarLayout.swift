@@ -29,12 +29,6 @@ enum ToolbarMetrics {
     static func buttonWidth(_ title: String) -> CGFloat {
         max(CGFloat(title.count) * 14 + 8, 36)
     }
-
-    /// 一排按钮的总宽。
-    /// **不含**组尾留白与组间竖线 —— 那两项由组宽负责，混进来会重复计。
-    static func buttonRunWidth(_ titles: [String]) -> CGFloat {
-        titles.reduce(0) { $0 + buttonWidth($1) + gap }
-    }
 }
 
 /// 把工具栏的各个「组」折成若干行。
@@ -114,19 +108,33 @@ enum ToolbarLayout {
     /// 选出「行数最少、且每行都不超过 `limit`」的排布。
     ///
     /// 行数越少越好（工具栏越矮、越不挤占画布），所以从 1 行往上试。
-    static func wrap(widths: [CGFloat], limit: CGFloat) -> [Row] {
+    ///
+    /// `widths` 是各组的**内容宽**（含组尾留白，**不含**组间竖线）。
+    /// 一行 k 个组真实占 `sum(内容宽) + (k−1) × separatorWidth` —— 行首那个组
+    /// 左边没有竖线（`ToolbarCursor.beginGroup` 就是这么画的）。竖线数依赖
+    /// 「这行有几个组」，而那是分割的结果，所以不能预先摊进 `widths`。
+    ///
+    /// 做法：把每个组的权重 +sep 交给 `balancedRows`，段和就变成 `sum + k×sep`，
+    /// 比真实值**恒多一条 sep**。每段都多同一个常数不改变「最大段和最小」的最优解，
+    /// 所以均衡分割照旧，最后把那条 sep 减回来即得真实行宽。
+    /// `separatorWidth = 0` 时退化为纯内容和（本函数的原始语义）。
+    static func wrap(widths: [CGFloat], limit: CGFloat,
+                     separatorWidth: CGFloat = 0) -> [Row] {
         guard !widths.isEmpty else { return [] }
 
+        let weighted = widths.map { $0 + separatorWidth }
+
         for rows in 1...widths.count {
-            guard let ranges = balancedRows(widths: widths, rows: rows) else { continue }
+            guard let ranges = balancedRows(widths: weighted, rows: rows) else { continue }
             let rowWidths = ranges.map { r in
-                r.reduce(CGFloat.zero) { $0 + widths[$1] }
+                r.reduce(CGFloat.zero) { $0 + weighted[$1] } - separatorWidth
             }
             if (rowWidths.max() ?? 0) <= limit {
                 return zip(ranges, rowWidths).map { Row(range: $0, width: $1) }
             }
         }
         // 兜底：单个组就比 limit 还宽（极窄屏）。每元素一行，允许溢出。
+        // 每行只有一个组 ⇒ 没有组间竖线，行宽就是内容宽本身。
         return widths.indices.map { Row(range: $0..<($0 + 1), width: widths[$0]) }
     }
 
@@ -162,6 +170,11 @@ enum ToolbarLayout {
 /// 用法固定 —— 每进入一个组先 `beginGroup()`，然后按顺序把该组的控件
 /// `place(width:gapAfter:)` 过去，组结束时 `endGroup()`。
 /// **顺序必须与构造时传入的 `groupWidths` 一致**，错位会让折行落在错误的组上。
+///
+/// `groupWidths` 是各组的**内容宽**（含组尾留白，不含组间竖线）——
+/// 竖线由 `beginGroup` 按「是不是行首」决定，摊进预算就会把行首组多算一条。
+/// 生产侧的预算由 `AnnotationWindow.measureToolbarGroupWidths` 干跑同一份
+/// 排布代码得出，所以两者偏差恒为 0（`toolbar_budget_probe` 钉住这条）。
 final class ToolbarCursor {
 
     let rowCount: Int
@@ -174,6 +187,14 @@ final class ToolbarCursor {
     /// 窗口宽度据此决定，所以它**不是**估算值，而是逐个控件累加出来的实际值。
     var contentWidth: CGFloat { rowRights.max() ?? 0 }
 
+    /// 各行实际排到的最右端。与 `contentWidth` 同源，只是不取最大值 ——
+    /// 探针用它逐行核对「折行方案的预测 == 真实排布」。
+    var rowWidths: [CGFloat] { rowRights }
+
+    /// 走查过程中逐组量到的**内容宽**（含组尾留白，不含组间竖线）。
+    /// 这就是折行预算的唯一来源：干跑一遍排布即可，不需要第二份宽度公式。
+    var groupContentWidths: [CGFloat] { measuredGroupWidths }
+
     /// 当前游标位置。用于放分组标签 —— 标签要与它所属组的第一个控件左对齐。
     var currentX: CGFloat { x }
 
@@ -182,6 +203,8 @@ final class ToolbarCursor {
 
     private let rowOfGroup: [Int]
     private var rowRights: [CGFloat]
+    private var measuredGroupWidths: [CGFloat] = []
+    private var groupStartX: CGFloat = 0
     private var groupIndex = -1
     private var currentRow = 0
     private var x: CGFloat = ToolbarMetrics.leadingInset
@@ -189,7 +212,8 @@ final class ToolbarCursor {
 
     init(groupWidths: [CGFloat], limit: CGFloat,
          rowHeight: CGFloat = ToolbarMetrics.rowHeight) {
-        let rows = ToolbarLayout.wrap(widths: groupWidths, limit: limit)
+        let rows = ToolbarLayout.wrap(widths: groupWidths, limit: limit,
+                                      separatorWidth: ToolbarMetrics.separatorWidth)
         self.rowCount = max(rows.count, 1)
         self.rowHeight = rowHeight
 
@@ -199,6 +223,16 @@ final class ToolbarCursor {
         }
         self.rowOfGroup = map
         self.rowRights = [CGFloat](repeating: 0, count: max(rows.count, 1))
+    }
+
+    /// 干跑用的游标：不预设折行方案，所有组都落在第 0 行，只用来量各组内容宽。
+    ///
+    /// 组内容宽与它排在第几行**无关**（`place` 的增量不依赖行），所以这样量出来的
+    /// 值对任何折行方案都成立 —— 于是「先量再折」不会陷入「折行需要宽度、宽度需要
+    /// 折行」的循环。空 `groupWidths` 时 `rowOfGroup` 为空，`beginGroup` 回落到
+    /// 最后一行（这里就是第 0 行），正是想要的行为。
+    static func measuring() -> ToolbarCursor {
+        ToolbarCursor(groupWidths: [], limit: .greatestFiniteMagnitude)
     }
 
     /// 进入下一个组。
@@ -222,6 +256,8 @@ final class ToolbarCursor {
             separatorX = x - ToolbarMetrics.separatorWidth / 2
         }
         isFirstInRow = false
+        // 竖线**之后**才起算：组内容宽不含组间竖线，否则行首组会被多算一条。
+        groupStartX = x
 
         return (CGFloat(rowCount - 1 - row) * rowHeight, separatorX)
     }
@@ -238,5 +274,6 @@ final class ToolbarCursor {
     func endGroup() {
         x += ToolbarMetrics.groupTailGap
         rowRights[currentRow] = max(rowRights[currentRow], x)
+        measuredGroupWidths.append(x - groupStartX)
     }
 }

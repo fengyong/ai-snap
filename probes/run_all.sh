@@ -155,11 +155,13 @@ run_probe history_probe          Sources/History/CaptureHistory.swift \
 run_probe update_probe           Sources/Models.swift \
                                  Sources/Update/UpdateChecker.swift \
                                  Sources/Capture/ScreenGeometry.swift
-# 这三个要整模块编译：它们构造真实的画布并合成鼠标事件
+# 这些要整模块编译：它们构造真实的画布并合成鼠标事件
 run_probe eraser_probe           "${ALL_SOURCES[@]}"
 run_probe picker_probe           "${ALL_SOURCES[@]}"
 run_probe ocr_probe              "${ALL_SOURCES[@]}"
 run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
+# 折行预算 == 真实排布（O4，2026-11-12）：预算是排布代码的干跑，偏差恒为 0
+run_probe toolbar_budget_probe   "${ALL_SOURCES[@]}"
 # 设置窗口滚动容器（E06，2026-11-09）：长列表钳高可滚、短列表贴合不变
 run_probe settings_scroll_probe  Sources/Models.swift Sources/Capture/ScreenGeometry.swift \
                                  Sources/Preferences.swift Sources/HotkeyManager.swift \
