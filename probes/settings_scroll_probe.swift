@@ -1,33 +1,26 @@
-// 设置窗口滚动容器探针（E06，2026-11-09；2026-11-11 O2 去环境依赖）。
+// 设置窗口布局探针（E06，2026-11-09；O2 去环境依赖；2026-11-12 改版为分类侧栏）。
 //
-// 场景：设置内容按 fitting 高度撑窗，而设置项只增不减。实测（2026-11-09，
-// 本机可视高度 1050）：**空忽略列表的内容就有 1162pt**，超过钳制上限 970pt
-// —— 即 E06 不只影响「列表很长」的极端场景，在这块屏上默认状态下底部按钮
-// 就可能够不着。修法：内容包进 NSScrollView，窗口高度钳到屏幕可视区。
+// **改版前**：窗口高度 = 内容高度（上限为屏幕可视高 −80）。实测内容 1162pt
+// （空忽略列表时）> 钳制上限 970~1042pt，于是**开窗即满屏 + 永远带滚动条** ——
+// E06 只解决了「内容都够得着」，没解决「开窗就满屏」。
 //
-// **2026-11-11（O2）**：这份探针原来断言「窗口内容高度 = 钳制上限」，
-// 而钳制上限是按**本机屏幕**算的 —— 于是「内容装不装得下」这件事在不同机器上
-// 结论不同：高屏机器上内容装得下，断言直接变红。红灯常态化 = 回归网失效
-// （这正是 EXPECTED_FAIL 机制被用来掩盖真问题的前提被破坏）。
-// 现在改成**注入固定的屏幕可视高度**：生产侧多了一个 `visibleHeightProvider`
-// 注入点与纯函数 `clampMaxHeight(visibleHeight:)`，探针给定固定高度，
-// 任何机器上都是同一组数字。
+// **改版后**：窗口尺寸**固定**（640 × 520pt），与内容、与忽略列表长度都无关；
+// 内容超出由内容区自己滚；左侧分类侧栏 4 组，右侧只显示当前组。
 //
 // 钉住的事实（全部可离屏观测）：
-//   §0 纯函数：clampMaxHeight 的固定用例值（1440 / 1050 / 800 / 下限 320）
-//   §1 长列表：注入三档固定高度 → 窗口**内容**高度 = 钳制上限；document 高于
-//      视口（可滚）；documentView 已翻转（初始停在顶部而不是底部）
-//   §2 空忽略列表：内容随数据收缩；钳制边界的**两侧**都要对 ——
-//      上限高于内容 → 窗口 = 内容高（装得下就不钳制）；
-//      上限低于内容 → 窗口 = 上限 + 可滚
-//      （分界高度跟着实测内容高度走，不赌固定值：内容高度随系统字号变）
+//   §0 纯函数：clampMaxHeight / contentHeight / resolveVisibleHeight 的固定用例值
+//   §1 窗口高度固定：忽略列表 0 条与 40 条时**同高**；可视高够大时恒为 520；
+//      屏特别矮时才被钳到上限（钳制作用在内容上，不是 frame 上）
+//   §2 侧栏结构：4 个分组都在、默认选中第一个、切换分组时只有该组可见
 //   §3 关窗后可复用：设置窗口是刻意常驻的（AppDelegate 缓存控制器、再次
 //      present() 显示**同一个**窗口）—— 与一次性窗口的「用完即释」约定相反，
 //      这里钉的是复用语义本身，防止将来误改成一次性窗口
+//   §4 钳制取「窗口所在屏」，不是 NSScreen.main
 //
 //      run_probe settings_scroll_probe Sources/Models.swift Sources/Capture/ScreenGeometry.swift \
 //          Sources/Preferences.swift Sources/HotkeyManager.swift Sources/LaunchAtLogin.swift \
-//          Sources/History/CaptureHistory.swift Sources/SettingsWindow.swift
+//          Sources/History/CaptureHistory.swift Sources/Export/ImageEncode.swift \
+//          Sources/SettingsWindow.swift
 import Cocoa
 
 setbuf(stdout, nil)
@@ -44,22 +37,19 @@ _ = NSApplication.shared
 
 /// 开设置窗，并把「屏幕可视高度」**注入**为给定值。
 ///
-/// 为什么必须注入（O2）：钳制上限 = 可视高度 − 80，而「内容装不装得下」取决于
-/// 内容高度（布局决定）**与**上限（屏幕决定）的大小关系 —— 两边都读本机的话，
-/// 换台机器结论就变，断言从「测行为」退化成「测这台机器的屏幕」。
-/// 注入后，任何机器上都是同一组数字。
+/// 为什么必须注入（O2）：钳制上限 = 可视高度 − 80，而可视高度随屏幕变 ——
+/// 直接读本机 `NSScreen.main` 的话，「窗口多高」在不同机器上结论就不同，
+/// 断言从「测行为」退化成「测这台机器的屏幕」。注入后，任何机器上都是同一组数字。
 ///
-/// 注入点在 `present()` **之前**设：`present()` 末尾会重算一次窗口高度
-/// （内容行数变了要重算），那次重算才是最终生效的那次。
-func openSettings(visibleHeight: CGFloat) -> (SettingsWindowController, NSWindow, NSScrollView) {
+/// 注入点在 `present()` **之前**设：`present()` 末尾会重算一次窗口尺寸，
+/// 那次重算才是最终生效的那次。
+func openSettings(visibleHeight: CGFloat) -> (SettingsWindowController, NSWindow) {
     let controller = SettingsWindowController()
     controller.visibleHeightProvider = { visibleHeight }
     controller.present()
     let window = controller.window!
     window.layoutIfNeeded()   // 无 runloop 的探针里，几何断言前先冲一次布局
-    let scroll = window.contentView as! NSScrollView
-    scroll.contentView.layoutSubtreeIfNeeded()
-    return (controller, window, scroll)
+    return (controller, window)
 }
 
 /// 窗口内容高度（frame 减标题栏）。钳制作用在内容上，不是 frame 上。
@@ -67,66 +57,133 @@ func contentHeight(_ window: NSWindow) -> CGFloat {
     window.contentRect(forFrameRect: window.frame).height
 }
 
-/// 内容（document）高度 —— 钳制的另一端，由布局决定。
-func documentHeight(_ scroll: NSScrollView) -> CGFloat {
-    scroll.documentView!.fittingSize.height
+func contentWidth(_ window: NSWindow) -> CGFloat {
+    window.contentRect(forFrameRect: window.frame).width
 }
 
 let originalIgnored = Preferences.shared.ignoredBundleIdentifiers
 defer { Preferences.shared.ignoredBundleIdentifiers = originalIgnored }
 
-print("=== 0. 纯函数：clampMaxHeight 的固定用例值（不依赖本机屏幕）===\n")
+print("=== 0. 纯函数：窗口尺寸规则（不依赖本机屏幕）===\n")
 do {
-    check("可视高 1440 → 上限 1360",
+    check("可视高 1440 → 钳制上限 1360",
           SettingsWindowController.clampMaxHeight(visibleHeight: 1440) == 1360,
           "\(SettingsWindowController.clampMaxHeight(visibleHeight: 1440))")
-    check("可视高 1050 → 上限 970",
+    check("可视高 1050 → 钳制上限 970",
           SettingsWindowController.clampMaxHeight(visibleHeight: 1050) == 970,
           "\(SettingsWindowController.clampMaxHeight(visibleHeight: 1050))")
-    check("可视高 800 → 上限 720",
+    check("可视高 800 → 钳制上限 720",
           SettingsWindowController.clampMaxHeight(visibleHeight: 800) == 720,
           "\(SettingsWindowController.clampMaxHeight(visibleHeight: 800))")
     check("可视高 300 → 下限 320（极矮屏也不能窄到没法用）",
           SettingsWindowController.clampMaxHeight(visibleHeight: 300) == 320,
           "\(SettingsWindowController.clampMaxHeight(visibleHeight: 300))")
+
+    // 窗口高度 = min(目标高 520, 钳制上限)
+    check("可视高 1440 → 窗口高度 = 520（装得下就固定 520）",
+          SettingsWindowController.contentHeight(visibleHeight: 1440) == 520,
+          "\(SettingsWindowController.contentHeight(visibleHeight: 1440))")
+    check("可视高 800 → 窗口高度 = 520",
+          SettingsWindowController.contentHeight(visibleHeight: 800) == 520,
+          "\(SettingsWindowController.contentHeight(visibleHeight: 800))")
+    check("可视高 600 → 窗口高度 = 520（刚好等于上限）",
+          SettingsWindowController.contentHeight(visibleHeight: 600) == 520,
+          "\(SettingsWindowController.contentHeight(visibleHeight: 600))")
+    check("可视高 500 → 窗口高度 = 420（被钳到上限）",
+          SettingsWindowController.contentHeight(visibleHeight: 500) == 420,
+          "\(SettingsWindowController.contentHeight(visibleHeight: 500))")
+    check("可视高 300 → 窗口高度 = 320（钳制下限）",
+          SettingsWindowController.contentHeight(visibleHeight: 300) == 320,
+          "\(SettingsWindowController.contentHeight(visibleHeight: 300))")
+
+    // 取哪块屏的规则：窗口所在屏优先，没有才退主屏
+    check("窗口所在屏优先（不被主屏带偏）：窗口 1000 / 主屏 500 → 取 1000",
+          SettingsWindowController.resolveVisibleHeight(windowScreenHeight: 1000,
+                                                        mainScreenHeight: 500) == 1000)
+    check("窗口不在任何屏上 → 退回主屏 500",
+          SettingsWindowController.resolveVisibleHeight(windowScreenHeight: nil,
+                                                        mainScreenHeight: 500) == 500)
+    check("两块屏都没有 → 兜底 900",
+          SettingsWindowController.resolveVisibleHeight(windowScreenHeight: nil,
+                                                        mainScreenHeight: nil) == 900)
 }
 
-print("\n=== 1. 长忽略列表（40 条）：钳高 + 可滚 + 翻转 ===\n")
-var longDocH: CGFloat = 0
+print("\n=== 1. 窗口高度固定：与忽略列表长度、与屏幕都无关 ===\n")
+var emptyHeight: CGFloat = 0
+var longHeight: CGFloat = 0
 do {
+    // 空列表
+    Preferences.shared.ignoredBundleIdentifiers = []
+    let (_, emptyWindow) = openSettings(visibleHeight: 1050)
+    emptyHeight = contentHeight(emptyWindow)
+    check("空忽略列表 → 窗口内容高度 = 520",
+          abs(emptyHeight - 520) <= 1, "内容 \(Int(emptyHeight))")
+    check("空忽略列表 → 窗口宽度 = 640",
+          abs(contentWidth(emptyWindow) - 640) <= 1, "宽 \(Int(contentWidth(emptyWindow)))")
+    emptyWindow.close()
+
+    // 40 条列表：改版前页面会长到 2182pt，现在必须**一样高**
     Preferences.shared.ignoredBundleIdentifiers = (0..<40).map { "com.probe.ignored.app\($0)" }
-    // 三档固定高度。40 条列表在任何合理系统字号下都远超 1360，
-    // 所以「一定装不下」这件事不靠赌 —— 断言与本机屏幕无关。
     for visible in [800.0, 1050.0, 1440.0] {
-        let (_, window, scroll) = openSettings(visibleHeight: visible)
-        let clampMax = SettingsWindowController.clampMaxHeight(visibleHeight: visible)
-        let contentH = contentHeight(window)
-        check("可视高 \(Int(visible)) → 窗口内容高度 = 钳制上限 \(Int(clampMax))",
-              abs(contentH - clampMax) <= 2,
-              "内容 \(Int(contentH)) vs 上限 \(Int(clampMax))")
-
-        let document = scroll.documentView!
-        let documentH = documentHeight(scroll)
-        longDocH = documentH
-        let viewportH = scroll.contentView.frame.height
-        // 滚动条是否**可见**的判据是内容溢不溢出视口 ——
-        // `hasVerticalScroller` 对程序创建的 NSScrollView 恒为 true（两种情形都是），
-        // 拿它当断言等于什么都没断言。
-        check("可视高 \(Int(visible)) → 内容溢出视口（滚动条因此可见）",
-              documentH > viewportH + 50,
-              "document \(Int(documentH)) > 视口 \(Int(viewportH))")
+        let (_, window) = openSettings(visibleHeight: visible)
+        longHeight = contentHeight(window)
+        check("40 条列表 · 可视高 \(Int(visible)) → 窗口高度仍是 520（列表不再撑窗口）",
+              abs(longHeight - 520) <= 1, "内容 \(Int(longHeight))")
         // 钳制作用在**内容**上，不是 frame 上：frame 比内容高出来的那截是标题栏。
-        check("可视高 \(Int(visible)) → 钳制作用在内容上（frame − 内容 = 标题栏，不是 0）",
-              (window.frame.height - contentH) > 10 && (window.frame.height - contentH) < 60,
-              "差 \(Int(window.frame.height - contentH))")
-        // documentView 必须翻转：不翻转的 documentView 从左下角铺开，初始可见的
-        // 是**底部**（恢复默认那一头），用户得先滚一下才看到顶部的快捷键区
-        check("可视高 \(Int(visible)) → documentView 已翻转（初始停在顶部）",
-              document.isFlipped,
-              "isFlipped=\(document.isFlipped)")
-
+        check("40 条列表 · 可视高 \(Int(visible)) → 钳制作用在内容上（frame − 内容 = 标题栏）",
+              (window.frame.height - longHeight) > 10 && (window.frame.height - longHeight) < 60,
+              "差 \(Int(window.frame.height - longHeight))")
         window.close()
     }
+    check("空列表与 40 条列表的窗口高度完全相同（列表长度与窗口解耦）",
+          abs(emptyHeight - longHeight) <= 1,
+          "空 \(Int(emptyHeight)) vs 长 \(Int(longHeight))")
+
+    // 屏特别矮时才被钳（钳制上限 < 520）
+    do {
+        let (_, window) = openSettings(visibleHeight: 500)
+        let expected = SettingsWindowController.contentHeight(visibleHeight: 500)
+        check("超矮屏（可视高 500）→ 窗口高度 = 钳制上限 420",
+              abs(contentHeight(window) - expected) <= 1,
+              "内容 \(Int(contentHeight(window))) vs 上限 \(Int(expected))")
+        window.close()
+    }
+}
+
+print("\n=== 2. 侧栏结构：4 个分组 + 切换后只显示当前组 ===\n")
+do {
+    check("分组共 4 个（快捷键 / 通用 / 高级 / 关于）",
+          SettingsWindowController.Section.allCases.count == 4,
+          "\(SettingsWindowController.Section.allCases.map(\.title).joined(separator: " / "))")
+    check("分组标题齐全",
+          SettingsWindowController.Section.allCases.map(\.title) == ["快捷键", "通用", "高级", "关于"],
+          "\(SettingsWindowController.Section.allCases.map(\.title).joined(separator: " / "))")
+
+    let (controller, window) = openSettings(visibleHeight: 1050)
+    check("默认选中「快捷键」",
+          controller.selectedSection == .shortcuts,
+          "\(controller.selectedSection.title)")
+    check("4 个分组都有内容视图",
+          controller.sectionContentViews.count == 4,
+          "\(controller.sectionContentViews.keys.map(\.title).joined(separator: " / "))")
+    check("初始只有「快捷键」那一组可见",
+          controller.sectionContentViews[.shortcuts]?.isHidden == false
+          && controller.sectionContentViews[.general]?.isHidden == true
+          && controller.sectionContentViews[.advanced]?.isHidden == true
+          && controller.sectionContentViews[.about]?.isHidden == true)
+
+    // 逐个切过去：当前组可见、其余全部隐藏
+    for section in SettingsWindowController.Section.allCases {
+        controller.selectSection(section)
+        controller.window?.layoutIfNeeded()
+        let visible = SettingsWindowController.Section.allCases.filter {
+            controller.sectionContentViews[$0]?.isHidden == false
+        }
+        check("切到「\(section.title)」→ 只有这一组可见",
+              visible == [section] && controller.selectedSection == section,
+              "可见的是 \(visible.map(\.title).joined(separator: " / "))")
+    }
+    window.close()
 }
 
 do {
@@ -148,76 +205,19 @@ do {
           "已被释放——那才是问题")
 }
 
-print("\n=== 2. 空忽略列表：内容收缩，钳制边界两侧都要对 ===\n")
-do {
-    Preferences.shared.ignoredBundleIdentifiers = []
-
-    // 先用一个「高到一定装得下」的高度开窗，量出内容高度。
-    // 内容高度由布局决定（随系统字号/缩放变），所以「装得下 / 装不下」的分界
-    // 必须**跟着内容走**，不能用固定高度赌 —— 赌输了就是换台机器红一次。
-    let (_, probeWindow, probeScroll) = openSettings(visibleHeight: 4000)
-    let emptyDocH = documentHeight(probeScroll)
-    check("给足够大的可视高 → 窗口高度 = 内容高度（装得下就不钳制）",
-          abs(contentHeight(probeWindow) - emptyDocH) <= 2,
-          "窗口 \(Int(contentHeight(probeWindow))) vs 内容 \(Int(emptyDocH))")
-    probeWindow.close()
-
-    check("空列表的 document 比长列表矮（内容随数据收缩）",
-          emptyDocH < longDocH - 200,
-          "空 \(Int(emptyDocH)) < 长 \(Int(longDocH)) - 200")
-
-    // 装得下的一侧：上限高于内容 → 窗口 = 内容高，不钳制
-    do {
-        let (_, window, scroll) = openSettings(visibleHeight: emptyDocH + 200)
-        let docH = documentHeight(scroll)
-        let viewportH = scroll.contentView.frame.height
-        check("上限高于内容 → 窗口高度 = 内容高度（不钳制）",
-              abs(contentHeight(window) - docH) <= 2,
-              "窗口 \(Int(contentHeight(window))) vs 内容 \(Int(docH))")
-        check("上限高于内容 → 内容不溢出视口（装得下就不该滚）",
-              docH <= viewportH + 2,
-              "document \(Int(docH)) vs 视口 \(Int(viewportH))")
-        window.close()
-    }
-
-    // 装不下的一侧：上限低于内容 → 窗口 = 上限 + 可滚
-    do {
-        let (_, window, scroll) = openSettings(visibleHeight: emptyDocH - 200)
-        let docH = documentHeight(scroll)
-        let viewportH = scroll.contentView.frame.height
-        let clampMax = SettingsWindowController.clampMaxHeight(visibleHeight: emptyDocH - 200)
-        check("上限低于内容 → 窗口内容高度 = 钳制上限",
-              abs(contentHeight(window) - clampMax) <= 2,
-              "内容 \(Int(contentHeight(window))) vs 上限 \(Int(clampMax))")
-        check("上限低于内容 → document 高于视口（可滚到底部的恢复默认）",
-              docH > viewportH + 2,
-              "document \(Int(docH)) > 视口 \(Int(viewportH))")
-        check("上限低于内容 → 窗口确实比内容矮（钳住了，不是没钳）",
-              contentHeight(window) < docH,
-              "窗口 \(Int(contentHeight(window))) < 内容 \(Int(docH))")
-        window.close()
-    }
-}
-
 print("\n=== 4. 钳制取「窗口所在屏」，不是 NSScreen.main ===\n")
 do {
     // `NSScreen.main` 是「当前持键盘焦点的屏幕」，不是窗口所在的屏。
     // 设置窗开在副屏时用它来钳高，就会被钳到主屏的高度 —— 副屏比主屏矮时
     // 窗口掉出副屏可视区，正是 E06 要修的那个 bug 的镜像。
     //
-    // 怎么验：把设置窗挪到**非主屏**上，再让内容高到必然被钳，
-    // 于是「窗口有多高」直接暴露了「用的是哪块屏的高度」。
-    Preferences.shared.ignoredBundleIdentifiers = (0..<40).map { "com.probe.ignored.app\($0)" }
-    let (_, probeWindow, probeScroll) = openSettings(visibleHeight: 4000)
-    let docH = documentHeight(probeScroll)
+    // 怎么验：把设置窗挪到**非主屏**上，看「窗口有多高」是否按那块屏算。
+    // 注意改版后窗口高度是**固定**的 —— 只有屏特别矮（钳制上限 < 520）时
+    // 才看得出区别，所以本条在「大屏机器」上只能验到「窗口确实跟着那块屏」。
+    let (_, probeWindow) = openSettings(visibleHeight: 4000)
     probeWindow.close()
 
-    // 目标屏：钳制上限要低于内容高度（否则窗口压根不被钳，测不出「取了哪块屏」），
-    // 且必须是**非主屏**（否则与「用 NSScreen.main」不可区分）。
-    let clamped = NSScreen.screens.filter {
-        SettingsWindowController.clampMaxHeight(visibleHeight: $0.visibleFrame.height) < docH
-    }
-    if let target = clamped.first(where: { $0 != NSScreen.main }) {
+    if let target = NSScreen.screens.first(where: { $0 != NSScreen.main }) {
         let controller = SettingsWindowController()
         let window = controller.window!
         // 挪位置必须在 present **之前** —— 已 order in 的窗口挪动后
@@ -229,25 +229,23 @@ do {
         controller.present()
         window.layoutIfNeeded()
 
-        let expected = SettingsWindowController.clampMaxHeight(visibleHeight: target.visibleFrame.height)
-        let mainExpected = SettingsWindowController.clampMaxHeight(
+        let expected = SettingsWindowController.contentHeight(
+            visibleHeight: target.visibleFrame.height)
+        let mainExpected = SettingsWindowController.contentHeight(
             visibleHeight: NSScreen.main?.visibleFrame.height ?? 900)
-        let contentH = contentHeight(window)
         check("窗口挪到 \(target.frame) 上 → 窗口.screen 跟着走",
               window.screen?.frame == target.frame,
               "\(String(describing: window.screen?.frame))")
-        check("钳制上限按**窗口所在屏**算（不是 NSScreen.main）",
-              abs(contentH - expected) <= 2,
-              "内容 \(Int(contentH)) vs 该屏上限 \(Int(expected))")
-        check("确实没用主屏的高度（两屏上限不同时才有意义）",
-              expected == mainExpected || abs(contentH - mainExpected) > 2,
-              "主屏上限 \(Int(mainExpected))")
+        check("高度按**窗口所在屏**算（不是 NSScreen.main）",
+              abs(contentHeight(window) - expected) <= 1,
+              "内容 \(Int(contentHeight(window))) vs 该屏应为 \(Int(expected))")
+        if expected == mainExpected {
+            print("  ⏭️ 两块屏算出的高度一样（本机都是大屏，固定高度下本就分不出来）"
+                  + "——「取哪块屏」的规则由 §0 的纯函数断言钉住")
+        }
         window.close()
     } else {
-        // 单屏环境下「窗口所在屏」与「主屏」本来就是同一块屏，从无从区分 ——
-        // 这不是漏测，是那台机器上这条 bug 本就不成立。
-        print("  ⏭️ 本机没有「非主屏且内容会被钳」的屏，跳过这一条"
-              + "（单屏环境下两个取法等价，这条 bug 不成立）")
+        print("  ⏭️ 本机没有非主屏，跳过这一条")
     }
 }
 

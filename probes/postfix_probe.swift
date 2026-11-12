@@ -232,11 +232,21 @@ do {
         // scrollView 自己的 fittingSize 恒为 (0, 0)，拿它断言会把
         // 「容器缺 bottom 约束」这条真回归放过去（那正是窗口被压成一条细缝、
         // 表现为"点了偏好设置没反应"的根因）。没有滚动容器时退回 contentView。
-        let content = window.contentView
-        let host = (content as? NSScrollView)?.documentView ?? content
-        let fitting = host?.fittingSize ?? .zero
-        check("内容宿主的 fittingSize 高度不为 0（约束完整）",
-              fitting.height > 120, "fittingSize \(fitting)")
+        //
+        // **2026-11-12（设置窗口改版为分类侧栏）**：窗口高度改成**固定**的，
+        // 不再由内容的 fitting 高度决定 —— 于是「宿主 fitting 高度」这条断言
+        // 换了对象：原来只有一个内容宿主，现在**每个分组各有一个滚动视图**，
+        // 塌掉的是「某一组的文档高度为 0」（那一组会整页空白）。
+        // 所以改成逐组断言：**4 个分组的文档高度都不得为 0** ——
+        // 覆盖面比原来更大（原来只测 1 个宿主，现在测 4 个），
+        // 而「缺 bottom 约束」这条真回归仍然会被抓住（缺了 → 该组高度为 0）。
+        for section in SettingsWindowController.Section.allCases {
+            let view = controller.sectionContentViews[section]
+            let host = (view as? NSScrollView)?.documentView ?? view
+            let fitting = host?.fittingSize ?? .zero
+            check("「\(section.title)」分组的文档高度不为 0（约束完整）",
+                  fitting.height > 0, "fittingSize \(fitting)")
+        }
         check("窗口高度可用（不是只剩标题栏）",
               window.frame.height > 120,
               "\(Int(window.frame.width))×\(Int(window.frame.height))")

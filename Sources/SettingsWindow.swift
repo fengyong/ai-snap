@@ -8,7 +8,54 @@ import UniformTypeIdentifiers
 /// 开机启动、截图历史、更新。线宽、颜色、线型、箭头样式、水印已经在标注窗口的工具栏里，
 /// **再放一份到这里只会造出两个能改同一份数据的地方**
 /// （改了一处另一处不刷新，用户看到的状态就自相矛盾）。
-final class SettingsWindowController: NSWindowController {
+///
+/// **2026-11-12 · 改版为分类侧栏**：原实现把 8 个分区平铺在一根 1162pt 高的列上
+/// （实测，空忽略列表时），窗口按内容高度撑开、再钳到屏幕可视区 —— 于是**开窗即满屏
+/// 且永远带滚动条**，连「忽略列表为空」时也是（钳制上限 970~1042pt < 内容 1162pt）。
+///
+/// 根因不是「设置项太多」，而是**信息架构没有分层**：每天都要用的截图快捷键，
+/// 和几乎不碰的更新清单地址，同层同权重、同样的标题、同样的分隔线、同样的间距 ——
+/// 代价由用户每次开窗承担。
+///
+/// 改法（对齐《产品设计改进方案-2026-10-19》§10.2「分类侧栏／分段导航＋内容滚动」，
+/// 当年只落地了 E06 的滚动容器，把「内容可达」解决了，没解决「开窗即满屏」）：
+/// ① 左侧分类侧栏 4 组（快捷键 / 通用 / 高级 / 关于），右侧只显示当前组；
+/// ② 窗口尺寸**固定**，不再随内容变化 —— 内容超出由内容区自己滚；
+/// ③ 状态提示挪到窗口底部常驻（原来在长页面顶部，出错时滚下去就找不着了）。
+final class SettingsWindowController: NSWindowController, NSOutlineViewDataSource, NSOutlineViewDelegate {
+
+    // MARK: - 侧栏分组
+
+    /// 侧栏分组。internal 供探针断言侧栏结构与分组切换。
+    enum Section: Int, CaseIterable {
+        case shortcuts, general, advanced, about
+
+        var title: String {
+            switch self {
+            case .shortcuts: return "快捷键"
+            case .general: return "通用"
+            case .advanced: return "高级"
+            case .about: return "关于"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .shortcuts: return "keyboard"
+            case .general: return "gearshape"
+            case .advanced: return "slider.horizontal.3"
+            case .about: return "info.circle"
+            }
+        }
+    }
+
+    /// 窗口目标宽度。侧栏 168 + 内容区 472 —— 内容区减去左右内边距 40 后剩 432，
+    /// 装得下现在最宽的一行（清单地址行：标签 80 + 间距 12 + 输入框 320 = 412）。
+    static let preferredContentWidth: CGFloat = 640
+    /// 窗口目标高度。**固定**：与内容、与忽略列表长度都无关。
+    static let preferredContentHeight: CGFloat = 520
+    /// 侧栏宽度
+    static let sidebarWidth: CGFloat = 168
 
     /// 快捷键改动后由外部（AppDelegate）重新注册，并把问题反馈回来。
     /// 用闭包而不是让设置窗口去调 AppDelegate，避免两边互相持有。
@@ -20,11 +67,15 @@ final class SettingsWindowController: NSWindowController {
 
     /// 钳制用的「屏幕可视高度」来源。默认取**窗口实际所在**屏（见 `screenVisibleHeight(for:)`）。
     ///
-    /// 做成注入点是为了**可测**：断言「窗口内容高度 = 钳制上限」要求内容比钳制值高，
-    /// 而内容高度由布局决定（随系统字号变）、钳制值随屏幕变 —— 原来探针直接读
-    /// 本机 `NSScreen.main`，于是「内容装不装得下」这件事在不同机器上结论不同，
-    /// 红灯常态化 = 回归网失效。探针给定固定高度后，任何机器上都是同一组数字。
+    /// 做成注入点是为了**可测**：钳制上限随屏幕变 —— 原来探针直接读本机 `NSScreen.main`，
+    /// 于是「窗口多高」在不同机器上结论不同，红灯常态化 = 回归网失效。
+    /// 探针给定固定高度后，任何机器上都是同一组数字。
     var visibleHeightProvider: (() -> CGFloat)?
+
+    /// 当前选中的分组。internal 供探针断言「切换分组真的换了内容」。
+    private(set) var selectedSection: Section = .shortcuts
+    /// 各分组的内容视图。internal 供探针断言「只有当前组可见」。
+    private(set) var sectionContentViews: [Section: NSView] = [:]
 
     private var regionButton: NSButton!
     private var windowButton: NSButton!
@@ -45,11 +96,16 @@ final class SettingsWindowController: NSWindowController {
     /// 选区吸附窗口开关
     private var snapToWindowsBox: NSButton!
     private var keyMonitor: Any?
-    /// 滚动容器里的内容视图（root stack 的宿主）。fitting 高度以它为准 ——
-    /// 包了 NSScrollView 之后 contentView 是 scrollView 本身，fittingSize 不可靠。
-    private var contentContainer: NSView?
+    /// 侧栏控件
+    private var sidebarOutline: NSOutlineView!
+    /// 内容区宿主（各分组滚动视图的父视图）
+    private var contentContainer: NSView!
     /// 正在录制的目标：nil 表示没有在录制
     private var recordingTarget: RecordingTarget?
+
+    /// 切换分组时抑制回调：程序化选中侧栏行会再次触发选中回调，
+    /// 不加这道闸会来回弹。
+    private var isSwitchingSection = false
 
     private enum RecordingTarget {
         case region
@@ -58,7 +114,9 @@ final class SettingsWindowController: NSWindowController {
 
     convenience init() {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 250),
+            contentRect: NSRect(x: 0, y: 0,
+                                width: SettingsWindowController.preferredContentWidth,
+                                height: SettingsWindowController.preferredContentHeight),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -80,40 +138,265 @@ final class SettingsWindowController: NSWindowController {
     private func buildUI() {
         guard let window = window else { return }
 
-        let root = NSStackView()
-        root.orientation = .vertical
-        root.alignment = .leading
-        root.spacing = 12
-        root.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
-        root.translatesAutoresizingMaskIntoConstraints = false
+        // ── 状态区（常驻底部）──
+        //
+        // 原来状态提示在长页面的顶部（快捷键区下面）：出错时用户已经滚到别的分区，
+        // 那条提示根本看不见。现在它常驻在窗口底部，跟当前分组无关 ——
+        // 「组合键不合法」「必须留一个弹出菜单」「恢复默认会影响哪些项」都要能看见。
+        statusLabel = NSTextField(wrappingLabelWithString: "")
+        statusLabel.font = NSFont.systemFont(ofSize: 11)
+        statusLabel.textColor = .systemOrange
+        statusLabel.isHidden = true
+        statusLabel.maximumNumberOfLines = 3
+        statusLabel.preferredMaxLayoutWidth = Self.preferredContentWidth - 40
 
-        let title = NSTextField(labelWithString: "全局快捷键")
-        title.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        root.addArrangedSubview(title)
+        let footer = NSStackView(views: [statusLabel])
+        footer.orientation = .horizontal
+        footer.alignment = .leading
+        footer.spacing = 0
+        footer.edgeInsets = NSEdgeInsets(top: 6, left: 20, bottom: 10, right: 20)
+
+        // ── 侧栏 ──
+        let sidebar = makeSidebarView()
+
+        // ── 内容区：4 组各一个滚动视图叠在一起，只显示当前组 ──
+        contentContainer = NSView()
+        contentContainer.translatesAutoresizingMaskIntoConstraints = false
+        for section in Section.allCases {
+            let scroll = makeGroupScrollView(buildSectionContent(section))
+            scroll.translatesAutoresizingMaskIntoConstraints = false
+            contentContainer.addSubview(scroll)
+            NSLayoutConstraint.activate([
+                scroll.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+                scroll.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
+                scroll.topAnchor.constraint(equalTo: contentContainer.topAnchor),
+                scroll.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
+            ])
+            sectionContentViews[section] = scroll
+        }
+
+        let root = NSView()
+        // 内容视图的尺寸由窗口管（translatesAutoresizingMaskIntoConstraints 保持默认 true）：
+        // 设成 false 会让 Auto Layout 接管根视图，而根视图没有高度最小值约束 ——
+        // 结果内容区高度塌成 0（整页空白，只剩侧栏）。
+        window.contentView = root
+        root.addSubview(sidebar)
+        root.addSubview(contentContainer)
+        root.addSubview(footer)
+
+        NSLayoutConstraint.activate([
+            sidebar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            sidebar.topAnchor.constraint(equalTo: root.topAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            sidebar.widthAnchor.constraint(equalToConstant: Self.sidebarWidth),
+
+            contentContainer.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            contentContainer.topAnchor.constraint(equalTo: root.topAnchor),
+            contentContainer.bottomAnchor.constraint(equalTo: footer.topAnchor),
+            contentContainer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
+            footer.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            footer.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+        // 内容区宽度写死：窗口不可缩放，少了这道约束 Auto Layout 会把根视图
+        // 收成「侧栏宽度」（内容区没有内在尺寸 → 取最小值 0）。
+        contentContainer.widthAnchor.constraint(
+            equalToConstant: Self.preferredContentWidth - Self.sidebarWidth).isActive = true
+
+        selectSection(.shortcuts)
+        fitWindowToContent()
+        // 尺寸定下来之后再居中：构造时的 center() 用的是临时尺寸，
+        // setContentSize 之后窗口会偏。
+        window.center()
+    }
+
+    /// 侧栏：源列表样式（macOS 系统设置那种）。
+    ///
+    /// 用 NSOutlineView 而不是 NSTableView：分组将来可能有子项
+    /// （例如「忽略的应用」从快捷键里独立出去），outline 天然支持层级。
+    private func makeSidebarView() -> NSScrollView {
+        let outline = NSOutlineView()
+        outline.headerView = nil
+        outline.rowHeight = 30
+        outline.floatsGroupRows = false
+        outline.style = .sourceList          // macOS 12+ 的 sourceList 样式（系统设置那种）
+        outline.dataSource = self
+        outline.delegate = self
+        outline.indentationPerLevel = 0
+        outline.autoresizesOutlineColumn = false
+
+        let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("section"))
+        column.title = ""
+        column.width = Self.sidebarWidth
+        outline.addTableColumn(column)
+        outline.outlineTableColumn = column
+
+        let scroll = NSScrollView()
+        scroll.documentView = outline
+        scroll.hasVerticalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        sidebarOutline = outline
+        return scroll
+    }
+
+    /// 一组内容的滚动视图。文档视图必须**翻转**：documentView 默认从左下角铺开，
+    /// 内容超高时初始可见的是**底部**，用户得先滚才能看到顶部。
+    private func makeGroupScrollView(_ content: NSStackView) -> NSScrollView {
+        let container = FlippedContainerView()
+        container.addSubview(content)
+        NSLayoutConstraint.activate([
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            content.topAnchor.constraint(equalTo: container.topAnchor),
+            // 【必须有 bottom】否则 container 在竖直方向是无约束的，
+            // fittingSize.height 会退化成 0 —— 滚动区就成了一条细缝。
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = true
+        scroll.backgroundColor = .windowBackgroundColor
+        scroll.documentView = container
+        // documentView 必须关掉 autoresizing：开着的话 AppKit 会自己生成一条
+        // 「width == 0」的约束，和下面这条宽度约束同为必需优先级 → 互相冲突，
+        // 结果文档视图宽度被钉成 0、整页空白（而且约束冲突在日志里不报）。
+        container.translatesAutoresizingMaskIntoConstraints = false
+        // documentView 宽度跟随可视宽度（只纵向滚动）。用 clip view 而不是
+        // frameLayoutGuide —— 后者是 iOS UIScrollView 的 API，macOS 没有。
+        container.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
+        return scroll
+    }
+
+    // MARK: - 分组切换
+
+    /// 切到指定分组。侧栏点击与探针走**同一条路**，避免两套逻辑走偏。
+    func selectSection(_ section: Section) {
+        selectedSection = section
+        for (s, view) in sectionContentViews {
+            view.isHidden = (s != section)
+        }
+        guard let outline = sidebarOutline else { return }
+        let row = Section.allCases.firstIndex(of: section) ?? 0
+        guard outline.selectedRow != row else { return }
+        isSwitchingSection = true
+        outline.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        isSwitchingSection = false
+    }
+
+    // MARK: - 侧栏数据源 / 委托
+
+    func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        item == nil ? Section.allCases.count : 0
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        Section.allCases[index]
+    }
+
+    func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool { false }
+
+    func outlineView(_ outlineView: NSOutlineView, isGroupItem item: Any) -> Bool { false }
+
+    func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?,
+                     item: Any) -> NSView? {
+        guard let section = item as? Section else { return nil }
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 8
+        row.alignment = .centerY
+        row.edgeInsets = NSEdgeInsets(top: 3, left: 10, bottom: 3, right: 8)
+
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: section.symbolName,
+                              accessibilityDescription: section.title)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        icon.contentTintColor = .secondaryLabelColor
+
+        let label = NSTextField(labelWithString: section.title)
+        label.font = NSFont.systemFont(ofSize: 13)
+        label.lineBreakMode = .byTruncatingTail
+
+        row.addArrangedSubview(icon)
+        row.addArrangedSubview(label)
+        return row
+    }
+
+    func outlineViewSelectionDidChange(_ notification: Notification) {
+        guard !isSwitchingSection,
+              let outline = notification.object as? NSOutlineView,
+              outline.selectedRow >= 0,
+              let section = outline.item(atRow: outline.selectedRow) as? Section else { return }
+        selectSection(section)
+    }
+
+    // MARK: - 各分组内容
+
+    private func buildSectionContent(_ section: Section) -> NSStackView {
+        switch section {
+        case .shortcuts: return buildShortcutsSection()
+        case .general: return buildGeneralSection()
+        case .advanced: return buildAdvancedSection()
+        case .about: return buildAboutSection()
+        }
+    }
+
+    /// 分组内容栈。垂直排列、组内间距 12pt。
+    private func makeGroupStack() -> NSStackView {
+        let stack = NSStackView()
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        // 必须关掉 autoresizing：开着的话 stack 会留一条「width == 0」的
+        // autoresizing 约束，和「贴住容器四边」的 Auto Layout 约束打架 ——
+        // 结果整个分组宽度被钉成 0、滚动区一片空白。
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        return stack
+    }
+
+    /// 分区小标题。
+    private func makeSectionTitle(_ text: String, size: CGFloat = 13) -> NSTextField {
+        let title = NSTextField(labelWithString: text)
+        title.font = NSFont.systemFont(ofSize: size, weight: .semibold)
+        return title
+    }
+
+    /// 灰色说明文字。
+    private func makeHint(_ text: String) -> NSTextField {
+        let hint = NSTextField(wrappingLabelWithString: text)
+        hint.font = NSFont.systemFont(ofSize: 11)
+        hint.textColor = .secondaryLabelColor
+        hint.preferredMaxLayoutWidth = 400
+        return hint
+    }
+
+    private func makeSeparator() -> NSBox {
+        let separator = NSBox()
+        separator.boxType = .separator
+        return separator
+    }
+
+    /// 快捷键组：截图快捷键 + 忽略应用列表。
+    private func buildShortcutsSection() -> NSStackView {
+        let root = makeGroupStack()
+        root.addArrangedSubview(makeSectionTitle("全局快捷键"))
 
         regionButton = makeRecorderButton(action: #selector(recordRegion))
         windowButton = makeRecorderButton(action: #selector(recordWindow))
         root.addArrangedSubview(makeRow(label: "区域截图", button: regionButton))
         root.addArrangedSubview(makeRow(label: "窗口截图", button: windowButton))
 
-        let hint = NSTextField(wrappingLabelWithString:
-            "点击按钮后按下新的组合键，按 Esc 取消。组合键需包含 ⌘ 或 ⌃ —— 只用 ⇧ / ⌥ 会抢掉系统范围内的正常打字。")
-        hint.font = NSFont.systemFont(ofSize: 11)
-        hint.textColor = .secondaryLabelColor
-        hint.preferredMaxLayoutWidth = 420
-        root.addArrangedSubview(hint)
+        root.addArrangedSubview(makeHint(
+            "点击按钮后按下新的组合键，按 Esc 取消。组合键需包含 ⌘ 或 ⌃ —— 只用 ⇧ / ⌥ 会抢掉系统范围内的正常打字。"))
 
-        statusLabel = NSTextField(wrappingLabelWithString: "")
-        statusLabel.font = NSFont.systemFont(ofSize: 11)
-        statusLabel.textColor = .systemOrange
-        statusLabel.preferredMaxLayoutWidth = 420
-        statusLabel.isHidden = true
-        root.addArrangedSubview(statusLabel)
-
-        // ── 忽略的应用程序 ──
-        let ignoreTitle = NSTextField(labelWithString: "在这些应用中忽略快捷键")
-        ignoreTitle.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        root.addArrangedSubview(ignoreTitle)
+        root.addArrangedSubview(makeSeparator())
+        root.addArrangedSubview(makeSectionTitle("在这些应用中忽略快捷键", size: 12))
 
         ignoredAppsBox = NSStackView()
         ignoredAppsBox.orientation = .vertical
@@ -127,113 +410,64 @@ final class SettingsWindowController: NSWindowController {
         addAppButton.bezelStyle = .rounded
         root.addArrangedSubview(addAppButton)
 
-        let ignoreHint = NSTextField(wrappingLabelWithString:
+        root.addArrangedSubview(makeHint(
             "列表中的应用处于前台时，截图快捷键不会触发。受 macOS 限制，被拦截的按键不会转发给该应用"
-            + "（默认组合 ⌃⌘A / ⌃⌘W 很冷门，一般无影响）。支持 bundle id 前缀规则，以 * 结尾。")
-        ignoreHint.font = NSFont.systemFont(ofSize: 11)
-        ignoreHint.textColor = .secondaryLabelColor
-        ignoreHint.preferredMaxLayoutWidth = 420
-        root.addArrangedSubview(ignoreHint)
+            + "（默认组合 ⌃⌘A / ⌃⌘W 很冷门，一般无影响）。支持 bundle id 前缀规则，以 * 结尾。"))
+        return root
+    }
 
-        let separator = NSBox()
-        separator.boxType = .separator
-        root.addArrangedSubview(separator)
+    /// 通用组：启动、截图历史、状态栏图标、选区、打码。
+    private func buildGeneralSection() -> NSStackView {
+        let root = makeGroupStack()
 
         // ── 启动 ──
-        let launchTitle = NSTextField(labelWithString: "启动")
-        launchTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        root.addArrangedSubview(launchTitle)
-
+        root.addArrangedSubview(makeSectionTitle("启动"))
         launchAtLoginBox = NSButton(checkboxWithTitle: "开机自动启动（登录后在后台待命）",
                                     target: self, action: #selector(launchAtLoginToggled(_:)))
         root.addArrangedSubview(launchAtLoginBox)
-
-        let launchHint = NSTextField(wrappingLabelWithString:
+        root.addArrangedSubview(makeHint(
             "AISnap 常驻状态栏、不占 Dock，截图靠全局快捷键 —— 所以它需要一直在后台待命。"
-            + "打开这个开关就不用每次重启后手动启动。")
-        launchHint.font = NSFont.systemFont(ofSize: 11)
-        launchHint.textColor = .secondaryLabelColor
-        launchHint.preferredMaxLayoutWidth = 420
-        root.addArrangedSubview(launchHint)
-
-        let separator1 = NSBox()
-        separator1.boxType = .separator
-        root.addArrangedSubview(separator1)
+            + "打开这个开关就不用每次重启后手动启动。"))
+        root.addArrangedSubview(makeSeparator())
 
         // ── 截图历史 ──
-        let historyTitle = NSTextField(labelWithString: "截图历史")
-        historyTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        root.addArrangedSubview(historyTitle)
-
+        root.addArrangedSubview(makeSectionTitle("截图历史"))
         recordHistoryBox = NSButton(checkboxWithTitle: "保留截图历史（含没有保存的）",
                                     target: self, action: #selector(recordHistoryToggled(_:)))
         root.addArrangedSubview(recordHistoryBox)
-
-        let historyHint = NSTextField(wrappingLabelWithString:
+        root.addArrangedSubview(makeHint(
             "开启后每次截图都会在原图存一份，最多保留最近 \(CaptureHistory.maximumEntries) 张，"
             + "可以在「截图历史」窗口里重新编辑或清理。"
-            + "截图常含敏感内容，不需要就到状态栏菜单 →「截图历史…」里删掉，或在这里关掉。")
-        historyHint.font = NSFont.systemFont(ofSize: 11)
-        historyHint.textColor = .secondaryLabelColor
-        historyHint.preferredMaxLayoutWidth = 420
-        root.addArrangedSubview(historyHint)
-
-        let separatorHistory = NSBox()
-        separatorHistory.boxType = .separator
-        root.addArrangedSubview(separatorHistory)
+            + "截图常含敏感内容，不需要就到状态栏菜单 →「截图历史…」里删掉，或在这里关掉。"))
+        root.addArrangedSubview(makeSeparator())
 
         // ── 状态栏图标 ──
-        let trayTitle = NSTextField(labelWithString: "状态栏图标")
-        trayTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        root.addArrangedSubview(trayTitle)
-
+        root.addArrangedSubview(makeSectionTitle("状态栏图标"))
         trayLeftPopup = makeTrayPopup()
         trayRightPopup = makeTrayPopup()
         trayMiddlePopup = makeTrayPopup()
         root.addArrangedSubview(makeTrayRow(label: "左键", popup: trayLeftPopup))
         root.addArrangedSubview(makeTrayRow(label: "右键", popup: trayRightPopup))
         root.addArrangedSubview(makeTrayRow(label: "中键", popup: trayMiddlePopup))
-
-        let trayHint = NSTextField(wrappingLabelWithString:
+        root.addArrangedSubview(makeHint(
             "分别绑定单击状态栏图标的动作，修改即时生效。至少保留一个按键为「弹出菜单」，"
-            + "否则将无法从状态栏打开偏好设置、截图历史或退出。")
-        trayHint.font = NSFont.systemFont(ofSize: 11)
-        trayHint.textColor = .secondaryLabelColor
-        trayHint.preferredMaxLayoutWidth = 420
-        root.addArrangedSubview(trayHint)
-
-        let separatorTray = NSBox()
-        separatorTray.boxType = .separator
-        root.addArrangedSubview(separatorTray)
+            + "否则将无法从状态栏打开偏好设置、截图历史或退出。"))
+        root.addArrangedSubview(makeSeparator())
 
         // ── 选区 ──
-        let selectionTitle = NSTextField(labelWithString: "选区")
-        selectionTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        root.addArrangedSubview(selectionTitle)
-
+        root.addArrangedSubview(makeSectionTitle("选区"))
         snapToWindowsBox = NSButton(checkboxWithTitle: "选区边缘自动吸附到窗口（8 点内生效）",
                                     target: self,
                                     action: #selector(snapToWindowsToggled(_:)))
         snapToWindowsBox.state = Preferences.shared.snapSelectionToWindows ? .on : .off
         root.addArrangedSubview(snapToWindowsBox)
-
-        let selectionHint = NSTextField(wrappingLabelWithString:
+        root.addArrangedSubview(makeHint(
             "拖拽选区时，选区四边会自动贴到附近窗口的边框上，方便整窗截取；"
-            + "被贴住的窗口会高亮描边。想框歪随时可以 —— 只在 8 点内生效。")
-        selectionHint.font = NSFont.systemFont(ofSize: 11)
-        selectionHint.textColor = .secondaryLabelColor
-        selectionHint.preferredMaxLayoutWidth = 420
-        root.addArrangedSubview(selectionHint)
-
-        let separatorSelection = NSBox()
-        separatorSelection.boxType = .separator
-        root.addArrangedSubview(separatorSelection)
+            + "被贴住的窗口会高亮描边。想框歪随时可以 —— 只在 8 点内生效。"))
+        root.addArrangedSubview(makeSeparator())
 
         // ── 打码 ──
-        let redactionTitle = NSTextField(labelWithString: "打码")
-        redactionTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        root.addArrangedSubview(redactionTitle)
-
+        root.addArrangedSubview(makeSectionTitle("打码"))
         redactionStrengthSlider = NSSlider(value: Preferences.shared.redactionStrength,
                                            minValue: 0.5, maxValue: 3.0,
                                            target: self,
@@ -254,23 +488,20 @@ final class SettingsWindowController: NSWindowController {
         strengthRow.spacing = 12
         redactionStrengthSlider.setContentHuggingPriority(.defaultLow, for: .horizontal)
         root.addArrangedSubview(strengthRow)
-
-        let redactionHint = NSTextField(wrappingLabelWithString:
+        root.addArrangedSubview(makeHint(
             "马赛克与模糊共用这一个强度：1.0× = 默认（12 点块 / 半径），对小图可调细到 0.5×，"
-            + "高分屏大图可调粗到 3.0×。只影响之后新画的打码，已画好的不变。")
-        redactionHint.font = NSFont.systemFont(ofSize: 11)
-        redactionHint.textColor = .secondaryLabelColor
-        redactionHint.preferredMaxLayoutWidth = 420
-        root.addArrangedSubview(redactionHint)
+            + "高分屏大图可调粗到 3.0×。只影响之后新画的打码，已画好的不变。"))
+        return root
+    }
 
-        let separatorRedaction = NSBox()
-        separatorRedaction.boxType = .separator
-        root.addArrangedSubview(separatorRedaction)
-
-        // ── 更新 ──
-        let updateTitle = NSTextField(labelWithString: "更新")
-        updateTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        root.addArrangedSubview(updateTitle)
+    /// 高级组：更新清单地址与说明。
+    ///
+    /// 为什么单独一组（2026-11-12）：清单地址是一个 JSON 文件的 URL，
+    /// 填它的人得先懂「发布协议」这套概念 —— 普通用户不该为了更新先理解它。
+    /// 日常能用的「立即检查更新」放在「关于」组，默认界面就够用。
+    private func buildAdvancedSection() -> NSStackView {
+        let root = makeGroupStack()
+        root.addArrangedSubview(makeSectionTitle("更新清单"))
 
         let urlRow = NSStackView()
         urlRow.orientation = .horizontal
@@ -292,13 +523,23 @@ final class SettingsWindowController: NSWindowController {
                                 target: self, action: #selector(autoCheckToggled(_:)))
         root.addArrangedSubview(autoCheckBox)
 
-        let updateHint = NSTextField(wrappingLabelWithString:
+        root.addArrangedSubview(makeHint(
             "清单是一个 JSON 文件：{\"version\":\"1.2.0\", \"downloadURL\":\"https://…\", \"notes\":\"…\"}。\n"
-            + "目前只会提示并跳到下载页，不会自动替换应用本身 —— 那需要先做代码签名与公证。")
-        updateHint.font = NSFont.systemFont(ofSize: 11)
-        updateHint.textColor = .secondaryLabelColor
-        updateHint.preferredMaxLayoutWidth = 420
-        root.addArrangedSubview(updateHint)
+            + "目前只会提示并跳到下载页，不会自动替换应用本身 —— 那需要先做代码签名与公证。"))
+        return root
+    }
+
+    /// 关于组：版本、立即检查更新、恢复默认。
+    ///
+    /// 「恢复默认」放在这里而不是页面底部：它是低频且不可逆的操作，
+    /// 不该占首屏（原来它在长页面最底下，出事时根本够不着）。
+    private func buildAboutSection() -> NSStackView {
+        let root = makeGroupStack()
+
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let versionLabel = NSTextField(labelWithString: version.map { "AISnap \($0)" } ?? "AISnap")
+        versionLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        root.addArrangedSubview(versionLabel)
 
         let checkRow = NSStackView()
         checkRow.orientation = .horizontal
@@ -307,74 +548,39 @@ final class SettingsWindowController: NSWindowController {
                                              target: self, action: #selector(checkNow)))
         root.addArrangedSubview(checkRow)
 
-        let separator2 = NSBox()
-        separator2.boxType = .separator
-        root.addArrangedSubview(separator2)
+        root.addArrangedSubview(makeSeparator())
+        root.addArrangedSubview(makeSectionTitle("恢复默认", size: 12))
 
         let buttonRow = NSStackView()
         buttonRow.orientation = .horizontal
         buttonRow.spacing = 8
-
-        let resetHotkeys = NSButton(title: "恢复默认快捷键",
-                                    target: self, action: #selector(resetHotkeys))
-        buttonRow.addArrangedSubview(resetHotkeys)
-
-        let resetAll = NSButton(title: "恢复全部默认设置",
-                                target: self, action: #selector(resetAll))
-        buttonRow.addArrangedSubview(resetAll)
-
+        buttonRow.addArrangedSubview(NSButton(title: "恢复默认快捷键",
+                                              target: self, action: #selector(resetHotkeys)))
+        buttonRow.addArrangedSubview(NSButton(title: "恢复全部默认设置",
+                                              target: self, action: #selector(resetAll)))
         root.addArrangedSubview(buttonRow)
-
-        let container = FlippedContainerView()
-        container.addSubview(root)
-        NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            root.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            root.topAnchor.constraint(equalTo: container.topAnchor),
-            // 【必须有 bottom】否则 container 在竖直方向是无约束的，
-            // fittingSize.height 会退化成 0 —— 紧接着的 setContentSize 就把窗口
-            // 压成一条只剩标题栏的细缝（实测 440×28），表现为"点了偏好设置没反应"。
-            root.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-        self.contentContainer = container
-
-        // ── 滚动容器（E06，2026-11-09）──
-        //
-        // 内容按 fitting 高度撑窗口，而设置项只增不减：1280×800 的小屏上
-        // 「恢复默认」一行会被推到屏外且够不着（窗口顶部对齐后底部越界）。
-        // 包一层 NSScrollView，窗口高度钳到屏幕可视区内 —— 装得下时行为
-        // 与原先完全一致（无滚动条），装不下时滚动可达。
-        // 注意 container 宽度必须跟随 scrollView（trailing == 而不是 ≤）：
-        // documentView 若按自身宽度收缩，URL 输入框那行会被挤开。
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        scroll.drawsBackground = true
-        scroll.backgroundColor = .windowBackgroundColor
-        scroll.documentView = container
-        // documentView 宽度跟随可视宽度（只纵向滚动）。用 clip view 而不是
-        // frameLayoutGuide —— 后者是 iOS UIScrollView 的 API，macOS 没有。
-        container.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
-        window.contentView = scroll
-        fitWindowToContent()
-        // 尺寸定下来之后再居中：构造时的 center() 用的是临时尺寸，
-        // setContentSize 之后窗口会偏。
-        window.center()
+        return root
     }
 
-    /// 按内容 fitting 高度设置窗口尺寸，**钳到屏幕可视区内**（E06）。
+    /// 按**固定**尺寸设置窗口，**钳到屏幕可视区内**。
     ///
-    /// 装得下 = 原行为（窗口恰好贴合内容）；装不下 = 限高出滚动条。
-    /// 钳制值 = 可视高度 − 80（标题栏 + 上下呼吸边）；visibleFrame 已排除
-    /// Dock 与菜单栏，这里不再叠加系统边距。
-    /// 所有会改变内容行数的路径（开窗 / 忽略列表增删 / 开机启动提示）都走这里。
+    /// 为什么固定（2026-11-12 改版）：原来窗口高度 = 内容高度（上限为屏幕可视高 −80），
+    /// 而内容 1162pt > 上限 970~1042pt —— 于是**开窗即满屏 + 永远带滚动条**。
+    /// 高度固定后，内容超出由内容区自己滚，窗口尺寸与内容彻底解耦。
     private func fitWindowToContent() {
         guard let window = window else { return }
-        let fit = contentContainer?.fittingSize ?? window.frame.size
         let visibleHeight = visibleHeightProvider?() ?? screenVisibleHeight(for: window)
-        let maxH = Self.clampMaxHeight(visibleHeight: visibleHeight)
-        window.setContentSize(NSSize(width: max(460, fit.width),
-                                     height: min(max(fit.height, 320), maxH)))
+        window.setContentSize(NSSize(width: Self.preferredContentWidth,
+                                     height: Self.contentHeight(visibleHeight: visibleHeight)))
+    }
+
+    /// 窗口内容高度 = min(目标高, 钳制上限)。
+    ///
+    /// 抽成纯函数是为了让探针能**注入固定高度**断言：目标高是常量、
+    /// 钳制上限随屏幕变 —— 两边都读本机的话，「窗口多高」在不同机器上结论就不同，
+    /// 红灯常态化 = 回归网失效（O2 的教训）。
+    static func contentHeight(visibleHeight: CGFloat) -> CGFloat {
+        min(preferredContentHeight, clampMaxHeight(visibleHeight: visibleHeight))
     }
 
     /// 窗口高度上限 = 屏幕可视高度 − 80，且不小于 320。
@@ -382,11 +588,6 @@ final class SettingsWindowController: NSWindowController {
     /// **−80 的构成（2026-11-11 实测，本机 macOS 27）**：标题栏 **28**
     /// （窗口 frame 与 contentRect 的高度差）+ 上下各 **26** 的呼吸边 = 80。
     /// visibleFrame 已排除 Dock 与菜单栏，所以这里不再叠加系统边距。
-    ///
-    /// 抽成纯函数是为了让探针能**注入固定高度**断言 —— 原来探针把
-    /// `NSScreen.main?.visibleFrame.height ?? 900 - 80` 又抄了一遍，
-    /// 两边读同一台机器，于是「钳制取错了屏幕」这件事探针永远看不见
-    /// （`NSScreen.main` 是「当前持键盘焦点的屏幕」，不是窗口所在的屏）。
     static func clampMaxHeight(visibleHeight: CGFloat) -> CGFloat {
         max(320, visibleHeight - 80)
     }
@@ -397,7 +598,23 @@ final class SettingsWindowController: NSWindowController {
     /// 设置窗开在副屏时会被钳到主屏的高度 —— 副屏比主屏矮时窗口就掉出了
     /// 副屏可视区，正是 E06 要修的那个 bug 的镜像。
     private func screenVisibleHeight(for window: NSWindow) -> CGFloat {
-        (window.screen ?? NSScreen.main)?.visibleFrame.height ?? 900
+        Self.resolveVisibleHeight(
+            windowScreenHeight: window.screen?.visibleFrame.height,
+            mainScreenHeight: NSScreen.main?.visibleFrame.height)
+    }
+
+    /// 屏幕高度的选择规则（纯函数，探针可断言）。
+    ///
+    /// 规则只有一条：**优先用窗口实际所在的那块屏**；窗口还没落在任何屏上
+    /// （构造阶段、离屏探针）才退回主屏；两块都没有就用兜底值。
+    ///
+    /// 抽成纯函数的原因：窗口高度现在是**固定**的（见 `contentHeight(visibleHeight:)`），
+    /// 只有屏特别矮时才会碰到钳制 —— 想验证「取的是哪块屏」就不能依赖真实机器的
+    /// 屏幕高度（这台机器全是大屏 → 永远碰不到钳制 → 断言恒真 = 没有断言）。
+    static func resolveVisibleHeight(windowScreenHeight: CGFloat?,
+                                     mainScreenHeight: CGFloat?,
+                                     fallback: CGFloat = 900) -> CGFloat {
+        windowScreenHeight ?? mainScreenHeight ?? fallback
     }
 
     private func makeRecorderButton(action: Selector) -> NSButton {
@@ -420,11 +637,10 @@ final class SettingsWindowController: NSWindowController {
     }
 
     /// 滚动容器的内容宿主。**必须翻转**：documentView 默认从左下角铺开，
-/// 内容超高时初始可见的是**底部**（恢复默认按钮那一头），用户得先滚才能看到
-/// 顶部的快捷键设置 —— 翻转后内容自上而下铺，初始滚动位置就是顶部。
-private final class FlippedContainerView: NSView {
-    override var isFlipped: Bool { true }
-}
+    /// 内容超高时初始可见的是**底部**，用户得先滚才能看到顶部。
+    private final class FlippedContainerView: NSView {
+        override var isFlipped: Bool { true }
+    }
 
     /// 让窗口显示在已存偏好上。
     private func refreshFromPreferences() {
@@ -439,7 +655,7 @@ private final class FlippedContainerView: NSView {
     }
 
     /// 内容行数变化后重算窗口高度（与 launchAtLoginToggled 里同一手法）。
-    /// 统一走 fitWindowToContent —— 那里有滚动容器与屏幕高度钳制的全部说明。
+    /// 统一走 fitWindowToContent —— 那里有尺寸与屏幕高度钳制的全部说明。
     private func fitWindow() {
         fitWindowToContent()
     }
@@ -791,7 +1007,7 @@ private final class FlippedContainerView: NSView {
         // 「系统设置 → 通用 → 登录项与扩展」里改过，窗口不能显示上次的旧值
         refreshFromPreferences()
         showProblems([])
-        // 忽略列表可能在窗口关闭期间被（未来的）其他入口改动，重新按内容量高度
+        // 忽略列表可能在窗口关闭期间被（未来的）其他入口改动，重新按尺寸摆一次
         fitWindow()
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)

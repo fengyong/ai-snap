@@ -162,7 +162,7 @@ run_probe ocr_probe              "${ALL_SOURCES[@]}"
 run_probe toolbar_width_probe    "${ALL_SOURCES[@]}"
 # 折行预算 == 真实排布（O4，2026-11-12）：预算是排布代码的干跑，偏差恒为 0
 run_probe toolbar_budget_probe   "${ALL_SOURCES[@]}"
-# 设置窗口滚动容器（E06，2026-11-09）：长列表钳高可滚、短列表贴合不变
+# 设置窗口布局（E06 → 2026-11-12 改版为分类侧栏）：窗口尺寸固定、与列表长度无关
 run_probe settings_scroll_probe  Sources/Models.swift Sources/Capture/ScreenGeometry.swift \
                                  Sources/Preferences.swift Sources/HotkeyManager.swift \
                                  Sources/LaunchAtLogin.swift Sources/History/CaptureHistory.swift \
