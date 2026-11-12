@@ -78,12 +78,30 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     }
 
     /// 窗口目标宽度。侧栏 168 + 内容区 472 —— 内容区减去左右内边距 40 后剩 432，
-    /// 装得下现在最宽的一行（清单地址行：标签 80 + 间距 12 + 输入框 320 = 412）。
+    /// 装得下现在最宽的一行（清单地址行：标签 96 + 间距 12 + 输入框自适应）。
     static let preferredContentWidth: CGFloat = 640
     /// 窗口目标高度。**固定**：与内容、与忽略列表长度都无关。
     static let preferredContentHeight: CGFloat = 520
     /// 侧栏宽度
     static let sidebarWidth: CGFloat = 168
+    /// 内容区宽度（去掉侧栏）。
+    static let contentAreaWidth: CGFloat = preferredContentWidth - sidebarWidth
+    /// 分组内容四周的内边距。
+    static let groupEdgeInset: CGFloat = 20
+    /// 分组内**一个子分区内部**的间距（标题 → 控件 → 说明）。
+    static let itemSpacing: CGFloat = 8
+    /// 分组内**子分区之间**的间距。
+    ///
+    /// 为什么两级（2026-11-12 步骤③a）：原来全局 12pt，标题、控件、说明、
+    /// 下一个标题全都一样宽的缝 —— 视觉上等于没有分组，用户看不出
+    /// 「状态栏图标」到「选区」已经换了个话题。
+    static let groupGap: CGFloat = 24
+    /// 行内标签列宽。所有「标签 + 控件」的行统一用它，控件才有共同的左边界。
+    ///
+    /// 原来有 80pt 和「不定宽」两种，同一页里控件左边界参差不齐。
+    static let labelColumnWidth: CGFloat = 96
+    /// 内容区里真正能排版的宽度（内容区减去左右内边距）。
+    static var contentTextWidth: CGFloat { contentAreaWidth - groupEdgeInset * 2 }
 
     /// 快捷键改动后由外部（AppDelegate）重新注册，并把问题反馈回来。
     /// 用闭包而不是让设置窗口去调 AppDelegate，避免两边互相持有。
@@ -112,6 +130,10 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     private(set) var ignoredAppsSummaryCountLabel: NSTextField?
     /// 侧栏「忽略的应用」条目右侧的计数徽标。
     private(set) var sidebarCountBadge: NSTextField?
+    /// 各分组的根栈。internal 供探针断言间距规范（组内 8 / 组间 24）。
+    private(set) var groupStacks: [Section: NSStackView] = [:]
+    /// 更新清单地址输入框。internal 供探针断言「宽度跟随内容区、不溢出」。
+    var updateFeedURLField: NSTextField? { feedURLField }
 
     private var regionButton: NSButton!
     private var windowButton: NSButton!
@@ -414,27 +436,45 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     // MARK: - 各分组内容
 
     private func buildSectionContent(_ section: Section) -> NSStackView {
+        let stack: NSStackView
         switch section {
-        case .shortcuts: return buildShortcutsSection()
-        case .ignoredApps: return buildIgnoredAppsSection()
-        case .general: return buildGeneralSection()
-        case .advanced: return buildAdvancedSection()
-        case .about: return buildAboutSection()
+        case .shortcuts: stack = buildShortcutsSection()
+        case .ignoredApps: stack = buildIgnoredAppsSection()
+        case .general: stack = buildGeneralSection()
+        case .advanced: stack = buildAdvancedSection()
+        case .about: stack = buildAboutSection()
         }
+        groupStacks[section] = stack
+        return stack
     }
 
-    /// 分组内容栈。垂直排列、组内间距 12pt。
+    /// 分组内容栈。垂直排列；**组内间距 8pt**，
+    /// 子分区之间用 `addGroupBreak` 单独给 24pt（见 `groupGap`）。
     private func makeGroupStack() -> NSStackView {
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
-        stack.spacing = 12
-        stack.edgeInsets = NSEdgeInsets(top: 20, left: 20, bottom: 20, right: 20)
+        stack.spacing = Self.itemSpacing
+        let inset = Self.groupEdgeInset
+        stack.edgeInsets = NSEdgeInsets(top: inset, left: inset, bottom: inset, right: inset)
         // 必须关掉 autoresizing：开着的话 stack 会留一条「width == 0」的
         // autoresizing 约束，和「贴住容器四边」的 Auto Layout 约束打架 ——
         // 结果整个分组宽度被钉成 0、滚动区一片空白。
         stack.translatesAutoresizingMaskIntoConstraints = false
         return stack
+    }
+
+    /// 子分区之间的分隔线 + 24pt 间距。
+    ///
+    /// 「组间 24pt + 分隔线」：分隔线归上一组收尾，24pt 加在它后面。
+    ///
+    /// 为什么用 `setCustomSpacing` 而不是嵌套 stack（2026-11-12 步骤③a）：
+    /// 嵌套的话子分区会按内容收缩宽度，「输入框跟随内容区宽度自适应」就做不了 ——
+    /// 那个自适应恰恰是为了躲开「窗口一改宽输入框就撞上」的坑。
+    private func addGroupBreak(in stack: NSStackView) {
+        let separator = makeSeparator()
+        stack.addArrangedSubview(separator)
+        stack.setCustomSpacing(Self.groupGap, after: separator)
     }
 
     /// 分区小标题。
@@ -449,7 +489,8 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         let hint = NSTextField(wrappingLabelWithString: text)
         hint.font = NSFont.systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
-        hint.preferredMaxLayoutWidth = 400
+        // 换行宽度 = 内容区可排版宽度。写死 400 会在窗口改宽后短一截。
+        hint.preferredMaxLayoutWidth = Self.contentTextWidth
         return hint
     }
 
@@ -476,7 +517,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         root.addArrangedSubview(makeHint(
             "点击按钮后按下新的组合键，按 Esc 取消。组合键需包含 ⌘ 或 ⌃ —— 只用 ⇧ / ⌥ 会抢掉系统范围内的正常打字。"))
 
-        root.addArrangedSubview(makeSeparator())
+        addGroupBreak(in: root)
         root.addArrangedSubview(makeIgnoredAppsSummaryRow())
         root.addArrangedSubview(makeHint("这些应用在前台时，截图快捷键不触发。"))
         return root
@@ -515,9 +556,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         row.orientation = .horizontal
         row.spacing = 12
 
-        let label = NSTextField(labelWithString: "忽略的应用")
-        label.widthAnchor.constraint(equalToConstant: 80).isActive = true
-        row.addArrangedSubview(label)
+        row.addArrangedSubview(makeLabelColumn("忽略的应用"))
 
         let count = NSTextField(
             labelWithString: Self.ignoredAppsCountText(
@@ -557,7 +596,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         root.addArrangedSubview(makeHint(
             "AISnap 常驻状态栏、不占 Dock，截图靠全局快捷键 —— 所以它需要一直在后台待命。"
             + "打开这个开关就不用每次重启后手动启动。"))
-        root.addArrangedSubview(makeSeparator())
+        addGroupBreak(in: root)
 
         // ── 截图历史 ──
         root.addArrangedSubview(makeSectionTitle("截图历史"))
@@ -568,7 +607,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
             "开启后每次截图都会在原图存一份，最多保留最近 \(CaptureHistory.maximumEntries) 张，"
             + "可以在「截图历史」窗口里重新编辑或清理。"
             + "截图常含敏感内容，不需要就到状态栏菜单 →「截图历史…」里删掉，或在这里关掉。"))
-        root.addArrangedSubview(makeSeparator())
+        addGroupBreak(in: root)
 
         // ── 状态栏图标 ──
         root.addArrangedSubview(makeSectionTitle("状态栏图标"))
@@ -581,7 +620,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         root.addArrangedSubview(makeHint(
             "分别绑定单击状态栏图标的动作，修改即时生效。至少保留一个按键为「弹出菜单」，"
             + "否则将无法从状态栏打开偏好设置、截图历史或退出。"))
-        root.addArrangedSubview(makeSeparator())
+        addGroupBreak(in: root)
 
         // ── 选区 ──
         root.addArrangedSubview(makeSectionTitle("选区"))
@@ -593,7 +632,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         root.addArrangedSubview(makeHint(
             "拖拽选区时，选区四边会自动贴到附近窗口的边框上，方便整窗截取；"
             + "被贴住的窗口会高亮描边。想框歪随时可以 —— 只在 8 点内生效。"))
-        root.addArrangedSubview(makeSeparator())
+        addGroupBreak(in: root)
 
         // ── 打码 ──
         root.addArrangedSubview(makeSectionTitle("打码"))
@@ -609,7 +648,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         redactionStrengthLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
 
         let strengthRow = NSStackView(views: [
-            NSTextField(labelWithString: "强度"),
+            makeLabelColumn("强度"),
             redactionStrengthSlider,
             redactionStrengthLabel,
         ])
@@ -635,18 +674,25 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         let urlRow = NSStackView()
         urlRow.orientation = .horizontal
         urlRow.spacing = 12
-        let urlLabel = NSTextField(labelWithString: "清单地址")
-        urlLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
-        urlRow.addArrangedSubview(urlLabel)
+        urlRow.addArrangedSubview(makeLabelColumn("清单地址"))
 
         feedURLField = NSTextField(string: "")
         feedURLField.placeholderString = "https://…/latest.json（留空则不检查）"
         feedURLField.font = NSFont.systemFont(ofSize: 12)
-        feedURLField.widthAnchor.constraint(equalToConstant: 320).isActive = true
         feedURLField.target = self
         feedURLField.action = #selector(feedURLChanged(_:))
+        // 输入框宽度**跟随内容区**（2026-11-12 步骤③a）。
+        // 原来写死 320pt：输入框宽度和窗口宽度是两处互不相干的常数，
+        // 窗口一改宽就可能撞上边（哪怕此刻没撞 —— 那是运气）。
+        feedURLField.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        feedURLField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         urlRow.addArrangedSubview(feedURLField)
         root.addArrangedSubview(urlRow)
+        // 整行铺满内容区（减去分组左右内边距），输入框才有「剩下的全归我」可言。
+        // 约束必须在 urlRow 进入 root 之后才能激活 —— 否则两者还没有共同祖先。
+        urlRow.widthAnchor.constraint(
+            equalTo: root.widthAnchor,
+            constant: -(Self.groupEdgeInset * 2)).isActive = true
 
         autoCheckBox = NSButton(checkboxWithTitle: "启动时自动检查更新",
                                 target: self, action: #selector(autoCheckToggled(_:)))
@@ -677,7 +723,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
                                              target: self, action: #selector(checkNow)))
         root.addArrangedSubview(checkRow)
 
-        root.addArrangedSubview(makeSeparator())
+        addGroupBreak(in: root)
         root.addArrangedSubview(makeSectionTitle("恢复默认", size: 12))
 
         let buttonRow = NSStackView()
@@ -753,14 +799,43 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         return button
     }
 
+    /// 标签列：一个固定宽度的容器，标签文本排在里面。
+    ///
+    /// **为什么不能直接给 NSTextField 加宽度约束**（2026-11-12 步骤③a 实测）：
+    /// AppKit 会给标签自装一条「宽度 == 创建时帧宽」的 required 约束
+    /// （实测 100pt），它和我们写的 96pt 同为 required → 互相冲突，
+    /// **赢的那条不一定是我们的** —— 标签最后量到 100pt。
+    ///
+    /// 顺带查明两件以前没人知道的事：
+    /// ① 改版前那句「标签列 80pt」**从来没生效过**（三种加约束的顺序都是
+    ///    AppKit 的 100pt 赢）；实际占位是 alignmentRect 的 96pt
+    ///    （NSTextField 默认有 2pt 的 alignmentRectInsets，frame 100 − 4 = 96）。
+    ///    也就是说「80pt 标签列」和「96pt 标签列」**渲染结果一模一样**。
+    /// ② 那 96 是**巧合**（100 减去 4），不是我们定的。换台机器、换个 SDK
+    ///    就可能变成别的值 —— 所以要一个自己说了算的容器。
+    ///
+    /// 改用**普通 NSView** 当列容器：它没有 AppKit 自装的宽度约束，
+    /// 宽度只受我们控制（实测容器有效宽 = 96.0，标签按文本宽排在里面）。
+    private func makeLabelColumn(_ text: String) -> NSView {
+        let column = NSView()
+        column.translatesAutoresizingMaskIntoConstraints = false
+        column.widthAnchor.constraint(equalToConstant: Self.labelColumnWidth).isActive = true
+
+        let label = NSTextField(labelWithString: text)
+        column.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: column.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: column.centerYAnchor),
+        ])
+        return column
+    }
+
     private func makeRow(label: String, button: NSButton) -> NSStackView {
         let row = NSStackView()
         row.orientation = .horizontal
         row.spacing = 12
 
-        let text = NSTextField(labelWithString: label)
-        text.widthAnchor.constraint(equalToConstant: 80).isActive = true
-        row.addArrangedSubview(text)
+        row.addArrangedSubview(makeLabelColumn(label))
         row.addArrangedSubview(button)
         return row
     }
@@ -943,9 +1018,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         let row = NSStackView()
         row.orientation = .horizontal
         row.spacing = 12
-        let text = NSTextField(labelWithString: label)
-        text.widthAnchor.constraint(equalToConstant: 80).isActive = true
-        row.addArrangedSubview(text)
+        row.addArrangedSubview(makeLabelColumn(label))
         row.addArrangedSubview(popup)
         return row
     }

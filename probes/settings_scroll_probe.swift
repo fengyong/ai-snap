@@ -83,6 +83,16 @@ func findButton(_ root: NSView, titled title: String) -> NSButton? {
     return nil
 }
 
+/// 在视图树里收集某一类的视图。
+func findAll<T: NSView>(_ root: NSView, of type: T.Type) -> [T] {
+    var found: [T] = []
+    if let hit = root as? T { found.append(hit) }
+    for sub in root.subviews {
+        found.append(contentsOf: findAll(sub, of: type))
+    }
+    return found
+}
+
 /// 侧栏当前选中的那一行是不是「忽略的应用」。
 func selectedRowIsIgnoredApps(_ tree: NSOutlineView) -> Bool {
     guard tree.selectedRow >= 0, let item = tree.item(atRow: tree.selectedRow) else { return false }
@@ -355,6 +365,96 @@ do {
     check("关窗后窗口仍被持有（设置窗刻意常驻复用，与一次性窗相反）",
           NSApp.windows.contains { $0 === first },
           "已被释放——那才是问题")
+}
+
+print("\n=== 3b. 视觉规范：间距 8/24 + 标签列 96pt + 输入框自适应（步骤③a）===\n")
+do {
+    let (controller, window) = openSettings(visibleHeight: 1050)
+    window.layoutIfNeeded()
+
+    // ── 间距：组内 8、子分区之间 24 ──
+    //
+    // **数值用字面量、不跟着代码里的常量走**：改成常量引用的话，
+    // 有人把常量从 8 改成 12，断言会拿新常量当期望值 → 恒真 → 探针形同虚设
+    // （O2 的教训）。这里钉的是**设计规范里的数**。
+    for section in SettingsWindowController.Section.allCases {
+        guard let stack = controller.groupStacks[section] else { continue }
+        check("「\(section.title)」组内间距 = 8",
+              stack.spacing == 8, "\(stack.spacing)")
+    }
+    guard let general = controller.groupStacks[.general] else {
+        check("能拿到通用组的根栈", false)
+        exit(1)
+    }
+    let separators = findAll(general, of: NSBox.self)
+    check("通用组用分隔线把子分区隔开",
+          separators.count >= 4, "\(separators.count) 条分隔线")
+    let groupGaps = separators.map { general.customSpacing(after: $0) }
+    check("分隔线后是 24pt 组间距（组间 24 > 组内 8）",
+          !groupGaps.isEmpty && groupGaps.allSatisfy { $0 == 24 },
+          "\(groupGaps)")
+
+    // ── 标签列：同页控件左边界一致 ──
+    let generalView = controller.sectionContentViews[.general]!
+    let popups = findAll(generalView, of: NSPopUpButton.self)
+    // 量 alignmentRect 而不是 frame：NSStackView 按 alignmentRect 排布，
+    // 而 NSButton 默认有 3pt 的 alignmentRectInsets（bezel 内缩）——
+    // 按 frame 量会平白差 3pt。
+    let leftEdges = popups.map { $0.alignmentRect(forFrame: $0.frame).minX }
+    check("状态栏三行的控件左边界一致（标签列统一 96pt）",
+          popups.count == 3 && Set(leftEdges).count == 1,
+          "x = \(leftEdges.map { Int($0) })")
+    // 标签列是「非 popup 的那个子视图」—— 一个固定宽度的容器，标签排在里面。
+    // 宽度要量 **alignmentRect**（有效布局列）而不是 frame：
+    // NSButton/NSTextField 默认有 2pt 的 alignmentRectInsets，
+    // frame 会比实际占位大 4pt（实测 frame 100 / 对齐 96）。
+    let columns = popups.map { popup -> NSView? in
+        popup.superview?.subviews.first(where: { !($0 is NSPopUpButton) })
+    }
+    check("每行都有标签列容器",
+          columns.count == 3 && columns.allSatisfy { $0 != nil })
+    check("标签列容器里有文本标签",
+          columns.allSatisfy { column in
+              guard let column = column else { return false }
+              return !findAll(column, of: NSTextField.self).isEmpty
+          })
+    let columnWidths = columns.map {
+        $0.map { $0.alignmentRect(forFrame: $0.frame).width } ?? -1
+    }
+    check("标签列有效宽 = 96pt",
+          columnWidths.count == 3
+          && columnWidths.allSatisfy { abs($0 - 96) <= 0.5 },
+          "\(columnWidths.map { Int($0) })")
+    // 行内相对偏移：标签列 → 控件（同在行的坐标系里）
+    let rowOffsets = zip(popups, columns).map { popup, column -> CGFloat in
+        guard let column = column else { return -1 }
+        return popup.alignmentRect(forFrame: popup.frame).minX
+            - column.alignmentRect(forFrame: column.frame).minX
+    }
+    check("每行控件紧跟在 96pt 标签列之后（行内间距 12）",
+          rowOffsets.count == 3
+          && rowOffsets.allSatisfy { abs($0 - (96 + 12)) <= 1 },
+          "\(rowOffsets.map { Int($0) })")
+
+    // ── 输入框宽度跟随内容区 ──
+    guard let feed = controller.updateFeedURLField else {
+        check("能拿到清单地址输入框", false)
+        exit(1)
+    }
+    let feedRight = feed.convert(feed.bounds, to: nil).maxX
+    let expectedRight = SettingsWindowController.preferredContentWidth
+        - SettingsWindowController.groupEdgeInset
+    check("URL 输入框右边界 = 内容区右边界（自适应铺满）",
+          abs(feedRight - expectedRight) <= 1,
+          "\(Int(feedRight)) vs \(Int(expectedRight))")
+    let expectedWidth = SettingsWindowController.contentTextWidth - 96 - 12
+    check("URL 输入框宽度 = 内容区 − 标签列 96 − 间距 12（不再是写死的 320）",
+          abs(feed.bounds.width - expectedWidth) <= 1,
+          "\(Int(feed.bounds.width)) vs \(Int(expectedWidth))")
+    check("URL 输入框没有溢出内容区",
+          feedRight <= expectedRight + 0.5,
+          "\(Int(feedRight))")
+    window.close()
 }
 
 print("\n=== 4. 钳制取「窗口所在屏」，不是 NSScreen.main ===\n")
