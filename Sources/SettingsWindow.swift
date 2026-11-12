@@ -140,6 +140,8 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     private(set) var sectionTitles: [NSTextField] = []
     /// 所有 ⓘ 弹层。internal 供探针断言「弹层有内容、点了能打开」。
     private(set) var detailPopovers: [NSPopover] = []
+    /// 待确认的「恢复全部默认设置」确认框。internal 供探针断言「恢复前一定会先问」。
+    private(set) var pendingResetAlert: NSAlert?
     /// 更新清单地址输入框。internal 供探针断言「宽度跟随内容区、不溢出」。
     var updateFeedURLField: NSTextField? { feedURLField }
 
@@ -693,6 +695,30 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         count == 0 ? "未设置" : "\(count) 个应用"
     }
 
+    /// 「恢复全部默认设置」会被改动的项目（确认框里逐条列出）。
+    ///
+    /// **为什么必须列出**（2026-11-12 步骤④；设计稿 §五 危险操作，
+    /// 沿用 10-19 文档 E01b 的留存语义）：这个操作一次改 19 个偏好项，
+    /// 不列清楚的话用户只能事后逐个发现「我设的东西怎么没了」。
+    /// 更要紧的是要写明**已保存的截图历史文件不会被删除** ——
+    /// 用户最怕的就是「恢复默认」把手里的东西也清了。
+    ///
+    /// 抽成纯函数是为了能探针断言：这句话漏写，探针要能红。
+    static func resetAllImpactSummary(ignoredAppCount: Int) -> String {
+        let ignored = ignoredAppCount == 0
+            ? "忽略的应用：无"
+            : "忽略的应用：\(ignoredAppCount) 个将全部清空"
+        return """
+        · 标注外观：线宽、线型、颜色、箭头样式、调色板、水印、默认工具
+        · 快捷键：区域截图、窗口截图
+        · 状态栏图标：左键、右键、中键动作
+        · \(ignored)
+        · 其他：保留截图历史、更新清单地址、启动时自动检查、打码强度、选区吸附
+
+        已保存的截图历史文件不会被删除。
+        """
+    }
+
     /// 「设置…」按钮：跳到「忽略的应用」子面板。
     @objc private func showIgnoredAppsPanel() {
         selectSection(.ignoredApps)
@@ -846,6 +872,11 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         // 分区标题统一 13pt semibold：原来这里写的是 12pt，
         // 和别处的 13pt 混着，同一层级两种字号 = 层级是乱的。
         root.addArrangedSubview(makeSectionTitle("恢复默认"))
+
+        root.addArrangedSubview(makeHintRow(
+            "把设置回到出厂值。已保存的截图历史文件不会被删除。",
+            detail: "一次会改 19 项：标注外观、快捷键、状态栏图标、忽略的应用、"
+                + "保留历史、更新检查、打码强度、选区吸附。点下去会先弹确认框。"))
 
         let buttonRow = NSStackView()
         buttonRow.orientation = .horizontal
@@ -1318,6 +1349,35 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     }
 
     @objc private func resetAll() {
+        let alert = NSAlert()
+        alert.messageText = "恢复全部默认设置？"
+        alert.informativeText = Self.resetAllImpactSummary(
+            ignoredAppCount: Preferences.shared.ignoredBundleIdentifiers.count)
+        alert.alertStyle = .warning
+        let confirmButton = alert.addButton(withTitle: "恢复默认")
+        let cancelButton = alert.addButton(withTitle: "取消")
+        pendingResetAlert = alert
+
+        guard let window = window else { return }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.performResetAll()
+        }
+        // 默认按钮换成「取消」。
+        //
+        // NSAlert 会把回车键给**第一个加的**按钮（也就是「恢复默认」），
+        // 手动改 keyEquivalent 会被它在布局时覆盖 ——
+        // 只能等窗口建好之后换 defaultButtonCell。
+        //
+        // 为什么让「取消」当默认：这一步是 19 项不可逆的批量重置，
+        // 手一抖回车就全没了的代价太大。默认动作应该是**安全的那一个**
+        // （设计稿 §五 把这条列为「危险操作」）。
+        confirmButton.keyEquivalent = ""
+        alert.window.defaultButtonCell = cancelButton.cell as? NSButtonCell
+    }
+
+    /// 真正执行恢复默认（**确认之后**才走这里）。
+    private func performResetAll() {
         Preferences.shared.resetToDefaults()
         refreshFromPreferences()
         showProblems(onHotkeysChanged?() ?? [])

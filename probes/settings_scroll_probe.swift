@@ -519,6 +519,66 @@ do {
     window.close()
 }
 
+print("\n=== 3d. 危险操作归位：恢复默认在「关于」+ 二次确认 + 列出影响项（步骤④）===\n")
+do {
+    let (controller, window) = openSettings(visibleHeight: 1050)
+    controller.selectSection(.about)
+    window.layoutIfNeeded()
+
+    // ── 位置：恢复默认在「关于」组，不在别处 ──
+    let aboutButtons = findAll(controller.sectionContentViews[.about]!, of: NSButton.self)
+    check("「恢复全部默认设置」在「关于」组里",
+          aboutButtons.contains { $0.title == "恢复全部默认设置" })
+    check("「恢复默认快捷键」也在「关于」组里",
+          aboutButtons.contains { $0.title == "恢复默认快捷键" })
+    for section in [SettingsWindowController.Section.shortcuts,
+                     .ignoredApps, .general, .advanced] {
+        let others = findAll(controller.sectionContentViews[section]!, of: NSButton.self)
+        check("「恢复全部默认设置」不在「\(section.title)」组里",
+              !others.contains { $0.title == "恢复全部默认设置" })
+    }
+
+    // ── 确认框必须逐条列出影响项（E01b 的留存语义）──
+    let summary = SettingsWindowController.resetAllImpactSummary(ignoredAppCount: 3)
+    for keyword in ["线宽", "颜色", "水印", "快捷键", "忽略的应用", "状态栏",
+                     "截图历史", "不会被删除"] {
+        check("确认框文案提到「\(keyword)」",
+              summary.contains(keyword),
+              summary)
+    }
+    check("确认框写明忽略应用的数量（3 个）",
+          summary.contains("3 个"),
+          summary)
+
+    // ── 二次确认：点了但没确认 → 偏好一个都不许动 ──
+    let savedWidth = Preferences.shared.lineWidth
+    defer { Preferences.shared.lineWidth = savedWidth }
+    Preferences.shared.lineWidth = 7.5
+
+    let resetAllButton = aboutButtons.first { $0.title == "恢复全部默认设置" }
+    resetAllButton?.performClick(nil)
+    RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+
+    check("确实弹出了确认框",
+          controller.pendingResetAlert != nil)
+    check("点「恢复全部默认设置」但未确认 → 偏好不动（确实有二次确认）",
+          Preferences.shared.lineWidth == 7.5,
+          "\(Preferences.shared.lineWidth)")
+    if let alert = controller.pendingResetAlert {
+        check("确认框标题写明是危险操作",
+              alert.messageText.contains("恢复全部默认设置"),
+              alert.messageText)
+        let cancel = alert.buttons.first { $0.title == "取消" }
+        check("默认按钮是「取消」（不可逆操作不该手一抖回车就执行）",
+              alert.window.defaultButtonCell === cancel?.cell,
+              "默认按钮 = \(alert.window.defaultButtonCell?.title ?? "nil")")
+        check("确认框里没有默认的「直接恢复」按钮",
+              !alert.buttons.contains { $0.title == "恢复" },
+              "\(alert.buttons.map { $0.title })")
+    }
+    window.close()
+}
+
 print("\n=== 4. 钳制取「窗口所在屏」，不是 NSScreen.main ===\n")
 do {
     // `NSScreen.main` 是「当前持键盘焦点的屏幕」，不是窗口所在的屏。
