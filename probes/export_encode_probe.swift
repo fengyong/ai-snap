@@ -152,24 +152,49 @@ do {
     }
 
     // 先验测试图本身确实带透明边缘：否则下面所有 alpha 断言都是空转。
-    let srcAlphas = alphas(ImageEncode.png(from: img))
+    //
+    // **必须读源图 rep，不能读编码输出**：读输出的话，编码器吃掉 alpha 时这条
+    // 也会红，可它报的是"测试图没有透明边缘" —— 病灶在编码器，锅甩给了夹具。
+    // 2026-11-12 用一个铺白底的坏编码器实测过这个误导：输出 alpha 全 1.00，
+    // 于是排查会被引向"是不是测试图造错了"，而真正该看的是编码器。
+    guard let srcRep = img.representations.first as? NSBitmapImageRep else {
+        check("测试图是位图 rep（能直接读源像素）", false); exit(1)
+    }
+    var srcAlphas: [CGFloat] = []
+    for y in 0..<srcRep.pixelsHigh {
+        for x in 0..<srcRep.pixelsWide {
+            srcAlphas.append(srcRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)?.alphaComponent ?? -1)
+        }
+    }
     check("测试图确实带透明边缘（全透明 + 半透明各存在）",
           srcAlphas.contains(where: { $0 < 0.01 }) && srcAlphas.contains(where: { $0 > 0.01 && $0 < 0.99 }),
-          "alpha 分布 \(srcAlphas.map { String(format: "%.2f", $0) }.joined(separator: "/"))")
+          "源图 alpha 分布 \(srcAlphas.map { String(format: "%.2f", $0) }.joined(separator: "/"))")
 
     if let tiff = img.tiffRepresentation,
        let rep = NSBitmapImageRep(data: tiff),
        let legacy = rep.representation(using: .png, properties: [:]) {
+        let legacyPixels = pixels(legacy), newPixels = pixels(newData)
+        let legacyAlphas = alphas(legacy), newAlphas = alphas(newData)
+        // 解码失败（或 colorAt 取不到色）时 pixels()/alphas() 返回空数组，
+        // 于是 `[] == []` 会让下面的"逐像素一致"**真空通过**。先把"两侧各解出
+        // 16 个像素"钉住 —— 解码失败与像素不等必须是两件分开报的事。
+        // alpha 那条断言有同一个空洞，所以两侧都要数。
+        check("两侧各解出 16 个像素（不是解码失败后的空数组）",
+              legacyPixels.count == 16 && newPixels.count == 16,
+              "旧 \(legacyPixels.count) / 新 \(newPixels.count)")
+        check("两侧各解出 16 个 alpha（同上）",
+              legacyAlphas.count == 16 && newAlphas.count == 16,
+              "旧 \(legacyAlphas.count) / 新 \(newAlphas.count)")
         check("旧贴图路径（TIFF 往返）与新路径**像素一致**（字节不同是预期的）",
-              pixels(legacy) == pixels(newData),
+              legacyPixels == newPixels,
               "旧 \(legacy.count) 字节 / 新 \(newData.count) 字节")
         check("旧贴图路径与新路径**alpha 逐像素一致**（透明边缘不变）",
-              alphas(legacy) == alphas(newData),
-              "旧 \(alphas(legacy).count) 像素 / 新 \(alphas(newData).count) 像素")
+              legacyAlphas == newAlphas,
+              "旧 \(legacyAlphas.count) 像素 / 新 \(newAlphas.count) 像素")
         check("新路径确实保留了全透明像素（alpha=0 的那一像素还在）",
-              alphas(newData).contains(where: { $0 < 0.01 }))
+              newAlphas.contains(where: { $0 < 0.01 }))
         check("新路径确实保留了半透明像素（没有被打平成全透明/全不透明）",
-              alphas(newData).contains(where: { $0 > 0.01 && $0 < 0.99 }))
+              newAlphas.contains(where: { $0 > 0.01 && $0 < 0.99 }))
         check("旧贴图路径的 alpha 仍在（透明边缘不变）",
               NSBitmapImageRep(data: legacy)?.hasAlpha == true)
         check("新路径的 alpha 仍在（透明边缘不变）",

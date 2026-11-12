@@ -229,9 +229,11 @@ final class PinWindow: NSPanel {
             // （这里 / 截图历史 / 导出），编码参数将来要调时改一处漏一处。
             //
             // 原来这里多绕一次 TIFF 往返（`tiffRepresentation` → NSBitmapImageRep），
-            // 2026-11-11 实测：绕与不绕**像素完全一致**、**字节不同**（162 vs 150），
-            // 往返纯属白费一次编解码（还会丢精度）。去掉后透明通道行为不变 ——
-            // 像素级比对见 probes/export_encode_probe §5。
+            // 2026-11-11 实测：绕与不绕**像素与 alpha 逐位一致**、**字节不同**
+            // （带透明边缘的 4×4 测试图：173 vs 161 字节）。往返的代价是白白多一次
+            // 全图编解码（时间 + 一份全图内存），**不是精度** —— 位图 rep 走 TIFF
+            // 是无损的。去掉后透明通道行为不变，像素级比对见
+            // probes/export_encode_probe §6。
             guard let data = ImageEncode.png(from: self.image) else {
                 self.reportSaveFailure("无法把图像编码为 PNG。")
                 return

@@ -71,7 +71,7 @@ delegate，探针不会。两条不变式都有断言守着（`postfix_probe` �
 | `text_shape_probe` | 文字标注几何 + 周长参数互逆性 | 22 |
 | `screen_geometry_probe` | 屏幕/图像坐标换算（含与真实显示器布局交叉验证） | 13 |
 | `window_pick_probe` | 窗口挑选：Quartz→AppKit 矩形翻转、标题拼接、滚轮换选回绕 | 22 |
-| `export_encode_probe` | 导出编码：PNG 逐位一致、JPEG/HEIC 魔数（硬件不支持时如实跳过）；**O8 编码单源化**：两条入口字节一致 + 贴图旧路径与新路径**像素/alpha 逐像素一致**（透明边缘不许变） | 18 |
+| `export_encode_probe` | 导出编码：PNG 逐位一致、JPEG/HEIC 魔数（硬件不支持时如实跳过）；**O8 编码单源化**：两条入口字节一致 + 贴图旧路径与新路径**像素/alpha 逐像素一致**（透明边缘不许变）。自检读**源图 rep**（不是编码输出，否则编码器吃掉 alpha 时会把锅甩给夹具），并先钉住"两侧各解出 16 个像素"防空数组真空通过 | 20 |
 | `anchored_placement_probe` | 标注窗口按选区锚定摆放 | 23 |
 | `overlay_style_probe` | 冻结覆盖层的外观 | 10 |
 | `toolbar_layout_probe` | 工具栏分组布局与折行 | 33 |
