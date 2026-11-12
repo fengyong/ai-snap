@@ -457,6 +457,68 @@ do {
     window.close()
 }
 
+print("\n=== 3c. 文案规范：说明一行 ≤40 字 + 细节进 ⓘ 弹层（步骤③b）===\n")
+do {
+    let (controller, window) = openSettings(visibleHeight: 1050)
+    window.layoutIfNeeded()
+
+    // ── 分区标题统一 13pt semibold ──
+    // 一次比「字号 + 字重」两件事：NSFont 没有 weight 属性，
+    // 直接和 systemFont(13, .semibold) 比更省事，也更严。
+    let expectedTitleFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
+    let oddTitles = controller.sectionTitles.filter { $0.font != expectedTitleFont }
+    check("分区标题统一 13pt semibold",
+          !controller.sectionTitles.isEmpty && oddTitles.isEmpty,
+          "不一致的：\(oddTitles.map { "\($0.stringValue)(\($0.font?.pointSize ?? -1))" })")
+
+    // ── 说明文字：每条最多一行、每条不超过 40 字 ──
+    let hints = controller.hintLabels
+    check("有说明文字可查",
+          hints.count >= 8, "\(hints.count) 条")
+    let longHints = hints.filter { $0.stringValue.count > 40 }
+    check("每条说明都 ≤ 40 字",
+          longHints.isEmpty,
+          "超长的：\(longHints.map { $0.stringValue })")
+    // 一行 = 高度不超过一行行高（11pt 字约 15pt，给 20pt 仍算一行）
+    let tallHints = hints.filter { $0.bounds.height > 20 }
+    check("每条说明都只占一行",
+          tallHints.isEmpty,
+          "多行的：\(tallHints.map { "\($0.stringValue.prefix(8))(\(Int($0.bounds.height))pt)" })")
+
+    // ── ⓘ 按钮：不溢出内容区 ──
+    let contentRight = SettingsWindowController.preferredContentWidth
+        - SettingsWindowController.groupEdgeInset
+    let overflowing = controller.detailButtons.filter {
+        $0.convert($0.bounds, to: nil).maxX > contentRight + 0.5
+    }
+    check("ⓘ 按钮都没有溢出内容区右缘",
+          overflowing.isEmpty,
+          "溢出 \(overflowing.count) 个")
+    check("ⓘ 按钮数量与弹层数量一致",
+          controller.detailPopovers.count == controller.detailButtons.count,
+          "\(controller.detailPopovers.count) / \(controller.detailButtons.count)")
+
+    // ── 弹层有内容、点了能打开 ──
+    let emptyPopovers = controller.detailPopovers.filter {
+        $0.contentSize.width <= 0 || $0.contentSize.height <= 0
+    }
+    check("每个弹层都有尺寸（不是空的）",
+          emptyPopovers.isEmpty,
+          "空的 \(emptyPopovers.count) 个")
+    if let button = controller.detailButtons.first,
+       let popover = controller.detailPopovers.first {
+        button.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+        check("点 ⓘ 能打开详情弹层",
+              popover.isShown,
+              popover.isShown ? "" : "没打开")
+        popover.performClose(nil)
+    } else {
+        check("有可点的 ⓘ 按钮", false)
+    }
+    window.close()
+}
+
 print("\n=== 4. 钳制取「窗口所在屏」，不是 NSScreen.main ===\n")
 do {
     // `NSScreen.main` 是「当前持键盘焦点的屏幕」，不是窗口所在的屏。

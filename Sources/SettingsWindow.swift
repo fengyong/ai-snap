@@ -132,6 +132,14 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     private(set) var sidebarCountBadge: NSTextField?
     /// 各分组的根栈。internal 供探针断言间距规范（组内 8 / 组间 24）。
     private(set) var groupStacks: [Section: NSStackView] = [:]
+    /// 所有 ⓘ 详情按钮。internal 供探针断言「细节收得进弹层、按钮不溢出」。
+    private(set) var detailButtons: [NSButton] = []
+    /// 所有说明文字。internal 供探针断言「每条最多一行、每条不超过 40 字」。
+    private(set) var hintLabels: [NSTextField] = []
+    /// 所有分区标题。internal 供探针断言「统一 13pt semibold」。
+    private(set) var sectionTitles: [NSTextField] = []
+    /// 所有 ⓘ 弹层。internal 供探针断言「弹层有内容、点了能打开」。
+    private(set) var detailPopovers: [NSPopover] = []
     /// 更新清单地址输入框。internal 供探针断言「宽度跟随内容区、不溢出」。
     var updateFeedURLField: NSTextField? { feedURLField }
 
@@ -478,20 +486,124 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     }
 
     /// 分区小标题。
+    ///
+    /// 统一 13pt semibold（2026-11-12 步骤③b）：原来这里有 13pt 和 12pt 两种，
+    /// 同一层级两种字号 = 层级是乱的。
     private func makeSectionTitle(_ text: String, size: CGFloat = 13) -> NSTextField {
         let title = NSTextField(labelWithString: text)
         title.font = NSFont.systemFont(ofSize: size, weight: .semibold)
+        sectionTitles.append(title)
         return title
     }
 
-    /// 灰色说明文字。
-    private func makeHint(_ text: String) -> NSTextField {
+    /// 一行说明 + 可选的 ⓘ 详情。
+    ///
+    /// **为什么要拆开**（2026-11-12 步骤③b）：说明文字原来一段到底
+    /// （8 段共 300pt / 20 行），用户每次开窗都得读完一整屏才知道哪条跟自己有关。
+    /// 压成一行之后，「是什么」留在明面上，「为什么 / 边界条件」收进 ⓘ 弹层 ——
+    /// 需要时点一下就有，不用时屏幕上干干净净。
+    ///
+    /// ⓘ 按钮放在说明文字**末尾**（不是标题旁）：用户读到那句话觉得
+    /// 「还有话说」时，视线正好落在 ⓘ 上。
+    private func makeHintRow(_ text: String, detail: String? = nil) -> NSStackView {
+        let row = NSStackView()
+        row.orientation = .horizontal
+        row.spacing = 6
+        row.alignment = .firstBaseline
+
         let hint = NSTextField(wrappingLabelWithString: text)
         hint.font = NSFont.systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
-        // 换行宽度 = 内容区可排版宽度。写死 400 会在窗口改宽后短一截。
-        hint.preferredMaxLayoutWidth = Self.contentTextWidth
-        return hint
+        // 给 ⓘ 留出位置：说明文字 + 按钮不能宽过内容区，否则会溢出右边。
+        hint.preferredMaxLayoutWidth = detail == nil
+            ? Self.contentTextWidth
+            : Self.contentTextWidth - Self.detailButtonReserved
+        row.addArrangedSubview(hint)
+        hintLabels.append(hint)
+
+        if let detail = detail {
+            let button = DetailButton(detail: detail)
+            button.target = self
+            button.action = #selector(toggleDetail(_:))
+            row.addArrangedSubview(button)
+            detailButtons.append(button)
+            detailPopovers.append(button.popover)
+        }
+        return row
+    }
+
+    /// ⓘ 按钮占位宽度（图标 + 与文字的间距）。
+    static let detailButtonReserved: CGFloat = 26
+
+    /// 切换 ⓘ 详情弹层。
+    @objc private func toggleDetail(_ sender: DetailButton) {
+        if sender.popover.isShown {
+            sender.popover.performClose(nil)
+            return
+        }
+        sender.popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .maxY)
+    }
+
+    /// ⓘ 按钮：点开看细节说明。
+    ///
+    /// 自装 popover 而不是让调用方传进来 —— 每个按钮的细节文案不同，
+    /// 让按钮自己带着自己的弹层，调用方只需要给一句文案。
+    private final class DetailButton: NSButton {
+        let popover = NSPopover()
+
+        init(detail: String) {
+            super.init(frame: .zero)
+            image = NSImage(systemSymbolName: "info.circle",
+                            accessibilityDescription: "详细说明")
+            image?.isTemplate = true
+            isBordered = false
+            contentTintColor = .secondaryLabelColor
+            toolTip = "详细说明"
+            setAccessibilityLabel("详细说明")
+
+            popover.behavior = .transient
+            popover.contentViewController = NSViewController()
+            let container = popover.contentViewController!.view
+
+            // 正文用 NSTextView，不用 NSTextField。
+            //
+            // 为什么（2026-11-12 步骤③b 实测）：
+            // ① 换行的 NSTextField 它的 intrinsicContentSize 是「整段文字排成一行」
+            //    的宽度（实测 632pt）—— 交给 Auto Layout 的话容器会被撑到 632pt，
+            //    文字一行排完根本不换行；
+            // ② 它自绘时的行距和 sizeThatFits 给的高度对不上 ——
+            //    实测 sizeThatFits 给 42pt，实际要 62pt，多出来的那行被裁掉。
+            // NSTextView 两样都对：usedRect 就是画出来要占的高度。
+            let textView = NSTextView()
+            textView.isEditable = false
+            textView.isSelectable = true          // 允许复制细节文字
+            textView.drawsBackground = false
+            textView.font = NSFont.systemFont(ofSize: 11)
+            textView.textColor = .secondaryLabelColor
+            textView.textContainerInset = .zero
+            textView.textContainer?.lineFragmentPadding = 0
+            textView.textContainer?.widthTracksTextView = true
+            textView.textContainer?.containerSize = NSSize(
+                width: Self.detailTextWidth, height: .greatestFiniteMagnitude)
+            textView.string = detail
+            textView.setFrameSize(NSSize(width: Self.detailTextWidth, height: 0))
+            textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+            let used = textView.layoutManager?.usedRect(for: textView.textContainer!)
+            let height = max(used?.height ?? 0, 16)
+            textView.frame = NSRect(x: 12, y: 10,
+                                    width: Self.detailTextWidth, height: height)
+            container.addSubview(textView)
+
+            popover.contentSize = NSSize(width: Self.detailTextWidth + 24,
+                                         height: height + 20)
+        }
+
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) 未实现：这个按钮只在代码里造")
+        }
+
+        /// 弹层正文宽度。窄一点才不会在 640pt 的窗口里横着铺满。
+        private static let detailTextWidth: CGFloat = 280
     }
 
     private func makeSeparator() -> NSBox {
@@ -514,12 +626,14 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         root.addArrangedSubview(makeRow(label: "区域截图", button: regionButton))
         root.addArrangedSubview(makeRow(label: "窗口截图", button: windowButton))
 
-        root.addArrangedSubview(makeHint(
-            "点击按钮后按下新的组合键，按 Esc 取消。组合键需包含 ⌘ 或 ⌃ —— 只用 ⇧ / ⌥ 会抢掉系统范围内的正常打字。"))
+        root.addArrangedSubview(makeHintRow(
+            "点击后按下新的组合键，按 Esc 取消。需含 ⌘ 或 ⌃。",
+            detail: "只用 ⇧ / ⌥ 会抢掉系统范围内的正常打字（输入法、选字、切换输入法都靠它们），"
+                + "所以组合键必须包含 ⌘ 或 ⌃。"))
 
         addGroupBreak(in: root)
         root.addArrangedSubview(makeIgnoredAppsSummaryRow())
-        root.addArrangedSubview(makeHint("这些应用在前台时，截图快捷键不触发。"))
+        root.addArrangedSubview(makeHintRow("这些应用在前台时，截图快捷键不触发。"))
         return root
     }
 
@@ -530,7 +644,11 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     private func buildIgnoredAppsSection() -> NSStackView {
         let root = makeGroupStack()
         root.addArrangedSubview(makeSectionTitle("忽略的应用"))
-        root.addArrangedSubview(makeHint("这些应用处于前台时，截图快捷键不会触发。"))
+        root.addArrangedSubview(makeHintRow(
+            "这些应用处于前台时，截图快捷键不会触发。",
+            detail: "受 macOS 限制，被拦截的按键不会转发给该应用"
+                + "（默认组合 ⌃⌘A / ⌃⌘W 很冷门，一般无影响）。"
+                + "支持 bundle id 前缀规则，以 * 结尾。"))
 
         ignoredAppsBox = NSStackView()
         ignoredAppsBox.orientation = .vertical
@@ -543,10 +661,6 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
                                     target: self, action: #selector(addIgnoredApp))
         addAppButton.bezelStyle = .rounded
         root.addArrangedSubview(addAppButton)
-
-        root.addArrangedSubview(makeHint(
-            "受 macOS 限制，被拦截的按键不会转发给该应用（默认组合 ⌃⌘A / ⌃⌘W 很冷门，一般无影响）。"
-            + "支持 bundle id 前缀规则，以 * 结尾。"))
         return root
     }
 
@@ -593,9 +707,10 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         launchAtLoginBox = NSButton(checkboxWithTitle: "开机自动启动（登录后在后台待命）",
                                     target: self, action: #selector(launchAtLoginToggled(_:)))
         root.addArrangedSubview(launchAtLoginBox)
-        root.addArrangedSubview(makeHint(
-            "AISnap 常驻状态栏、不占 Dock，截图靠全局快捷键 —— 所以它需要一直在后台待命。"
-            + "打开这个开关就不用每次重启后手动启动。"))
+        root.addArrangedSubview(makeHintRow(
+            "AISnap 靠全局快捷键截图，必须常驻后台。",
+            detail: "它常驻状态栏、不占 Dock，所以不打开这个开关的话，"
+                + "每次重启后都要手动启动一次 AISnap。"))
         addGroupBreak(in: root)
 
         // ── 截图历史 ──
@@ -603,10 +718,10 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         recordHistoryBox = NSButton(checkboxWithTitle: "保留截图历史（含没有保存的）",
                                     target: self, action: #selector(recordHistoryToggled(_:)))
         root.addArrangedSubview(recordHistoryBox)
-        root.addArrangedSubview(makeHint(
-            "开启后每次截图都会在原图存一份，最多保留最近 \(CaptureHistory.maximumEntries) 张，"
-            + "可以在「截图历史」窗口里重新编辑或清理。"
-            + "截图常含敏感内容，不需要就到状态栏菜单 →「截图历史…」里删掉，或在这里关掉。"))
+        root.addArrangedSubview(makeHintRow(
+            "每次截图在原图存一份，最多保留最近 \(CaptureHistory.maximumEntries) 张。",
+            detail: "可以在「截图历史」窗口里重新编辑或清理。"
+                + "截图常含敏感内容，不需要就到状态栏菜单 →「截图历史…」里删掉，或在这里关掉。"))
         addGroupBreak(in: root)
 
         // ── 状态栏图标 ──
@@ -617,9 +732,10 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         root.addArrangedSubview(makeTrayRow(label: "左键", popup: trayLeftPopup))
         root.addArrangedSubview(makeTrayRow(label: "右键", popup: trayRightPopup))
         root.addArrangedSubview(makeTrayRow(label: "中键", popup: trayMiddlePopup))
-        root.addArrangedSubview(makeHint(
-            "分别绑定单击状态栏图标的动作，修改即时生效。至少保留一个按键为「弹出菜单」，"
-            + "否则将无法从状态栏打开偏好设置、截图历史或退出。"))
+        root.addArrangedSubview(makeHintRow(
+            "分别绑定单击状态栏图标的动作，修改即时生效。",
+            detail: "至少保留一个按键为「弹出菜单」，"
+                + "否则将无法从状态栏打开偏好设置、截图历史或退出。"))
         addGroupBreak(in: root)
 
         // ── 选区 ──
@@ -629,9 +745,10 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
                                     action: #selector(snapToWindowsToggled(_:)))
         snapToWindowsBox.state = Preferences.shared.snapSelectionToWindows ? .on : .off
         root.addArrangedSubview(snapToWindowsBox)
-        root.addArrangedSubview(makeHint(
-            "拖拽选区时，选区四边会自动贴到附近窗口的边框上，方便整窗截取；"
-            + "被贴住的窗口会高亮描边。想框歪随时可以 —— 只在 8 点内生效。"))
+        root.addArrangedSubview(makeHintRow(
+            "拖拽选区时，四边会自动贴到附近窗口的边框上。",
+            detail: "方便整窗截取；被贴住的窗口会高亮描边。"
+                + "想框歪随时可以 —— 只在 8 点内生效。"))
         addGroupBreak(in: root)
 
         // ── 打码 ──
@@ -656,9 +773,10 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         strengthRow.spacing = 12
         redactionStrengthSlider.setContentHuggingPriority(.defaultLow, for: .horizontal)
         root.addArrangedSubview(strengthRow)
-        root.addArrangedSubview(makeHint(
-            "马赛克与模糊共用这一个强度：1.0× = 默认（12 点块 / 半径），对小图可调细到 0.5×，"
-            + "高分屏大图可调粗到 3.0×。只影响之后新画的打码，已画好的不变。"))
+        root.addArrangedSubview(makeHintRow(
+            "马赛克与模糊共用这一个强度，1.0× 为默认。",
+            detail: "对小图可调细到 0.5×，高分屏大图可调粗到 3.0×。"
+                + "只影响之后新画的打码，已画好的不变。"))
         return root
     }
 
@@ -698,9 +816,10 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
                                 target: self, action: #selector(autoCheckToggled(_:)))
         root.addArrangedSubview(autoCheckBox)
 
-        root.addArrangedSubview(makeHint(
-            "清单是一个 JSON 文件：{\"version\":\"1.2.0\", \"downloadURL\":\"https://…\", \"notes\":\"…\"}。\n"
-            + "目前只会提示并跳到下载页，不会自动替换应用本身 —— 那需要先做代码签名与公证。"))
+        root.addArrangedSubview(makeHintRow(
+            "清单是一个 JSON 文件，写在上面的地址里。",
+            detail: "格式：{\"version\":\"1.2.0\", \"downloadURL\":\"https://…\", \"notes\":\"…\"}。"
+                + "目前只会提示并跳到下载页，不会自动替换应用本身 —— 那需要先做代码签名与公证。"))
         return root
     }
 
@@ -724,7 +843,9 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         root.addArrangedSubview(checkRow)
 
         addGroupBreak(in: root)
-        root.addArrangedSubview(makeSectionTitle("恢复默认", size: 12))
+        // 分区标题统一 13pt semibold：原来这里写的是 12pt，
+        // 和别处的 13pt 混着，同一层级两种字号 = 层级是乱的。
+        root.addArrangedSubview(makeSectionTitle("恢复默认"))
 
         let buttonRow = NSStackView()
         buttonRow.orientation = .horizontal
