@@ -47,7 +47,13 @@ final class Preferences {
 
     // MARK: - 键与缺省值
 
-    private enum Key: String {
+    /// 全部已存偏好键。
+    ///
+    /// **为什么是 `CaseIterable`**（2026-11-12）：`resetToDefaults()` 原来手抄一份
+    /// 19 个 key 的清单。新增偏好时忘了往那份清单里加，表现是「点了恢复全部默认，
+    /// 这一项却没回出厂值」—— 不报错、不留痕，用户只会觉得设置窗坏了。
+    /// 改成遍历 `allCases` 之后，「加了键」和「会被重置」是同一件事。
+    private enum Key: String, CaseIterable {
         case lineWidth
         case lineStyle
         case colorHex
@@ -67,6 +73,37 @@ final class Preferences {
         case trayMiddleAction
         case redactionStrength
         case snapSelectionToWindows
+
+        /// 「恢复全部默认」确认框里，这一项对用户叫什么。
+        ///
+        /// **穷尽 switch、故意不写 `default`**：新增一个键就编译不过，直到作者
+        /// 给出它在确认框里的说法。这样「悄悄多重置一项、用户事后才发现」
+        /// 被编译器堵死 —— 补一个 `default` 等于把这条护栏关掉。
+        ///
+        /// 放在键旁边而不是设置窗里：要的就是「键」与「说法」在同一个 switch 里，
+        /// 隔成两个文件就又能各改各的了。
+        var resetDisclosure: String {
+            switch self {
+            case .lineWidth: return "线宽"
+            case .lineStyle: return "线型"
+            case .colorHex: return "颜色"
+            case .arrowStyleIndex: return "箭头样式"
+            case .paletteIndex: return "调色板"
+            case .lastToolTag: return "默认工具"
+            case .watermarkEnabled, .watermarkText: return "水印"
+            case .hotkeyRegion: return "区域截图"
+            case .hotkeyWindow: return "窗口截图"
+            case .updateFeedURL: return "更新清单地址"
+            case .autoCheckUpdates: return "启动时自动检查"
+            case .recordHistory: return "保留截图历史"
+            case .ignoredBundleIdentifiers: return "忽略的应用"
+            case .trayLeftAction: return "左键"
+            case .trayRightAction: return "右键"
+            case .trayMiddleAction: return "中键"
+            case .redactionStrength: return "打码强度"
+            case .snapSelectionToWindows: return "选区吸附"
+            }
+        }
     }
 
     /// 缺省值集中在这里。改动这一处即同时改变「新用户初值」与「老用户缺键回退值」。
@@ -367,14 +404,19 @@ final class Preferences {
 
     // MARK: - 恢复默认
 
+    /// 「恢复全部默认」会清掉的偏好项数。确认框与说明文字都取这里，
+    /// 不再各自写死「19 项」—— 写死的数字加了键也不会跟着变。
+    static var resettableCount: Int { Key.allCases.count }
+
+    /// 每一项在确认框里的说法（去重后）。探针据此断言
+    /// 「确认框真的把会改的东西逐项说了」，而不是只抽查几个词。
+    static var resetDisclosures: [String] {
+        Array(Set(Key.allCases.map(\.resetDisclosure))).sorted()
+    }
+
     /// 清空所有已存偏好，回到 `Defaults`。
     func resetToDefaults() {
-        for key in [Key.lineWidth, Key.lineStyle, Key.colorHex, Key.arrowStyleIndex,
-                    Key.paletteIndex, Key.lastToolTag, Key.watermarkEnabled, Key.watermarkText,
-                    Key.hotkeyRegion, Key.hotkeyWindow, Key.updateFeedURL, Key.autoCheckUpdates,
-                    Key.recordHistory, Key.ignoredBundleIdentifiers,
-                    Key.trayLeftAction, Key.trayRightAction, Key.trayMiddleAction,
-                    Key.redactionStrength, Key.snapSelectionToWindows] {
+        for key in Key.allCases {
             defaults.removeObject(forKey: key.rawValue)
         }
     }

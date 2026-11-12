@@ -698,7 +698,8 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     /// 「恢复全部默认设置」会被改动的项目（确认框里逐条列出）。
     ///
     /// **为什么必须列出**（2026-11-12 步骤④；设计稿 §五 危险操作，
-    /// 沿用 10-19 文档 E01b 的留存语义）：这个操作一次改 19 个偏好项，
+    /// 沿用 10-19 文档 E01b 的留存语义）：这个操作一次改掉全部已存偏好项
+    /// （项数见 `Preferences.resettableCount`），
     /// 不列清楚的话用户只能事后逐个发现「我设的东西怎么没了」。
     /// 更要紧的是要写明**已保存的截图历史文件不会被删除** ——
     /// 用户最怕的就是「恢复默认」把手里的东西也清了。
@@ -875,7 +876,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
 
         root.addArrangedSubview(makeHintRow(
             "把设置回到出厂值。已保存的截图历史文件不会被删除。",
-            detail: "一次会改 19 项：标注外观、快捷键、状态栏图标、忽略的应用、"
+            detail: "一次会改 \(Preferences.resettableCount) 项：标注外观、快捷键、状态栏图标、忽略的应用、"
                 + "保留历史、更新检查、打码强度、选区吸附。点下去会先弹确认框。"))
 
         let buttonRow = NSStackView()
@@ -1373,7 +1374,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         // 手动改 keyEquivalent 会被它在布局时覆盖 ——
         // 只能等窗口建好之后换 defaultButtonCell。
         //
-        // 为什么让「取消」当默认：这一步是 19 项不可逆的批量重置，
+        // 为什么让「取消」当默认：这一步是不可逆的批量重置，
         // 手一抖回车就全没了的代价太大。默认动作应该是**安全的那一个**
         // （设计稿 §五 把这条列为「危险操作」）。
         confirmButton.keyEquivalent = ""

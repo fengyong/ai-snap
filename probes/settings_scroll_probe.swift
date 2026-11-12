@@ -607,9 +607,31 @@ do {
               summary.contains(keyword),
               summary)
     }
+    // 上面是抽查几个词；这里是**逐项**核对：会重置的每一项都得在文案里出现。
+    //
+    // 清单来自 `Preferences.resetDisclosures`（由 Key 的穷尽 switch 生成），
+    // 与 `resetToDefaults()` 遍历的是同一个 allCases —— 于是「加了偏好键」
+    // 「忘了写进确认框」这件事会在这里红，而不是等用户事后发现。
+    // 两侧是不同代码（键的说法 vs 确认框散文），所以不是自证。
+    let disclosures = Preferences.resetDisclosures
+    check("有可核对的重置项说法", !disclosures.isEmpty, "\(disclosures.count) 项")
+    for word in disclosures {
+        check("确认框列出了会被重置的「\(word)」", summary.contains(word), summary)
+    }
     check("确认框写明忽略应用的数量（3 个）",
           summary.contains("3 个"),
           summary)
+    // ⓘ 详情里那句「一次会改 N 项」的 N 必须等于真实项数，不能是写死的旧数字。
+    // 弹层正文是 **NSTextView**（不是 NSTextField，理由见 DetailButton 的注释）。
+    let popoverTexts = controller.detailPopovers.compactMap {
+        $0.contentViewController?.view
+    }.flatMap { findAll($0, of: NSTextView.self) }.map { $0.string }
+    let countClaims = popoverTexts.filter { $0.contains("一次会改") }
+    check("ⓘ 详情里有「一次会改 N 项」这句",
+          countClaims.count == 1, "\(countClaims)")
+    check("那句里的 N = 真实重置项数（\(Preferences.resettableCount)）",
+          countClaims.allSatisfy { $0.contains("一次会改 \(Preferences.resettableCount) 项") },
+          "\(countClaims)")
 
     // ── 二次确认：点了但没确认 → 偏好一个都不许动 ──
     let savedWidth = Preferences.shared.lineWidth
