@@ -49,6 +49,11 @@ let rowHeight = ToolbarMetrics.rowHeight
 // 生产侧的调色板色块数 —— 预算必须跟着它变，不能写死。
 let paletteCount = ColorPalette.allPalettes[Preferences.shared.paletteIndex].colors.count
 
+/// 组在预算数组里的下标 —— 由**枚举声明顺序**推出，不是手数的常数。
+func indexOf(_ group: AnnotationWindow.ToolbarGroup) -> Int {
+    AnnotationWindow.ToolbarGroup.allCases.firstIndex(of: group)!
+}
+
 print("=== 1. 纯函数：一行 k 个组只占 (k−1) 条竖线 ===\n")
 do {
     // 三个 100 的组，上限 208。
@@ -102,47 +107,60 @@ do {
 
 print("\n=== 2. 预算的字面值（手推，不读实现）===\n")
 do {
+    // 走查顺序必须 == 枚举声明顺序：下面按枚举名取预算下标，靠的就是这条。
+    // 它同时兜住「加了枚举 case 却忘了写占位」—— 那种漏写会让 createToolbar
+    // 取不到该组而 trap，探针要在那之前先红。
+    let walked = AnnotationWindow.layoutToolbarGroups(
+        ToolbarCursor.measuring(), paletteColorCount: paletteCount).map(\.group)
+    let allGroups = AnnotationWindow.ToolbarGroup.allCases
+    check("★ 每个枚举 case 都有占位（漏写占位 → 这里红）",
+          Set(walked) == Set(allGroups),
+          "走查 \(walked.count) 组 / 枚举 \(allGroups.count) 组")
+    check("★ 走查顺序 == 枚举声明顺序（按名字取下标才成立）",
+          walked == allGroups,
+          "\(walked)")
+
     // 内容宽 = Σ(控件宽 + 后间距) + 组尾留白。按钮宽 = max(字数×14+8, 36)。
     // 这些数是**从 UI 规格手推**的：改了控件宽度就必须回来改这里，
     // 而不是像旧预算那样在另一份代码里悄悄漂移。
-    let expected: [(String, CGFloat)] = [
-        ("箭头样式：下拉 84 + 后距 4 + 尾距 4", 92),
-        ("编辑：撤销 36+2、重做 36+2、尾距 4", 80),
-        ("线宽：槽位 104 + 后距 4 + 尾距 4", 112),
-        ("线型：下拉 76 + 后距 4 + 尾距 4", 84),
-        ("贴纸：下拉 56 + 后距 6 + 尾距 4", 66),
-        ("水印：勾选 48+2、文本框 72+6、尾距 4", 132),
-        ("导出：保存/复制/贴图 各 36+2、尾距 4", 118),
-        ("识别：OCR 50（3 字）+ 后距 6 + 尾距 4", 60),
-        ("帮助：36 + 后距 0 + 尾距 4", 40),
-        ("放弃：36 + 后距 0 + 尾距 4", 40),
+    //
+    // 组用**枚举名**指认，不写死下标 —— 中间插一组时这里跟着走，
+    // 而旧写法（index = [1,2,4,…]）会整片错位。
+    let expected: [(AnnotationWindow.ToolbarGroup, String, CGFloat)] = [
+        (.arrowStyle, "箭头样式：下拉 84 + 后距 4 + 尾距 4", 92),
+        (.edit, "编辑：撤销 36+2、重做 36+2、尾距 4", 80),
+        (.lineWidth, "线宽：槽位 104 + 后距 4 + 尾距 4", 112),
+        (.lineStyle, "线型：下拉 76 + 后距 4 + 尾距 4", 84),
+        (.sticker, "贴纸：下拉 56 + 后距 6 + 尾距 4", 66),
+        (.watermark, "水印：勾选 48+2、文本框 72+6、尾距 4", 132),
+        (.export, "导出：保存/复制/贴图 各 36+2、尾距 4", 118),
+        (.ocr, "识别：OCR 50（3 字）+ 后距 6 + 尾距 4", 60),
+        (.help, "帮助：36 + 后距 0 + 尾距 4", 40),
+        (.discard, "放弃：36 + 后距 0 + 尾距 4", 40),
     ]
     let measured = AnnotationWindow.measureToolbarGroupWidths(paletteColorCount: paletteCount)
     check("预算共 12 组", measured.count == 12, "\(measured.count)")
 
-    // 组序：0 绘图 / 1 箭头样式 / 2 编辑 / 3 颜色 / 4 线宽 / 5 线型 /
-    //       6 贴纸 / 7 水印 / 8 导出 / 9 识别 / 10 帮助 / 11 放弃
-    let index = [1, 2, 4, 5, 6, 7, 8, 9, 10, 11]
-    for (i, item) in expected.enumerated() {
-        check(item.0, measured[index[i]] == item.1,
-              "\(Int(measured[index[i]])) vs \(Int(item.1))")
+    for (group, label, width) in expected {
+        let i = indexOf(group)
+        check(label, measured[i] == width, "\(Int(measured[i])) vs \(Int(width))")
     }
 
     // 绘图工具组：15 个工具，14 个两字（36）+「马赛克」三字（50），各后距 2，尾距 4
     let toolGroup = CGFloat(14 * 36 + 50) + CGFloat(15 * 2) + tail
     check("绘图工具：15 个按钮 554 + 后距 30 + 尾距 4 = \(Int(toolGroup))",
-          measured[0] == toolGroup, "\(Int(measured[0]))")
+          measured[indexOf(.tools)] == toolGroup, "\(Int(measured[indexOf(.tools)]))")
 
     // 颜色组：换色 36+4、色块 n×30+4、尾距 4
     let colorGroup: CGFloat = 36 + 4 + CGFloat(paletteCount) * 30 + 4 + tail
     check("颜色：换色 40 + 色块 \(paletteCount)×30+4 + 尾距 4 = \(Int(colorGroup))",
-          measured[3] == colorGroup, "\(Int(measured[3]))")
+          measured[indexOf(.color)] == colorGroup, "\(Int(measured[indexOf(.color)]))")
 
     // ★ 旧预算漏加的正是这个尾距。逐组确认它**在**预算里：
     // 去掉尾距后应当正好等于「各控件占位之和」——用帮助组（后距 0）最干净。
     check("帮助组预算含组尾留白（旧预算漏的就是这一项）",
-          measured[10] == ToolbarMetrics.buttonWidth("帮助") + tail,
-          "\(Int(measured[10]))")
+          measured[indexOf(.help)] == ToolbarMetrics.buttonWidth("帮助") + tail,
+          "\(Int(measured[indexOf(.help)]))")
 }
 
 print("\n=== 3. 预算 == 真实排布（干跑 vs 实跑，逐组偏差 0）===\n")
@@ -300,17 +318,18 @@ do {
           unique.map { "\($0)" }.joined(separator: " / "))
 
     let baseline = AnnotationWindow.measureToolbarGroupWidths(paletteColorCount: unique[0])
+    let colorIndex = indexOf(.color)
     var previous: CGFloat = -1
     var monotone = true
     for n in unique {
         let w = AnnotationWindow.measureToolbarGroupWidths(paletteColorCount: n)
         check("色块 \(n) 个 → 颜色组宽 \(Int(48 + CGFloat(n) * 30))",
-              w[3] == 48 + CGFloat(n) * 30, "\(Int(w[3]))")
-        if previous >= 0 && w[3] <= previous { monotone = false }
-        previous = w[3]
-        // 除颜色组外，其余 11 组都不该受色块数影响
-        let others = (0..<12).filter { $0 != 3 }
-        check("色块 \(n) 个：其余 11 组宽度逐个不变",
+              w[colorIndex] == 48 + CGFloat(n) * 30, "\(Int(w[colorIndex]))")
+        if previous >= 0 && w[colorIndex] <= previous { monotone = false }
+        previous = w[colorIndex]
+        // 除颜色组外，其余各组都不该受色块数影响
+        let others = (0..<w.count).filter { $0 != colorIndex }
+        check("色块 \(n) 个：其余 \(others.count) 组宽度逐个不变",
               others.allSatisfy { w[$0] == baseline[$0] },
               others.filter { w[$0] != baseline[$0] }.map { "组\($0)" }.joined(separator: " "))
     }

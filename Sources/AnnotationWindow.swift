@@ -493,11 +493,26 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
     // MARK: - Toolbar
 
+    /// 工具栏的组。**按名字取排布，不按下标。**
+    ///
+    /// 为什么（2026-11-12）：`createToolbar` 原来写的是 `openGroup(3, "颜色", …)`，
+    /// 下标靠手数。在 `layoutToolbarGroups` 中间插一组，后面每个下标都静默错位 ——
+    /// 控件摆到别组的 x 上，编译器不说话，`toolbar_budget_probe` 也不说话
+    /// （它核对的是「预算 == 排布」，而两边会一起错）。
+    ///
+    /// 声明顺序 = 走查顺序 = 屏幕上从左到右、从上到下的组序，
+    /// 由 `toolbar_budget_probe` 逐个钉住。
+    enum ToolbarGroup: CaseIterable {
+        case tools, arrowStyle, edit, color, lineWidth, lineStyle
+        case sticker, watermark, export, ocr, help, discard
+    }
+
     /// 工具栏一组的排布结果：行基线、组间竖线位置、该组每个控件的 x。
     /// 由 `layoutToolbarGroups` 产出 —— 那是宽度公式的**唯一所在**。
     ///
     /// 非 private：`toolbar_budget_probe` 要直接驱动这份走查来核对预算与排布。
     struct ToolbarGroupLayout {
+        let group: ToolbarGroup
         let baseY: CGFloat
         let separatorX: CGFloat?
         let xs: [CGFloat]
@@ -524,42 +539,42 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         var result: [ToolbarGroupLayout] = []
         // 每组的控件占位（宽度 + 后间距）。组尾留白与组间竖线由游标统一负责，
         // 这里**只报内容** —— 那两项手写进表达式正是旧预算出错的根因。
-        func group(_ slots: [(width: CGFloat, gapAfter: CGFloat)]) {
+        func group(_ key: ToolbarGroup, _ slots: [(width: CGFloat, gapAfter: CGFloat)]) {
             let g = cursor.beginGroup()
             let xs = slots.map { cursor.place(width: $0.width, gapAfter: $0.gapAfter) }
             cursor.endGroup()
-            result.append(ToolbarGroupLayout(baseY: g.baseY, separatorX: g.separatorX, xs: xs))
+            result.append(ToolbarGroupLayout(group: key, baseY: g.baseY,
+                                             separatorX: g.separatorX, xs: xs))
         }
         let gap = ToolbarMetrics.gap
 
-        // 1. 绘图工具
-        group(toolbarTools.map { (width: ToolbarMetrics.buttonWidth($0.title), gapAfter: gap) })
-        // 2. 箭头样式（下拉）
-        group([(width: 84, gapAfter: 4)])
-        // 3. 撤销 / 重做
-        group([(width: ToolbarMetrics.buttonWidth("撤销"), gapAfter: gap),
-               (width: ToolbarMetrics.buttonWidth("重做"), gapAfter: gap)])
-        // 4. 换色 + 色块（色块宽按实际个数，不写死）
-        group([(width: ToolbarMetrics.buttonWidth("换色"), gapAfter: 4),
-               (width: CGFloat(paletteColorCount) * 30, gapAfter: 4)])
-        // 5. 线宽（滑块 70 + 2 + 数值标签 32 = 104）
-        group([(width: 104, gapAfter: 4)])
-        // 6. 线型（下拉）
-        group([(width: 76, gapAfter: 4)])
-        // 7. 贴纸（下拉）
-        group([(width: 56, gapAfter: 6)])
-        // 8. 水印（启用勾选 + 文本框）
-        group([(width: 48, gapAfter: 2), (width: 72, gapAfter: 6)])
-        // 9. 导出
-        group([(width: ToolbarMetrics.buttonWidth("保存"), gapAfter: gap),
-               (width: ToolbarMetrics.buttonWidth("复制"), gapAfter: gap),
-               (width: ToolbarMetrics.buttonWidth("贴图"), gapAfter: gap)])
-        // 10. 文字识别
-        group([(width: ToolbarMetrics.buttonWidth("OCR"), gapAfter: 6)])
-        // 11. 帮助
-        group([(width: ToolbarMetrics.buttonWidth("帮助"), gapAfter: 0)])
-        // 12. 放弃
-        group([(width: ToolbarMetrics.buttonWidth("放弃"), gapAfter: 0)])
+        group(.tools, toolbarTools.map { (width: ToolbarMetrics.buttonWidth($0.title), gapAfter: gap) })
+        // 箭头样式（下拉）
+        group(.arrowStyle, [(width: 84, gapAfter: 4)])
+        // 撤销 / 重做
+        group(.edit, [(width: ToolbarMetrics.buttonWidth("撤销"), gapAfter: gap),
+                      (width: ToolbarMetrics.buttonWidth("重做"), gapAfter: gap)])
+        // 换色 + 色块（色块宽按实际个数，不写死）
+        group(.color, [(width: ToolbarMetrics.buttonWidth("换色"), gapAfter: 4),
+                       (width: CGFloat(paletteColorCount) * 30, gapAfter: 4)])
+        // 线宽（滑块 70 + 2 + 数值标签 32 = 104）
+        group(.lineWidth, [(width: 104, gapAfter: 4)])
+        // 线型（下拉）
+        group(.lineStyle, [(width: 76, gapAfter: 4)])
+        // 贴纸（下拉）
+        group(.sticker, [(width: 56, gapAfter: 6)])
+        // 水印（启用勾选 + 文本框）
+        group(.watermark, [(width: 48, gapAfter: 2), (width: 72, gapAfter: 6)])
+        // 导出
+        group(.export, [(width: ToolbarMetrics.buttonWidth("保存"), gapAfter: gap),
+                        (width: ToolbarMetrics.buttonWidth("复制"), gapAfter: gap),
+                        (width: ToolbarMetrics.buttonWidth("贴图"), gapAfter: gap)])
+        // 文字识别
+        group(.ocr, [(width: ToolbarMetrics.buttonWidth("OCR"), gapAfter: 6)])
+        // 帮助
+        group(.help, [(width: ToolbarMetrics.buttonWidth("帮助"), gapAfter: 0)])
+        // 放弃
+        group(.discard, [(width: ToolbarMetrics.buttonWidth("放弃"), gapAfter: 0)])
 
         return result
     }
@@ -589,12 +604,15 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         toolbarTopSeparator = separator
 
         let paletteColorCount = ColorPalette.allPalettes[paletteIndex].colors.count
-        let layouts = Self.layoutToolbarGroups(cursor, paletteColorCount: paletteColorCount)
+        let ordered = Self.layoutToolbarGroups(cursor, paletteColorCount: paletteColorCount)
+        // 按**名字**取组。缺键就直接 trap —— 静默跳过一组正是本次要消掉的失效模式
+        // （「加了枚举 case 却忘了写占位」由 toolbar_budget_probe 的覆盖断言先拦住）。
+        let layouts = Dictionary(uniqueKeysWithValues: ordered.map { ($0.group, $0) })
 
         /// 摆一个组的竖线与标签，返回行基线。
         /// 标签要与该组第一个控件左对齐 —— 那个 x 就是 `xs[0]`。
-        func openGroup(_ index: Int, _ title: String, labelWidth: CGFloat) -> CGFloat {
-            let group = layouts[index]
+        func openGroup(_ key: ToolbarGroup, _ title: String, labelWidth: CGFloat) -> CGFloat {
+            let group = layouts[key]!
             if let sx = group.separatorX {
                 self.addSeparator(to: toolbar, x: sx, baseY: group.baseY)
             }
@@ -604,10 +622,10 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         }
 
         // ── 1. 绘图工具 ──
-        var baseY = openGroup(0, "绘图工具", labelWidth: 430)
+        var baseY = openGroup(.tools, "绘图工具", labelWidth: 430)
         for (i, item) in Self.toolbarTools.enumerated() {
             let btn = makeToolbarButton(title: item.title, tooltip: item.tip,
-                                        at: layouts[0].xs[i],
+                                        at: layouts[.tools]!.xs[i],
                                         y: baseY + 12,
                                         tag: i, action: #selector(toolButtonClicked(_:)))
             toolbar.addSubview(btn)
@@ -622,9 +640,9 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
         // ── 2. 箭头样式 ──
         // 注：常被选中的是箭头工具，样式选择放在工具组旁边最顺手。
-        baseY = openGroup(1, "箭头样式", labelWidth: 84)
+        baseY = openGroup(.arrowStyle, "箭头样式", labelWidth: 84)
         let arrowStylePopup = NSPopUpButton(
-            frame: NSRect(x: layouts[1].xs[0], y: baseY + 12,
+            frame: NSRect(x: layouts[.arrowStyle]!.xs[0], y: baseY + 12,
                           width: 84, height: 24), pullsDown: false)
         arrowStylePopup.font = NSFont.systemFont(ofSize: 11)
         arrowStylePopup.addItems(withTitles: ArrowStyle.presetNames)
@@ -636,24 +654,24 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         toolbar.addSubview(arrowStylePopup)
 
         // ── 3. 撤销 / 重做 ──
-        baseY = openGroup(2, "编辑", labelWidth: 72)
+        baseY = openGroup(.edit, "编辑", labelWidth: 72)
         let undoBtn = makeToolbarButton(
             title: "撤销", tooltip: "撤销 (Cmd+Z)",
-            at: layouts[2].xs[0],
+            at: layouts[.edit]!.xs[0],
             y: baseY + 12, tag: 100, action: #selector(undoAction))
         toolbar.addSubview(undoBtn)
 
         let redoBtn = makeToolbarButton(
             title: "重做", tooltip: "重做 (Cmd+Shift+Z)",
-            at: layouts[2].xs[1],
+            at: layouts[.edit]!.xs[1],
             y: baseY + 12, tag: 101, action: #selector(redoAction))
         toolbar.addSubview(redoBtn)
 
         // ── 4. 颜色 ──
-        baseY = openGroup(3, "颜色", labelWidth: 160)
+        baseY = openGroup(.color, "颜色", labelWidth: 160)
         let paletteBtn = makeToolbarButton(
             title: "换色", tooltip: "切换调色板",
-            at: layouts[3].xs[0],
+            at: layouts[.color]!.xs[0],
             y: baseY + 12, tag: 200, action: #selector(cyclePalette))
         toolbar.addSubview(paletteBtn)
 
@@ -661,7 +679,7 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         // 固定值比实际内容宽（调色板只有 4 个色块时实际占 120），虽然不影响布局
         // 游标，但会让"用最右子视图量宽度"这种写法量出虚数 —— 曾经就踩过。
         let swatchWidth = CGFloat(paletteColorCount) * 30
-        colorButtonContainer = NSView(frame: NSRect(x: layouts[3].xs[1],
+        colorButtonContainer = NSView(frame: NSRect(x: layouts[.color]!.xs[1],
                                                     y: baseY,
                                                     width: swatchWidth,
                                                     height: ToolbarMetrics.rowHeight))
@@ -669,8 +687,8 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         rebuildColorButtons()
 
         // ── 5. 线宽 ──
-        baseY = openGroup(4, "线宽", labelWidth: 100)
-        let widthX = layouts[4].xs[0]
+        baseY = openGroup(.lineWidth, "线宽", labelWidth: 100)
+        let widthX = layouts[.lineWidth]!.xs[0]
         let lineWidthSlider = GestureReportingSlider(frame: NSRect(x: widthX, y: baseY + 14, width: 70, height: 20))
         lineWidthSlider.minValue = 1
         lineWidthSlider.maxValue = 30
@@ -699,9 +717,9 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
 
         // ── 6. 线型 ──
         // 只作用于矩形/椭圆这类形状；箭头的线型由「箭头样式」预设携带，两处各管一套。
-        baseY = openGroup(5, "线型", labelWidth: 76)
+        baseY = openGroup(.lineStyle, "线型", labelWidth: 76)
         let lineStylePopup = NSPopUpButton(
-            frame: NSRect(x: layouts[5].xs[0], y: baseY + 12,
+            frame: NSRect(x: layouts[.lineStyle]!.xs[0], y: baseY + 12,
                           width: 76, height: 24), pullsDown: false)
         lineStylePopup.font = NSFont.systemFont(ofSize: 11)
         lineStylePopup.addItems(withTitles: LineStyle.allCases.map(\.displayName))
@@ -713,9 +731,9 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         toolbar.addSubview(lineStylePopup)
 
         // ── 7. 贴纸 ──
-        baseY = openGroup(6, "贴纸", labelWidth: 56)
+        baseY = openGroup(.sticker, "贴纸", labelWidth: 56)
         let stampPopup = NSPopUpButton(
-            frame: NSRect(x: layouts[6].xs[0], y: baseY + 12,
+            frame: NSRect(x: layouts[.sticker]!.xs[0], y: baseY + 12,
                           width: 56, height: 24), pullsDown: true)
         stampPopup.font = NSFont.systemFont(ofSize: 11)
         stampPopup.addItem(withTitle: "选择")
@@ -728,17 +746,17 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         toolbar.addSubview(stampPopup)
 
         // ── 8. 水印 ──
-        baseY = openGroup(7, "水印", labelWidth: 140)
+        baseY = openGroup(.watermark, "水印", labelWidth: 140)
         let wmToggle = NSButton(checkboxWithTitle: "启用", target: self,
                                 action: #selector(watermarkToggled(_:)))
-        wmToggle.frame = NSRect(x: layouts[7].xs[0], y: baseY + 14,
+        wmToggle.frame = NSRect(x: layouts[.watermark]!.xs[0], y: baseY + 14,
                                 width: 48, height: 20)
         wmToggle.state = annotationView.watermarkConfig.enabled ? .on : .off
         wmToggle.font = NSFont.systemFont(ofSize: 11)
         wmToggle.toolTip = "导出图片时叠加水印"
         toolbar.addSubview(wmToggle)
 
-        watermarkField = NSTextField(frame: NSRect(x: layouts[7].xs[1],
+        watermarkField = NSTextField(frame: NSRect(x: layouts[.watermark]!.xs[1],
                                                    y: baseY + 14, width: 72, height: 20))
         watermarkField.stringValue = annotationView.watermarkConfig.text
         watermarkField.font = NSFont.systemFont(ofSize: 11)
@@ -750,51 +768,51 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         toolbar.addSubview(watermarkField)
 
         // ── 9. 导出 ──
-        baseY = openGroup(8, "导出", labelWidth: 110)
+        baseY = openGroup(.export, "导出", labelWidth: 110)
         let saveBtn = makeToolbarButton(
             title: "保存", tooltip: "保存为 PNG 文件",
-            at: layouts[8].xs[0],
+            at: layouts[.export]!.xs[0],
             y: baseY + 12, tag: 300, action: #selector(saveImage))
         toolbar.addSubview(saveBtn)
 
         let copyBtn = makeToolbarButton(
             title: "复制", tooltip: "复制到剪贴板",
-            at: layouts[8].xs[1],
+            at: layouts[.export]!.xs[1],
             y: baseY + 12, tag: 301, action: #selector(copyImage))
         toolbar.addSubview(copyBtn)
 
         let pinBtn = makeToolbarButton(
             title: "贴图", tooltip: "钉在屏幕上 (F3)",
-            at: layouts[8].xs[2],
+            at: layouts[.export]!.xs[2],
             y: baseY + 12, tag: 302, action: #selector(pinImage))
         toolbar.addSubview(pinBtn)
 
         // ── 10. 文字识别 ──
         // 单独成组而不塞进「导出」：它是"从图上取信息"（进剪贴板的是一段文字），
         // 不是"把图送出去"，放在一起会让人以为点了就等于导出图片。
-        baseY = openGroup(9, "识别", labelWidth: 76)
+        baseY = openGroup(.ocr, "识别", labelWidth: 76)
         let ocrBtn = makeToolbarButton(
             title: "OCR", tooltip: "识别截图里的文字（本地离线），结果先显示在面板里，选好再复制",
-            at: layouts[9].xs[0],
+            at: layouts[.ocr]!.xs[0],
             y: baseY + 12, tag: 500, action: #selector(runOCR))
         ocrButton = ocrBtn
         toolbar.addSubview(ocrBtn)
 
         // ── 11. 帮助 ──
-        baseY = openGroup(10, "", labelWidth: 0)
+        baseY = openGroup(.help, "", labelWidth: 0)
         let helpBtn = makeToolbarButton(
             title: "帮助", tooltip: "查看使用帮助",
-            at: layouts[10].xs[0],
+            at: layouts[.help]!.xs[0],
             y: baseY + 12, tag: 400, action: #selector(showHelp))
         toolbar.addSubview(helpBtn)
 
         // ── 12. 放弃 ──
         // 单独成组放在最后：它是"离开"而不是"编辑"，混在左边的工具里容易被误点。
         // 标题用红色 —— 这是本工具栏上唯一会丢东西的按钮。
-        baseY = openGroup(11, "", labelWidth: 0)
+        baseY = openGroup(.discard, "", labelWidth: 0)
         let discardBtn = makeToolbarButton(
             title: "放弃", tooltip: "放弃这张截图并关闭窗口（有未保存的标注时会先确认）",
-            at: layouts[11].xs[0],
+            at: layouts[.discard]!.xs[0],
             y: baseY + 12, tag: 600, action: #selector(discardAndClose))
         discardBtn.attributedTitle = NSAttributedString(
             string: "放弃",
