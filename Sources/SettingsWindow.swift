@@ -22,7 +22,7 @@ import UniformTypeIdentifiers
 /// ① 左侧分类侧栏 4 组（快捷键 / 通用 / 高级 / 关于），右侧只显示当前组；
 /// ② 窗口尺寸**固定**，不再随内容变化 —— 内容超出由内容区自己滚；
 /// ③ 状态提示挪到窗口底部常驻（原来在长页面顶部，出错时滚下去就找不着了）。
-final class SettingsWindowController: NSWindowController, NSOutlineViewDataSource, NSOutlineViewDelegate {
+final class SettingsWindowController: NSWindowController, NSWindowDelegate, NSOutlineViewDataSource, NSOutlineViewDelegate {
 
     // MARK: - 侧栏分组
 
@@ -205,6 +205,7 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
 
     private func buildUI() {
         guard let window = window else { return }
+        window.delegate = self
 
         // ── 状态区（常驻底部）──
         //
@@ -215,7 +216,9 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         statusLabel.font = NSFont.systemFont(ofSize: 11)
         statusLabel.textColor = .systemOrange
         statusLabel.isHidden = true
-        statusLabel.maximumNumberOfLines = 3
+        // 5 行而不是 3 行：恢复默认的成功文案 2 行 + 热键注册失败最多 2 条，
+        // 3 行会把失败信息截掉（2026-11-12 评审 P1-2 的配套修复）。
+        statusLabel.maximumNumberOfLines = 5
         statusLabel.preferredMaxLayoutWidth = Self.preferredContentWidth - 40
 
         let footer = NSStackView(views: [statusLabel])
@@ -716,7 +719,8 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         · \(ignored)
         · 其他：保留截图历史、更新清单地址、启动时自动检查、打码强度、选区吸附
 
-        已保存的截图历史文件不会被删除。
+        已保存的截图历史文件不会被删除；「开机自动启动」开关不在本次重置范围内
+        （它由系统「登录项与扩展」持有，不走偏好）。
         """
     }
 
@@ -1006,6 +1010,15 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         feedURLField.stringValue = Preferences.shared.updateFeedURL
         autoCheckBox.state = Preferences.shared.automaticallyChecksForUpdates ? .on : .off
         recordHistoryBox.state = Preferences.shared.recordHistory ? .on : .off
+        // 打码强度与吸附开关**也必须在这里刷新**（2026-11-12 评审 P1-1）：
+        // 这两项原来只在构造时按偏好建控件（`buildGeneralSection`），`performResetAll`
+        // 刷新时漏掉 —— 于是「恢复全部默认」之后「通用」页仍显示用户改过的值，
+        // 而再动一下控件就把旧值写回偏好，与"已恢复默认"的提示自相矛盾。
+        // 已实证：滑杆拖到 2.5×、关掉吸附 → 恢复默认 → 偏好回 1.0/true，
+        // 控件仍停在 2.5×/off（`settings_scroll_probe` §3c 现在钉住这条）。
+        redactionStrengthSlider.doubleValue = Preferences.shared.redactionStrength
+        redactionStrengthLabel.stringValue = Self.strengthText(Preferences.shared.redactionStrength)
+        snapToWindowsBox.state = Preferences.shared.snapSelectionToWindows ? .on : .off
         rebuildIgnoredAppsList()
         syncTrayPopupsToPreferences()
         refreshLaunchAtLogin()
@@ -1385,11 +1398,25 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
     private func performResetAll() {
         Preferences.shared.resetToDefaults()
         refreshFromPreferences()
-        showProblems(onHotkeysChanged?() ?? [])
         // 说明影响范围：已打开的标注窗口里控件仍持有旧值，一动就会写回偏好，
         // 所以不做「立即全部生效」的假象。
-        statusLabel.stringValue = "已恢复默认设置。线宽、颜色、线型、箭头样式、调色板、水印与默认工具均已回出厂值；\n已打开的标注窗口不受影响，下次截图时生效。"
-        statusLabel.textColor = .secondaryLabelColor
+        let message = "已恢复默认设置。线宽、颜色、线型、箭头样式、调色板、水印与默认工具均已回出厂值；\n"
+            + "已打开的标注窗口不受影响，下次截图时生效 —— 在已打开的标注窗口里再改颜色/线宽，"
+            + "会把刚重置的键写回旧值。"
+        // 注册失败必须留在屏上（2026-11-12 评审 P1-2）：原来是先
+        // `showProblems(onHotkeysChanged?())` 再无条件覆盖 statusLabel，
+        // `HotkeyRegistration.applyAll` 返回的失败列表一次都显示不出来。
+        // 变异测试实证：把那句 `showProblems` 换成 `showProblems([])`，
+        // `settings_scroll_probe` 仍全绿 —— 说明这条路径此前没有回归网，
+        // 现在由 §3d 的断言钉住。
+        let problems = onHotkeysChanged?() ?? []
+        if problems.isEmpty {
+            statusLabel.stringValue = message
+            statusLabel.textColor = .secondaryLabelColor
+        } else {
+            statusLabel.stringValue = message + "\n" + problems.joined(separator: "\n")
+            statusLabel.textColor = .systemOrange
+        }
         statusLabel.isHidden = false
     }
 
@@ -1405,5 +1432,29 @@ final class SettingsWindowController: NSWindowController, NSOutlineViewDataSourc
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    // MARK: - NSWindowDelegate
+
+    /// 关窗也要收尾（2026-11-12 评审 P2-2）。
+    ///
+    /// 这个控制器是**常驻单例**（`isReleasedWhenClosed = false` + AppDelegate 强持有），
+    /// `deinit` 永不触发 —— 所以「录制快捷键中直接点关闭按钮」只能在这里清：
+    /// 否则 `startRecording` 装的本地键盘监视器会继续挂着，吞掉本应用其它窗口的
+    /// keyDown，直到下次 `present()`。已实证：录制中关窗后录制按钮仍显示
+    /// 「按下新的组合键…」（= `stopRecording` 没跑）。
+    ///
+    /// 顺带落地 `docs/reviews/代码评审修复计划-1023.md` 的 7.4 待办：地址输入框的
+    /// action 只在回车/失焦时触发，直接关窗等于丢掉还没提交的地址 —— 这里按
+    /// `checkNow` 的同一手法落盘。
+    func windowWillClose(_ notification: Notification) {
+        // 顺序要紧：**先**捕获地址输入框的当前值，**再** `stopRecording()` ——
+        // 后者内含 `refreshFromPreferences()`，会把输入框还原成已存值，
+        // 放在前面读就把用户刚打的地址读丢了（评审 P2-2 修复时实测踩到）。
+        let typed = feedURLField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed != Preferences.shared.updateFeedURL {
+            Preferences.shared.updateFeedURL = typed
+        }
+        stopRecording()
     }
 }
