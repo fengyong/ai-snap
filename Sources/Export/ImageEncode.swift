@@ -14,6 +14,17 @@ enum ImageEncode {
     /// 保存面板支持的格式。顺序即面板下拉顺序，png 在前 = 默认格式（行为不变）。
     static let supportedTypes: [UTType] = [.png, .jpeg, .heic]
 
+    /// 编码产出必须是**非空** Data（2026-11-12 评审 P2-5）。
+    ///
+    /// 三个出口原来只判 `nil`：0 字节 Data 会被调用方当成成功写出 ——
+    /// `AnnotationWindow` 写盘后即 `markContentExported` + `flashHUD("已保存")`，
+    /// 用户拿到一个 0 字节文件却看到成功提示。探针的魔数断言能拦住这种情况，
+    /// 但护栏应该在生产侧，而不是只活在探针里。
+    private static func nonEmpty(_ data: Data?) -> Data? {
+        guard let data, !data.isEmpty else { return nil }
+        return data
+    }
+
     /// 按目标 URL 的扩展名编码；认不出的扩展名按 PNG（保存面板已经限制了可选项，
     /// 走到 default 的只有手工改过文件名的情况）。
     static func data(from image: NSImage, url: URL) -> Data? {
@@ -45,7 +56,7 @@ enum ImageEncode {
     static func png(from image: NSImage) -> Data? {
         if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first,
            let data = rep.representation(using: .png, properties: [:]) {
-            return data
+            return nonEmpty(data)
         }
         return viaImageIO(image, uti: "public.png", properties: nil)
     }
@@ -61,7 +72,8 @@ enum ImageEncode {
     /// 改一处漏一处。
     static func png(from cgImage: CGImage) -> Data? {
         let rep = NSBitmapImageRep(cgImage: cgImage)
-        return rep.representation(using: .png, properties: [:])
+        // 保持原路径不变（无 ImageIO 兜底），只补非空守卫。
+        return nonEmpty(rep.representation(using: .png, properties: [:]))
     }
 
     /// JPEG（有损，固定 0.9 —— 与大多数工具的"高质量"档相当）。
@@ -74,7 +86,7 @@ enum ImageEncode {
         if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first,
            let data = rep.representation(using: fileType,
                                          properties: [.compressionFactor: quality]) {
-            return data
+            return nonEmpty(data)
         }
         return viaImageIO(image, uti: uti,
                           properties: [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
@@ -89,6 +101,6 @@ enum ImageEncode {
         else { return nil }
         CGImageDestinationAddImage(dest, cg, properties)
         guard CGImageDestinationFinalize(dest) else { return nil }
-        return buffer as Data
+        return nonEmpty(buffer as Data)
     }
 }
