@@ -156,7 +156,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
             NSApp.activate(ignoringOtherApps: true)
             let alert = NSAlert()
             alert.messageText = "还没有配置更新地址"
-            alert.informativeText = "在「偏好设置 → 更新」里填入更新清单（appcast）的地址后即可检查。\n\n"
+            alert.informativeText = "在「偏好设置 → 高级 → 清单地址」里填入更新清单（appcast）的地址后即可检查。\n\n"
                 + "清单是一个 JSON 文件，例如：\n"
                 + "{\"version\": \"1.2.0\", \"downloadURL\": \"https://…\", \"notes\": \"修复了…\"}"
             alert.addButton(withTitle: "打开偏好设置")

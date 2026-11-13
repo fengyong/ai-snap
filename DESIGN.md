@@ -86,7 +86,8 @@ ai-snap/
     ├── main.swift                      # 应用入口
     ├── AppDelegate.swift               # 状态栏菜单、截图调度、历史与更新入口
     ├── Preferences.swift               # 偏好持久化（UserDefaults 单一来源）
-    ├── SettingsWindow.swift            # 偏好设置窗口（快捷键/忽略列表/托盘/更新）
+    ├── SettingsWindow.swift            # 偏好设置窗口（分类侧栏：快捷键/通用/高级/关于
+    │                                   #  +「忽略的应用」独立子面板；窗口固定 640×520）
     ├── HotkeyManager.swift             # Carbon 全局热键 + 忽略应用策略
     ├── LaunchAtLogin.swift             # 开机自启（SMAppService）
     ├── Models.swift                    # AnnotationObject 协议与全部标注对象、UndoAction
