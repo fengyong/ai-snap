@@ -131,6 +131,17 @@ func selectedRowIsIgnoredApps(_ tree: NSOutlineView) -> Bool {
     return (item as? SettingsWindowController.Section) == .ignoredApps
 }
 
+/// 底部状态区的当前文案（状态区是私有控件，从视图树按内容认）。
+///
+/// 为什么不加 `statusText` 访问器了：探针能自己从视图树拿到的东西就不必
+/// 为它开生产代码的口子 —— 与「ⓘ 弹层用 contentViewController?.view 拿」同一思路。
+func statusLabelText(_ c: SettingsWindowController) -> String {
+    guard let root = c.window?.contentView else { return "" }
+    return findAll(root, of: NSTextField.self)
+        .map(\.stringValue)
+        .first { $0.contains("已恢复默认设置") || $0.contains("测试：热键注册失败") } ?? ""
+}
+
 let originalIgnored = Preferences.shared.ignoredBundleIdentifiers
 defer { Preferences.shared.ignoredBundleIdentifiers = originalIgnored }
 
@@ -584,6 +595,8 @@ print("\n=== 3d. 危险操作归位：恢复默认在「关于」+ 二次确认 
 do {
     let (controller, window) = openSettings(visibleHeight: 1050)
     controller.selectSection(.about)
+    // 注入一条假失败：确认路径必须让它留在状态区（P1-2 的回归网）。
+    controller.onHotkeysChanged = { ["测试：热键注册失败"] }
     window.layoutIfNeeded()
 
     // ── 位置：恢复默认在「关于」组，不在别处 ──
@@ -635,8 +648,38 @@ do {
 
     // ── 二次确认：点了但没确认 → 偏好一个都不许动 ──
     let savedWidth = Preferences.shared.lineWidth
-    defer { Preferences.shared.lineWidth = savedWidth }
+    let savedStrength = Preferences.shared.redactionStrength
+    let savedSnap = Preferences.shared.snapSelectionToWindows
+    defer {
+        Preferences.shared.lineWidth = savedWidth
+        Preferences.shared.redactionStrength = savedStrength
+        Preferences.shared.snapSelectionToWindows = savedSnap
+    }
+    // 按用户视角摆：先改过这几项，再来点「恢复全部默认设置」
+    let general = controller.sectionContentViews[.general]!
+    let slider = findAll(general, of: NSSlider.self).first
+    let snapBox = findAll(general, of: NSButton.self)
+        .first { $0.title.contains("选区边缘自动吸附") }
     Preferences.shared.lineWidth = 7.5
+    Preferences.shared.redactionStrength = 2.5
+    Preferences.shared.snapSelectionToWindows = false
+    // 控件也要**真的动过** —— 用户是拖滑杆、点勾选框，不是改偏好。
+    // 只改偏好的话控件停在构造时的值（恰好是缺省值），"重置后控件同步"
+    // 这条断言在删掉刷新代码时也会绿：变异测试 M3（删 refreshFromPreferences
+    // 里的滑杆刷新）实证过这个假绿。所以必须先动控件再重置。
+    if let slider = slider, let action = slider.action {
+        slider.doubleValue = 2.5
+        _ = NSApp.sendAction(action, to: slider.target, from: slider)
+    }
+    if let box = snapBox, let action = box.action {
+        box.state = .off
+        _ = NSApp.sendAction(action, to: box.target, from: box)
+    }
+    check("操作后控件与偏好一致（2.5× / 关）",
+          abs((slider?.doubleValue ?? -1) - 2.5) < 0.01 && snapBox?.state == .off,
+          "滑杆 \(slider?.doubleValue ?? -1) 勾选框 \(snapBox?.state.rawValue ?? -1)")
+    controller.present()          // 顺序即用户操作顺序
+    window.layoutIfNeeded()
 
     let resetAllButton = aboutButtons.first { $0.title == "恢复全部默认设置" }
     resetAllButton?.performClick(nil)
@@ -659,11 +702,23 @@ do {
               !alert.buttons.contains { $0.title == "恢复" },
               "\(alert.buttons.map { $0.title })")
 
-        // ── 收起之后必须清空 pendingResetAlert ──
+        // ── 确认框**实际显示**的就是影响项文案（P1-3 的锚点）──
         //
-        // 不清的话控制器会一直持有一个已经关掉的 alert（连带它的 window），
-        // 而「有没有待确认的危险操作」这个问题从此永远答「有」。
-        // 走「取消」这条路验：清空写在响应分支**之前**，两条响应共用同一句。
+        // 2026-11-12 评审：原探针只断言自己调用的纯函数
+        // `resetAllImpactSummary(ignoredAppCount: 3)`，从未读
+        // `alert.informativeText` —— 变异测试实证，把实现改成
+        // `alert.informativeText = "确定？"` 后探针仍 149 项全绿。
+        // 锚点必须落在用户看见的那个对象上。
+        let liveSummary = SettingsWindowController.resetAllImpactSummary(
+            ignoredAppCount: Preferences.shared.ignoredBundleIdentifiers.count)
+        check("确认框实际显示的就是影响项文案（锚在 alert，不是纯函数）",
+              alert.informativeText == liveSummary,
+              alert.informativeText == liveSummary ? "" : "实现与文案已漂移")
+        check("影响项文案写明历史文件不删、开机启动不在范围内",
+              liveSummary.contains("不会被删除") && liveSummary.contains("开机自动启动"),
+              liveSummary)
+
+        // ── 取消：清空写在响应分支**之前**，两条响应共用同一句，走这条路验 ──
         cancel?.performClick(nil)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         check("取消之后 pendingResetAlert 已清空（不留悬挂的确认框）",
@@ -673,6 +728,101 @@ do {
               Preferences.shared.lineWidth == 7.5,
               "\(Preferences.shared.lineWidth)")
     }
+
+    // ── 确认路径：把整个 resetToDefaults 走完（此前完全没覆盖）──
+    //
+    // 同时钉住三件评审实证过的事：
+    // ① 确认之后 pendingResetAlert 也清空（两条响应共用同一句，此前只验了取消）；
+    // ② 偏好回缺省**且控件跟着回**（P1-1：滑杆/数值标签/勾选框原来停在旧值）；
+    // ③ 注入的热键注册失败必须留在状态区（P1-2：原来被成功文案无条件覆盖）。
+    do {
+        resetAllButton?.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        guard let alert = controller.pendingResetAlert,
+              let confirm = alert.buttons.first(where: { $0.title == "恢复默认" }) else {
+            check("确认路径：再次弹出确认框", false)
+            window.close()
+            exit(1)
+        }
+        confirm.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        window.layoutIfNeeded()
+
+        check("确认之后 pendingResetAlert 也清空（不只取消路径）",
+              controller.pendingResetAlert == nil,
+              controller.pendingResetAlert == nil ? "" : "仍持有 alert")
+        check("确认之后偏好回缺省：线宽 15",
+              abs(Preferences.shared.lineWidth - 15) < 0.01, "\(Preferences.shared.lineWidth)")
+        check("确认之后偏好回缺省：打码强度 1.0",
+              abs(Preferences.shared.redactionStrength - 1.0) < 0.01,
+              "\(Preferences.shared.redactionStrength)")
+        check("确认之后偏好回缺省：吸附开",
+              Preferences.shared.snapSelectionToWindows == true,
+              "\(Preferences.shared.snapSelectionToWindows)")
+        check("确认之后偏好回缺省：忽略的应用清空",
+              Preferences.shared.ignoredBundleIdentifiers.isEmpty,
+              "\(Preferences.shared.ignoredBundleIdentifiers)")
+
+        check("★ 滑杆跟着回 1.0（P1-1：原来停在用户改过的值）",
+              abs((slider?.doubleValue ?? -1) - 1.0) < 0.01,
+              "滑杆 \(slider?.doubleValue ?? -1)")
+        check("★ 强度标签跟着回 1.0×（P1-1）",
+              findAll(general, of: NSTextField.self).contains { $0.stringValue == "1.0×" })
+        check("★ 吸附勾选框跟着回到开（P1-1）",
+              snapBox?.state == .on,
+              "state \(snapBox?.state.rawValue ?? -1)")
+        check("★ 状态区保留热键注册失败（P1-2：原来被成功文案覆盖）",
+              statusLabelText(controller).contains("测试：热键注册失败"),
+              statusLabelText(controller))
+        check("状态区同时说明已恢复默认",
+              statusLabelText(controller).contains("已恢复默认设置"),
+              statusLabelText(controller))
+    }
+    window.close()
+}
+
+print("\n=== 3e. 关窗收尾：录制状态与地址输入不悬挂（评审 P2-2）===\n")
+do {
+    // 设置窗是常驻单例（isReleasedWhenClosed = false + AppDelegate 强持有），
+    // deinit 永不触发 —— 「录制中点关闭按钮」只能靠 windowWillClose 收尾。
+    // 评审实证：修复前关窗后按钮仍显示「按下新的组合键…」，
+    // 本地键盘监视器会继续吞掉其它窗口的 keyDown。
+    let (controller, window) = openSettings(visibleHeight: 1050)
+    controller.onHotkeysChanged = { [] }
+    let shortcuts = controller.sectionContentViews[.shortcuts]!
+    let regionTitle = Preferences.shared.regionCaptureHotkey.displayString
+    guard let recordButton = findAll(shortcuts, of: NSButton.self)
+            .first(where: { $0.title == regionTitle }) else {
+        check("能找到区域截图录制按钮", false)
+        window.close()
+        exit(1)
+    }
+    recordButton.performClick(nil)
+    check("点录制后按钮显示提示文案",
+          recordButton.title == "按下新的组合键…", recordButton.title)
+    window.close()
+    check("★ 关窗后录制状态被清掉（按钮还原成实际快捷键）",
+          recordButton.title == regionTitle,
+          recordButton.title == regionTitle ? "" : "仍是「\(recordButton.title)」= stopRecording 没跑")
+
+    // 地址输入框的 action 只在回车/失焦时触发：直接关窗原来会丢掉输入。
+    controller.present()
+    window.layoutIfNeeded()
+    let advanced = controller.sectionContentViews[.advanced]!
+    let urlField = findAll(advanced, of: NSTextField.self).first {
+        $0.placeholderString?.contains("latest.json") == true
+    }
+    let savedFeed = Preferences.shared.updateFeedURL
+    defer { Preferences.shared.updateFeedURL = savedFeed }
+    urlField?.stringValue = "https://review.example/feed.json"   // 只改 UI，不触发 action
+    window.close()
+    check("★ 关窗时提交未失焦的地址输入",
+          Preferences.shared.updateFeedURL == "https://review.example/feed.json",
+          Preferences.shared.updateFeedURL)
+    controller.present()
+    check("再打开时输入框显示刚保存的地址",
+          urlField?.stringValue == "https://review.example/feed.json",
+          urlField?.stringValue ?? "nil")
     window.close()
 }
 
