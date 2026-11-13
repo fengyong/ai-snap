@@ -189,8 +189,12 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         //
         // 折行上限取屏幕可见宽度：窗口一旦比屏幕宽，就地编辑就只能整体左移，
         // 画布不再压在用户刚框住的选区上。宁可工具栏多占一行。
-        let paletteColorCount = ColorPalette.allPalettes[Preferences.shared.paletteIndex]
-            .colors.count
+        //
+        // 色块数取**调色板上限**而不是当前调色板（2026-11-12 评审 P1-4）：
+        // `cyclePalette` 换板只换按钮、不重排，按当前色数算预算会让 4→5 色
+        // 的切换把第 5 个色块挤出容器、压到线宽组。按上限算则任何调色板
+        // 都装得进同一份预算。
+        let paletteColorCount = ColorPalette.maxSwatchCount
         let toolbarCursor = ToolbarCursor(
             groupWidths: Self.measureToolbarGroupWidths(paletteColorCount: paletteColorCount),
             limit: ToolbarLayout.effectiveLimit(screenVisibleWidth: screenFrame.width))
@@ -603,7 +607,10 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         toolbar.addSubview(separator)
         toolbarTopSeparator = separator
 
-        let paletteColorCount = ColorPalette.allPalettes[paletteIndex].colors.count
+        // 与 init 里同一个口径：**色块数上限**（`ColorPalette.maxSwatchCount`）。
+        // 实跑与干跑必须传同一个值 —— 按当前调色板取会让两者在换板后分叉
+        // （2026-11-12 评审 P1-4 的根因之一）。
+        let paletteColorCount = ColorPalette.maxSwatchCount
         let ordered = Self.layoutToolbarGroups(cursor, paletteColorCount: paletteColorCount)
         // 按**名字**取组。缺键就直接 trap —— 静默跳过一组正是本次要消掉的失效模式
         // （「加了枚举 case 却忘了写占位」由 toolbar_budget_probe 的覆盖断言先拦住）。
@@ -1016,6 +1023,11 @@ class AnnotationWindow: NSWindow, NSWindowDelegate, NSTextFieldDelegate {
         paletteIndex = (paletteIndex + 1) % ColorPalette.allPalettes.count
         // 用户**显式**换了调色板 → 采用新调色板的第一个颜色。
         // 这与"开窗时保持恢复出来的颜色"是两件事，靠参数区分开。
+        //
+        // 换板**不需要**重算工具栏：折行预算与色块容器都按色块数上限
+        // （`ColorPalette.maxSwatchCount`）算，任何调色板都装得进同一份布局。
+        // 旧实现按当前调色板算，4 色切 5 色时第 5 个色块会画出容器、
+        // 压到线宽组（2026-11-12 评审 P1-4，`toolbar_budget_probe` §5 有回归断言）。
         rebuildColorButtons(adoptFirstColor: true)
     }
 

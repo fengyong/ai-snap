@@ -395,6 +395,15 @@ struct ColorPalette {
     static let allPalettes: [ColorPalette] = [
         .vivid, .professional, .pastel, .highContrast, .monochrome
     ]
+
+    /// 调色板色块数的**上限**。工具栏折行预算与色块容器按它算，不按当前调色板算。
+    ///
+    /// 为什么（2026-11-12 评审 P1-4）：`cyclePalette` 换调色板只重建色块按钮，
+    /// 不重算折行预算与容器宽度。按当前调色板算预算的话，从 4 色（鲜明）切到
+    /// 5 色（专业）时第 5 个色块会画出容器、压到线宽组 —— 评审实测：
+    /// 色块右缘 184 > 线宽滑杆 minX 176，重叠 8pt，而工具栏/窗口宽度都不重算。
+    /// 按最大色数算，任何调色板都装得进同一份预算，换板因此不需要重排。
+    static var maxSwatchCount: Int { allPalettes.map(\.colors.count).max() ?? 0 }
 }
 
 // MARK: - Watermark Config
