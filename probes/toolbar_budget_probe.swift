@@ -46,8 +46,10 @@ let tail = ToolbarMetrics.groupTailGap
 let inset = ToolbarMetrics.leadingInset
 let rowHeight = ToolbarMetrics.rowHeight
 
-// 生产侧的调色板色块数 —— 预算必须跟着它变，不能写死。
-let paletteCount = ColorPalette.allPalettes[Preferences.shared.paletteIndex].colors.count
+// 生产侧的调色板色块数 —— 预算按**上限**算（2026-11-12 评审 P1-4：
+// `cyclePalette` 换板不重排，按当前色数算会让 4→5 色的切换把色块挤出容器）。
+// 公式本身随 n 变（没有写死）由第 6 节单独验证。
+let paletteCount = ColorPalette.maxSwatchCount
 
 /// 组在预算数组里的下标 —— 由**枚举声明顺序**推出，不是手数的常数。
 func indexOf(_ group: AnnotationWindow.ToolbarGroup) -> Int {
@@ -173,6 +175,11 @@ do {
     let actual = cursor.groupContentWidths
 
     check("实跑也量到 12 组", actual.count == 12, "\(actual.count)")
+    // 2026-11-12 评审 P2-5：两数组皆空时下面的循环不执行、maxDeviation 保持 0，
+    // 「逐组偏差恒为 0」真空通过。先把非空钉住。
+    check("预算与实跑都非空（空数组会让偏差恒为 0）",
+          !budget.isEmpty && !actual.isEmpty,
+          "预算 \(budget.count) / 实跑 \(actual.count)")
     var maxDeviation: CGFloat = 0
     for i in 0..<min(budget.count, actual.count) {
         maxDeviation = max(maxDeviation, abs(budget[i] - actual[i]))
@@ -308,6 +315,40 @@ do {
     check("工具栏框宽 ≥ 游标量出的内容宽（控件不会被裁掉）",
           toolbar.frame.width >= cursor.contentWidth - 0.5,
           String(format: "%.0f vs %.0f", toolbar.frame.width, cursor.contentWidth))
+
+    // ── 逐个切换调色板：色块不许越界（评审 P1-4）──
+    //
+    // 上面的「控件不重叠」只覆盖 toolbar 的**顶层**子视图；色块是
+    // colorButtonContainer 的子视图，画到容器外面也检测不到 —— 这正是
+    // 旧实现漏掉 4→5 色切换重叠 8pt 的原因。
+    let savedPalette = Preferences.shared.paletteIndex
+    defer { Preferences.shared.paletteIndex = savedPalette }
+    if let swatch = toolbar.subviews.first(where: { v in
+        let buttons = v.subviews.compactMap { $0 as? NSButton }
+        return !buttons.isEmpty && buttons.count == v.subviews.count
+            && v.frame.width == CGFloat(ColorPalette.maxSwatchCount) * 30
+    }), let paletteButton = toolbar.subviews.compactMap({ $0 as? NSButton })
+        .first(where: { $0.title == "换色" }) {
+        let slider = toolbar.subviews.compactMap { $0 as? NSSlider }.first
+        for _ in ColorPalette.allPalettes {
+            paletteButton.performClick(nil)
+            let palette = ColorPalette.allPalettes[Preferences.shared.paletteIndex]
+            let swatches = swatch.subviews.compactMap { $0 as? NSButton }
+            let rightmost = swatches.map { $0.frame.maxX }.max() ?? -1
+            let absoluteRight = swatch.frame.minX + rightmost
+            check("切到「\(palette.name)」(\(palette.colors.count)色)：色块数与调色板一致",
+                  swatches.count == palette.colors.count,
+                  "\(swatches.count) vs \(palette.colors.count)")
+            check("切到「\(palette.name)」：所有色块都在容器内",
+                  swatches.allSatisfy { $0.frame.maxX <= swatch.frame.width + 0.5 },
+                  "最右 \(Int(rightmost)) vs 容器 \(Int(swatch.frame.width))")
+            check("切到「\(palette.name)」：色块不压线宽滑杆",
+                  absoluteRight <= (slider?.frame.minX ?? .greatestFiniteMagnitude) + 0.5,
+                  "右缘 \(Int(absoluteRight)) vs 滑杆 \(Int(slider?.frame.minX ?? -1))")
+        }
+    } else {
+        check("能找到色块容器与「换色」按钮", false)
+    }
 }
 
 print("\n=== 6. 色块数变化时预算跟着变（证明没有写死）===\n")
@@ -327,10 +368,11 @@ do {
               w[colorIndex] == 48 + CGFloat(n) * 30, "\(Int(w[colorIndex]))")
         if previous >= 0 && w[colorIndex] <= previous { monotone = false }
         previous = w[colorIndex]
-        // 除颜色组外，其余各组都不该受色块数影响
+        // 除颜色组外，其余各组都不该受色块数影响。
+        // `!others.isEmpty` 是 P2-5 的非空守卫：空集合上 allSatisfy 恒真。
         let others = (0..<w.count).filter { $0 != colorIndex }
         check("色块 \(n) 个：其余 \(others.count) 组宽度逐个不变",
-              others.allSatisfy { w[$0] == baseline[$0] },
+              !others.isEmpty && others.allSatisfy { w[$0] == baseline[$0] },
               others.filter { w[$0] != baseline[$0] }.map { "组\($0)" }.joined(separator: " "))
     }
     check("颜色组宽随色块数单调增", monotone)

@@ -163,9 +163,17 @@ do {
     var srcAlphas: [CGFloat] = []
     for y in 0..<srcRep.pixelsHigh {
         for x in 0..<srcRep.pixelsWide {
-            srcAlphas.append(srcRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)?.alphaComponent ?? -1)
+            // 2026-11-12 评审 P2-5：取不到色就**跳过**，不再用 -1 哨兵 ——
+            // 哨兵会被下面的 `< 0.01` 当成"全透明"，只要另有正常半透明像素
+            // 就能把"源图少读了一堆像素"这件事混过去。配合下面的源图像素计数。
+            if let alpha = srcRep.colorAt(x: x, y: y)?.usingColorSpace(.sRGB)?.alphaComponent {
+                srcAlphas.append(alpha)
+            }
         }
     }
+    check("源图像素全部读到位（\(srcRep.pixelsWide)×\(srcRep.pixelsHigh)）",
+          srcAlphas.count == srcRep.pixelsWide * srcRep.pixelsHigh,
+          "读到 \(srcAlphas.count) / \(srcRep.pixelsWide * srcRep.pixelsHigh)")
     check("测试图确实带透明边缘（全透明 + 半透明各存在）",
           srcAlphas.contains(where: { $0 < 0.01 }) && srcAlphas.contains(where: { $0 > 0.01 && $0 < 0.99 }),
           "源图 alpha 分布 \(srcAlphas.map { String(format: "%.2f", $0) }.joined(separator: "/"))")

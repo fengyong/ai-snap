@@ -1059,15 +1059,22 @@ do {
           "\(decoded.pixelsWide)×\(decoded.pixelsHigh)")
 
     var diff = 0
+    var compared = 0
     for y in 0..<h {
         for x in 0..<w {
             guard let a = rep.colorAt(x: x, y: y), let b = decoded.colorAt(x: x, y: y) else { continue }
+            compared += 1
             if abs(a.redComponent - b.redComponent) > 0.01
                 || abs(a.greenComponent - b.greenComponent) > 0.01
                 || abs(a.blueComponent - b.blueComponent) > 0.01
                 || abs(a.alphaComponent - b.alphaComponent) > 0.01 { diff += 1 }
         }
     }
+    // 2026-11-12 评审 P2-5：`diff == 0` 在 colorAt 全失败时**真空通过** ——
+    // 循环把每个像素都 continue 掉，diff 保持 0，看起来"逐像素一致"。
+    // 先钉"确实比对了整图"，解码失败与像素不等必须是两件分开报的事。
+    check("逐像素比对覆盖了整图（无取色失败）",
+          compared == w * h, "只比对了 \(compared) / \(w * h)")
     check("PNG 每个像素都与原图一致（换编码器最容易在这里出错）",
           diff == 0, diff == 0 ? "\(w * h) 个像素全同" : "有 \(diff) 个像素不同")
     window.close()
